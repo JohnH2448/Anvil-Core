@@ -29,6 +29,6 @@ Below are synthesis numbers for several selected configurations:
 
 | Radix | Stages | Fmax | Period | LUTs | FFs |
 |---|---|---|---|---|---|
-| Radix-4 | 18 | 246.9 MHz | 4.050 ns | 2,826 | 2,090 |
-| Radix-8 | 13 | 220.3 MHz | 4.540 ns | 1,863 | 1,477 |
+| Radix-4 | 18 | 246.9 MHz | 4.050 ns | 1,863 | 1,477 |
+| Radix-8 | 13 | 220.3 MHz | 4.540 ns | 2,826 | 2,090 |
 | Radix-16 | 10 | 201.4 MHz | 4.966 ns | 4,627 | 3,526 |
