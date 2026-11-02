@@ -1,7 +1,7 @@
-import Enumerations::*;
-import Definitions::*;
-
-module DecodeStage #(
+module DecodeStage
+    import Enumerations::*;
+    import Definitions::*;
+#(
     parameter ISSUE_WIDTH = 2,
     parameter SUPPORT_MUL = 1,
     parameter SUPPORT_DIV = 1,
@@ -27,7 +27,7 @@ module DecodeStage #(
     input logic incoming_serve_valid [ISSUE_WIDTH-1:0],
 
     // Output to Issue Stage
-    output DecodedPacket_ packets_out [ISSUE_WIDTH-1:0],
+    output DecoderPacket_ packets_out [ISSUE_WIDTH-1:0],
     output LaneType_ lane_types_out [ISSUE_WIDTH-1:0],
     output logic packets_valid [ISSUE_WIDTH-1:0],
 
@@ -50,7 +50,7 @@ module DecodeStage #(
     end
 
     // Generate Decoders and Produce Packets
-    DecodedPacket_ packets [ISSUE_WIDTH-1:0];
+    DecoderPacket_ packets [ISSUE_WIDTH-1:0];
     LaneType_ lane_types [ISSUE_WIDTH-1:0];
     for (genvar i = 0; i < ISSUE_WIDTH; i++) begin : decoders
         DecoderSlice #(

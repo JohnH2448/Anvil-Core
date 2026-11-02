@@ -65,17 +65,17 @@ smaller packed structs from the named chunk types in `Definitions.sv`:
 
 | Member | Type | Contents / consumers |
 | --- | --- | --- |
-| `common` | `DecodeCommon_` | PC, capability tag, trap, rs1/rs2/rd indices, dependency/destination enables and register-bank flags; every lane |
-| `alu` | `DecodeAlu_` | ALU operation, source selection, 32-bit immediate |
-| `bru` | `DecodeBru_` | Branch/jump operation, displacement, fetch branch/prediction metadata and compressed link length |
+| `common` | `DecodeCommon_` | PC, fall-through PC, shared 32-bit immediate, capability tag, trap, rs1/rs2/rd indices, dependency/destination enables and register-bank flags; every lane |
+| `alu` | `DecodeAlu_` | ALU operation and source selection |
+| `bru` | `DecodeBru_` | Branch/jump operation, fetch branch/prediction metadata and compressed link length |
 | `mul` | `DecodeMul_` | Two-bit low/high and signedness operation |
 | `div` | `DecodeDiv_` | Two-bit quotient/remainder and signedness operation |
 | `fp` | `DecodeFloat_` | Floating arithmetic/comparison operation, rounding and rs3 dependency |
 | `fp_convert` | `DecodeFloatConvert_` | Numeric conversions, bit moves and classification; integer signedness and rounding |
-| `memory` | `DecodeMemory_` | Load/store operation, size, load sign extension and address displacement; atomic units also use size |
+| `memory` | `DecodeMemory_` | Load/store operation, size and load sign extension; atomic units also use size |
 | `atomic` | `DecodeAtomic_` | LR/SC/AMO operation and acquire/release ordering |
 | `system` | `DecodeSystem_` | Fence/MRET/WFI operation and fence masks |
-| `csr` | `DecodeCsr_` | CSR index, operation, read/write intent and register/immediate selection with five-bit zimm |
+| `csr` | `DecodeCsr_` | CSR index, operation, read/write intent and register/immediate selection; zimm uses `common.immediate[4:0]` |
 
 `common.capability` is the authoritative execution selector. For example,
 JAL/JALR and compressed jumps require `CAP_BRU` alone, never ALU+BRU;
@@ -120,7 +120,7 @@ For a parameterized lane, put each optional chunk register inside an
 `if (IS_ALU) begin : alu_controls ... end` generate block, and similarly for
 BRU/MUL/DIV. There is no zero-width struct-member trick: compose a concrete
 local struct as above, or generate individual typed registers. The complete
-232-bit packet remains available to the issue queue alongside its two-bit lane
+packet remains available to the issue queue alongside its two-bit lane
 tag. `IntegerLane.sv` is still
 an execution stub; this change supplies its control contract, not its datapath.
 
@@ -129,7 +129,9 @@ execution support** from the decoder's **core-wide ISA legality** parameters.
 All 15 nonempty integer subsets are usable; an empty subset accepts no integer
 instruction. Unsupported lanes reject an operation without changing it into a
 trap: issue must find a compatible lane. The core configuration must provide
-coverage for every enabled instruction class. Serial lanes always accept traps;
+coverage for every enabled instruction class. Trap handling is implicit in every
+lane via `common.trap_type`, with no `IS_TRAP` parameter. The decoder currently
+uses SERIAL/CAP_TRAP as its trap routing tag;
 `system` and `csr` select their ordinary instruction support independently.
 
 Single-precision arithmetic/comparison operations use `fp`. Per-lane `fp_f`
@@ -216,9 +218,11 @@ per-lane `atomic` controls routing. See the
   real dependency or destination; inactive register numbers are unspecified.
   Integer x0 has no dependency/destination; execution supplies zero when needed.
   Floating f0 is ordinary. Fused floating operations additionally use `fp.rs3`.
-- ALU, branch and memory immediates are 32 bits; CSR zimm is five bits.
+- `common.immediate` holds the shared 32-bit ALU, branch, or memory immediate.
+  CSR zimm is zero-extended into that field, with its value in bits [4:0].
   Branch/jump displacements are byte offsets. JALR uses rs1 and clears target
-  bit zero; BRU link results use common.pc + 2 or + 4 from bru.is_compressed.
+  bit zero; `common.next_pc` carries pc + 4 (pc + 2 for compressed instructions)
+  for BRU link results and fall-through recovery.
   No branch operation needs the ALU chunk to select its operands.
 - `memory.size` is log2(bytes). Loads to x0 still execute and can fault.
   For atomics, `memory.operation` is MEM_NONE; select `atomic.operation` using

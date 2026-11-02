@@ -1,5 +1,3 @@
-import Enumerations::*;
-
 package Definitions;
 
     // Branch Predictor Inputs
@@ -31,13 +29,13 @@ package Definitions;
         logic rs2_float;
         logic rd_float;
         Enumerations::DecodeCapability_ capability;
-        // need to do pc + 4 somewhere before bru
+        logic [31:0] next_pc; // pc + 4, or pc + 2 for compressed instructions
+        logic [31:0] immediate; // Shared ALU/BRU/memory immediate; CSR zimm in bits [4:0]
     } DecodeCommon_;
 
     typedef struct packed {
         Enumerations::AluOperation_ operation;
         Enumerations::AluSource_ source;
-        logic [31:0] immediate;
     } DecodeAlu_;
 
     typedef struct packed {
@@ -45,7 +43,6 @@ package Definitions;
         logic is_branch;
         logic predicted_taken;
         logic is_compressed;
-        logic [31:0] immediate;
     } DecodeBru_;
 
     typedef struct packed {
@@ -75,7 +72,6 @@ package Definitions;
         Enumerations::MemoryOperation_ operation;
         Enumerations::MemorySize_ size;
         logic sign_extend;
-        logic [31:0] immediate;
     } DecodeMemory_;
 
     typedef struct packed {
@@ -96,7 +92,6 @@ package Definitions;
         logic write_enable;
         logic use_immediate;
         Enumerations::CsrOperation_ operation;
-        logic [4:0] immediate;
     } DecodeCsr_;
 
     typedef struct packed {
@@ -111,7 +106,16 @@ package Definitions;
         DecodeAtomic_ atomic;
         DecodeSystem_ system;
         DecodeCsr_ csr;
-    } DecodedPacket_;
+    } DecoderPacket_;
+
+    // Integer execution payload shared with multiplier and divider.
+    typedef struct packed {
+        logic [31:0] source_1;
+        logic [31:0] source_2;
+        logic [31:0] pc;
+        logic rd_valid;
+        Enumerations::TrapType_ trap_type;
+    } IntegerOperands_; // need to change its name
 
     // Per-lane execution support, distinct from DecoderSlice's core ISA gates.
     // Memory lanes always support ordinary loads/stores; atomics are optional.
@@ -128,39 +132,19 @@ package Definitions;
         logic csr;
     } LaneCapabilities_;
 
-    // Integer Step 2 Payload
     typedef struct packed {
-        logic [31:0] source_1;
-        logic [31:0] source_2;
-        logic [31:0] pc;
-        logic rd_valid;
-        Enumerations::TrapType_ trap_type;
-    } IntegerOperands_;
+        logic [DerivedParameters::LANE_WIDTH-1:0] forward_lane_1;
+        logic [DerivedParameters::UNROLL_WIDTH-1:0] forward_index_1;
+        logic read_reg_file_1;
+        logic use_bypass_1; // mutually exclusive with read_reg_file_1
+        logic [DerivedParameters::LANE_WIDTH-1:0] bypass_lane_1;
+        logic [DerivedParameters::LANE_WIDTH-1:0] forward_lane_2;
+        logic [DerivedParameters::UNROLL_WIDTH-1:0] forward_index_2;
+        logic read_reg_file_2;
+        logic use_bypass_2; // mutually exclusive with read_reg_file_2
+        logic [DerivedParameters::LANE_WIDTH-1:0] bypass_lane_2;
+        logic [DerivedParameters::AGE_WIDTH-1:0] input_age;
+    } IssuerPacket_;
 
-    function automatic logic lane_supports(
-        /* verilator lint_off UNUSEDSIGNAL */
-        input DecodeCommon_ decoded,
-        /* verilator lint_on UNUSEDSIGNAL */
-        input Enumerations::LaneType_ decoded_lane_type,
-        input LaneCapabilities_ supported
-    );
-        lane_supports = 1'b0;
-        if (decoded_lane_type == supported.lane_type) begin
-            case (decoded.capability)
-                Enumerations::CAP_ALU: lane_supports = supported.lane_type == Enumerations::INTEGER && supported.alu;
-                Enumerations::CAP_BRU: lane_supports = supported.lane_type == Enumerations::INTEGER && supported.bru;
-                Enumerations::CAP_MUL: lane_supports = supported.lane_type == Enumerations::INTEGER && supported.mul;
-                Enumerations::CAP_DIV: lane_supports = supported.lane_type == Enumerations::INTEGER && supported.div;
-                Enumerations::CAP_FP_F: lane_supports = supported.lane_type == Enumerations::FLOATING && supported.fp_f;
-                Enumerations::CAP_FP_CONVERT: lane_supports = supported.lane_type == Enumerations::FLOATING && supported.fp_convert;
-                Enumerations::CAP_MEMORY: lane_supports = supported.lane_type == Enumerations::MEMORY;
-                Enumerations::CAP_ATOMIC: lane_supports = supported.lane_type == Enumerations::MEMORY && supported.atomic;
-                Enumerations::CAP_SYSTEM: lane_supports = supported.lane_type == Enumerations::SERIAL && supported.system;
-                Enumerations::CAP_CSR: lane_supports = supported.lane_type == Enumerations::SERIAL && supported.csr;
-                Enumerations::CAP_TRAP: lane_supports = supported.lane_type == Enumerations::SERIAL;
-                default: ;
-            endcase
-        end
-    endfunction
 
 endpackage

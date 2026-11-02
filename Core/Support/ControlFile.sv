@@ -1,6 +1,6 @@
-import Enumerations::*;
-
-module ControlFile #(
+module ControlFile
+    import Enumerations::*;
+#(
     parameter READ_PORTS = 1,
     parameter WRITE_PORTS = 1
 )(

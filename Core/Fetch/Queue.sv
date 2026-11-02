@@ -1,6 +1,6 @@
-import Definitions::*;
-
-module Queue #(
+module Queue
+    import Definitions::*;
+#(
     parameter FETCH_WORDS = 2,
     parameter FIFO_WORDS = 8,
     parameter SERVE_WORDS = 2,

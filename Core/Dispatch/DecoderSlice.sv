@@ -1,7 +1,7 @@
-import Enumerations::*;
-import Definitions::*;
-
-module DecoderSlice #(
+module DecoderSlice
+    import Enumerations::*;
+    import Definitions::*;
+#(
     parameter SUPPORT_MUL = 1,
     parameter SUPPORT_DIV = 1,
     parameter SUPPORT_FLOAT = 1,
@@ -16,7 +16,7 @@ module DecoderSlice #(
     input logic predicted_taken,
 
     // Output Packet
-    output DecodedPacket_ packet,
+    output DecoderPacket_ packet,
     output LaneType_ lane_type
 
 );
@@ -168,7 +168,7 @@ module DecoderSlice #(
     end
 
     // Independent Cones Avoid A Shared Expansion Mux Before Opcode Decode
-    function automatic Definitions::DecodedPacket_ decode_packet(
+    function automatic Definitions::DecoderPacket_ decode_packet(
         input logic [31:0] decode_instruction,
         input logic decode_illegal,
         output LaneType_ decoded_lane_type
@@ -315,11 +315,11 @@ module DecoderSlice #(
                     decode_packet.common.rs1_valid = 1'b0;
                     decode_packet.common.rd_valid = 1'b0;
                     decoded_lane_type = SERIAL;
-                end else decode_packet.alu.immediate = immediate_i;
+                end else decode_packet.common.immediate = immediate_i;
             end
             7'b0110111, 7'b0010111: begin // LUI / AUIPC
                 decode_packet.common.rd_valid = 1'b1;
-                decode_packet.alu.immediate = immediate_u;
+                decode_packet.common.immediate = immediate_u;
                 decode_packet.alu.source = opcode[5] ? ALU_ZERO_IMM : ALU_PC_IMM;
             end
             7'b1100011: begin // Conditional Branches
@@ -343,13 +343,13 @@ module DecoderSlice #(
                     decode_packet.common.rs2_valid = 1'b0;
                     decode_packet.bru.operation = BR_NONE;
                     decoded_lane_type = SERIAL;
-                end else decode_packet.bru.immediate = immediate_b;
+                end else decode_packet.common.immediate = immediate_b;
             end
             7'b1101111: begin // JAL
                 decode_packet.common.rd_valid = 1'b1;
                 decode_packet.alu.source = ALU_PC_IMM;
                 decode_packet.bru.operation = BR_JAL;
-                decode_packet.bru.immediate = immediate_j;
+                decode_packet.common.immediate = immediate_j;
             end
             7'b1100111: begin // JALR
                 TrapType_ operation_trap;
@@ -366,7 +366,7 @@ module DecoderSlice #(
                     decode_packet.common.rd_valid = 1'b0;
                     decode_packet.bru.operation = BR_NONE;
                     decoded_lane_type = SERIAL;
-                end else decode_packet.bru.immediate = immediate_i;
+                end else decode_packet.common.immediate = immediate_i;
             end
             7'b0000011, 7'b0100011, 7'b0000111, 7'b0100111: begin
                 TrapType_ operation_trap;
@@ -405,7 +405,7 @@ module DecoderSlice #(
                     decode_packet.memory.operation = MEM_NONE;
                     decode_packet.atomic.operation = ATOM_NONE;
                     decoded_lane_type = SERIAL;
-                end else decode_packet.memory.immediate = opcode[5] ? immediate_s : immediate_i;
+                end else decode_packet.common.immediate = opcode[5] ? immediate_s : immediate_i;
             end
             7'b0101111: begin // RV32 Word Atomics
                 TrapType_ operation_trap;
@@ -628,7 +628,7 @@ module DecoderSlice #(
                     decode_packet.csr.read_enable = 1'b0;
                     decode_packet.csr.write_enable = 1'b0;
                     decoded_lane_type = SERIAL;
-                end else if (funct3 != 0) decode_packet.csr.immediate = rs1;
+                end else if (funct3 != 0) decode_packet.common.immediate = {27'd0, rs1};
             end
             default: begin
                 decode_packet.common.trap_type = ILLEGAL;
@@ -688,8 +688,8 @@ module DecoderSlice #(
 
     // Compressed Controls Are Decoded Directly From The 16-Bit Encoding
     logic [31:0] compressed_immediate;
-    DecodedPacket_ packet_full;
-    DecodedPacket_ packet_compressed;
+    DecoderPacket_ packet_full;
+    DecoderPacket_ packet_compressed;
     LaneType_ lane_type_full;
     LaneType_ lane_type_compressed;
     always_comb begin
@@ -866,10 +866,8 @@ module DecoderSlice #(
             default: ;
         endcase
         case (packet_compressed.common.capability)
-            CAP_ALU: packet_compressed.alu.immediate = compressed_immediate;
-            CAP_BRU: packet_compressed.bru.immediate = compressed_immediate;
-            CAP_MEMORY: packet_compressed.memory.immediate = compressed_immediate;
-            CAP_CSR: packet_compressed.csr.immediate = compressed_immediate[4:0];
+            CAP_ALU, CAP_BRU, CAP_MEMORY: packet_compressed.common.immediate = compressed_immediate;
+            CAP_CSR: packet_compressed.common.immediate = {27'd0, compressed_immediate[4:0]};
             default: ;
         endcase
     end
@@ -878,6 +876,8 @@ module DecoderSlice #(
     always_comb begin
         packet_full = decode_packet(instruction, 1'b0, lane_type_full);
         packet = is_compressed ? packet_compressed : packet_full;
+        // Shared fall-through address for link results and branch recovery.
+        packet.common.next_pc = pc + (is_compressed ? 32'd2 : 32'd4);
         lane_type = is_compressed ? lane_type_compressed : lane_type_full;
     end
 

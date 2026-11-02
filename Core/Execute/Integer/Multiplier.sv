@@ -1,7 +1,7 @@
-import Enumerations::*;
-import Definitions::*;
-
-module Multiplier #(
+module Multiplier
+    import Enumerations::*;
+    import Definitions::*;
+#(
     parameter UNROLL_CUTOFF = 4
 )(
 
@@ -10,6 +10,7 @@ module Multiplier #(
     input logic reset,
     input logic stall,
     input logic flush,
+    input logic valid_in,
 
     // Working Set
     input IntegerOperands_ integer_payload, 
@@ -17,7 +18,8 @@ module Multiplier #(
 
     // Outputs
     output logic [31:0] result,
-    output TrapType_ trap
+    output logic valid_out,
+    output logic iteration_stall
 
 );
 
@@ -130,21 +132,25 @@ module Multiplier #(
         end
     end
 
-    // Pipeline and Result Registering
+    // One internal register; the lane registers the combinational result.
     MulOperation_ multiply_payload_step_2;
+    logic valid_step_2;
+    assign result = multiply_payload_step_2 == MUL_LOW ? sum[31:0] : sum[63:32];
+    assign valid_out = valid_step_2;
+    // Feed this request back through the lane's shared stall. The result is
+    // consumed on the next edge, which also clears valid_step_2 while stalled.
+    assign iteration_stall = (UNROLL_CUTOFF == 1) && valid_step_2;
+
     always_ff @(posedge clk) begin
-        // Second Pipeline Step Latch
+        if (reset) valid_step_2 <= 1'b0;
+        else if (!stall) valid_step_2 <= valid_in && !flush;
+        // The lane consumes this result while iterating. Retire its valid
+        // after that edge so held operands cannot produce duplicate results.
+        else if (UNROLL_CUTOFF == 1) valid_step_2 <= 1'b0;
+
         if (!stall) begin
             multiply_payload_step_2 <= multiply_payload.operation;
             product_vector <= compressed_products_6;
-        end
-        // Third Pipeline Step Latch
-        if (!stall || UNROLL_CUTOFF <= 2) begin // shouldnt stall on interation
-            if (multiply_payload_step_2 == MUL_LOW) begin
-                result <= sum[31:0];
-            end else begin
-                result <= sum[63:32];
-            end
         end
     end
 
