@@ -1,6 +1,6 @@
 module InstructionMemory #(
-    parameter FETCH_WORDS = 2,
-    parameter DEPTH_WORDS = 512,
+    parameter unsigned FETCH_WORDS = 2,
+    parameter unsigned DEPTH_WORDS = 512,
     parameter HEX_FILE = "Core/Fetch/program.hex"
 )(
     // Standard Inputs
@@ -16,7 +16,7 @@ module InstructionMemory #(
     output logic fetch_error
 );
     // Derived Word Address Width
-    localparam ADDR_W = $clog2(DEPTH_WORDS);
+    localparam unsigned ADDR_W = $unsigned($clog2(DEPTH_WORDS));
 
     // Block RAM ROM; Additional Read Ports May Replicate Initialized Storage
     (* ram_style = "block" *) logic [31:0] memory [0:DEPTH_WORDS-1];
@@ -28,7 +28,7 @@ module InstructionMemory #(
 
     // Initializes ROM With NOPs and Loads Optional 32-Bit-Word Hex File
     initial begin
-        for (int i = 0; i < DEPTH_WORDS; i++) memory[i] = 32'h0000_0013;
+        for (int unsigned i = 0; i < DEPTH_WORDS; i++) memory[i] = 32'h0000_0013;
         if (HEX_FILE != "") $readmemh(HEX_FILE, memory);
     end
 
@@ -39,11 +39,11 @@ module InstructionMemory #(
         if (reset) begin
             fetch_valid <= 1'b0;
             request_halfword <= 1'b0;
-            for (int i = 0; i <= FETCH_WORDS; i++) read_words[i] <= '0;
+            for (int unsigned i = 0; i <= FETCH_WORDS; i++) read_words[i] <= '0;
         end else begin
             // Reads One Extra Word for Halfword-Aligned Fetches
             // Truncated Addresses Intentionally Wrap Within ROM Depth
-            for (int i = 0; i <= FETCH_WORDS; i++)
+            for (int unsigned i = 0; i <= FETCH_WORDS; i++)
                 read_words[i] <= memory[ADDR_W'(word_address + ADDR_W'(i))];
             request_halfword <= req_address[1];
             fetch_valid <= 1'b1;
@@ -52,7 +52,7 @@ module InstructionMemory #(
 
     // Packs Registered Words and Selects the Requested Halfword Boundary
     always_comb begin
-        for (int i = 0; i <= FETCH_WORDS; i++)
+        for (int unsigned i = 0; i <= FETCH_WORDS; i++)
             read_window[i*32 +: 32] = read_words[i];
         if (request_halfword)
             fetch_data = read_window[16 +: FETCH_WORDS*32];

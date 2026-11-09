@@ -1,5 +1,14 @@
 ## Lane Model
-Anvil-Core opts for a highly parameterizable backend, the crux of which being the concept of heterogenous "lane" instantiation at compile time. 
+Anvil-Core opts for a highly parameterizable backend, the crux of which being the concept of heterogenous "lane" instantiation at compile time.
+
+## Memory Lanes
+The issuer assigs the earliest index memory is possible to be caught in if possible. Global stalls hit if operand is not ready. AXI type bus with response bus tag matches and checks result into arbitrary memory stage where the placeholder exists. same cycle it latches ready bit and is available for forawrds next cycle. This maintains order and allows memory to pipeline effectively until an operand is needed.
+
+## notes
+perhaps multi duplicated bram reg file. os only needs to read and latch use reg file bit .
+may also need per fetch word ready bits from cache to work with raw line cache architectures
+also likely put in a ras
+also gshare predictor
 
 ## Integer Lanes
 ![IntegerLane](Docs/IntegerLane.png)

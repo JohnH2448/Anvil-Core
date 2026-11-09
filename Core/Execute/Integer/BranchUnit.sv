@@ -30,7 +30,6 @@ module BranchUnit
                 actual_taken = 1'b1;
                 taken_target = (source_1 + immediate) & 32'hfffffffe;
             end
-            default: begin end
         endcase
         target = taken_target;
         misaligned = actual_taken && taken_target[0];

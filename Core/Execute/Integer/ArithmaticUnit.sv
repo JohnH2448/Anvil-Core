@@ -41,7 +41,6 @@ module ArithmaticUnit
             ALU_SRA: result = $signed(lhs) >>> rhs[4:0];
             ALU_OR: result = lhs | rhs;
             ALU_AND: result = lhs & rhs;
-            default: begin end
         endcase
     end
 

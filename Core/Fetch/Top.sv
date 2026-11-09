@@ -1,9 +1,9 @@
 module FetchTop #(
-    parameter FETCH_WORDS = 2,
-    parameter FIFO_WORDS = 8,
-    parameter ISSUE_WIDTH = 2,
-    parameter RESET_VECTOR = 32'h0000_0000,
-    parameter IMEM_DEPTH_WORDS = 512,
+    parameter unsigned FETCH_WORDS = 2,
+    parameter unsigned FIFO_WORDS = 8,
+    parameter unsigned ISSUE_WIDTH = 2,
+    parameter unsigned RESET_VECTOR = 32'h0000_0000,
+    parameter unsigned IMEM_DEPTH_WORDS = 512,
     parameter IMEM_HEX_FILE = "Core/Fetch/program.hex"
 )(
 

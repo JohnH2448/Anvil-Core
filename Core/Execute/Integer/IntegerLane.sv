@@ -3,15 +3,15 @@ module IntegerLane
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter IS_ALU = 1,
-    parameter IS_BRU = 1,
-    parameter IS_MUL = 1,
-    parameter IS_DIV = 1,
-    parameter UNROLL_CUTOFF = 1, // execution stages (min 1)
-    parameter BYPASS_ENABLED = 1, // worth considering for only alu, no bru
-    parameter ISSUE_WIDTH = 2, // for inter slice age bits
-    parameter LANE_ID = 0, // 0 is first
-    parameter DIVIDER_AUTO_PIPE = 3
+    parameter unsigned IS_ALU = 1,
+    parameter unsigned IS_BRU = 1,
+    parameter unsigned IS_MUL = 1,
+    parameter unsigned IS_DIV = 1,
+    parameter unsigned UNROLL_CUTOFF = 1, // execution stages (min 1)
+    parameter unsigned BYPASS_ENABLED = 1, // worth considering for only alu, no bru
+    parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
+    parameter unsigned LANE_ID = 0, // 0 is first
+    parameter unsigned DIVIDER_AUTO_PIPE = 3
 )(
     // Standard Inputs
     input logic clk,
@@ -75,10 +75,10 @@ module IntegerLane
     end
 
     // Stage 0 is decode, stage 1 selects operands, execution starts at 2.
-    localparam int LAST_EXECUTION_STAGE = UNROLL_CUTOFF + 1;
-    localparam int MUL_RESULT_STAGE = LAST_EXECUTION_STAGE < 3 ? LAST_EXECUTION_STAGE : 3;
-    localparam int DIV_RESULT_LATENCY = (32 + DIVIDER_AUTO_PIPE - 1) / DIVIDER_AUTO_PIPE + 1;
-    localparam int DIV_RESULT_STAGE = LAST_EXECUTION_STAGE < DIV_RESULT_LATENCY + 2 ?
+    localparam int unsigned LAST_EXECUTION_STAGE = UNROLL_CUTOFF + 1;
+    localparam int unsigned MUL_RESULT_STAGE = LAST_EXECUTION_STAGE < 3 ? LAST_EXECUTION_STAGE : 3;
+    localparam int unsigned DIV_RESULT_LATENCY = (32 + DIVIDER_AUTO_PIPE - 1) / DIVIDER_AUTO_PIPE + 1;
+    localparam int unsigned DIV_RESULT_STAGE = LAST_EXECUTION_STAGE < DIV_RESULT_LATENCY + 2 ?
         LAST_EXECUTION_STAGE : DIV_RESULT_LATENCY + 2;
     localparam bit MUL_ITERATES = UNROLL_CUTOFF == 1;
     localparam bit DIV_ITERATES = UNROLL_CUTOFF <= DIV_RESULT_LATENCY;
@@ -327,7 +327,7 @@ module IntegerLane
             if (final_completion) forward_ready_out <= 1'b1;
             else if (!stall) forward_ready_out <= 1'b0;
 
-            for (int i = 2; i <= LAST_EXECUTION_STAGE; i++) begin
+            for (int unsigned i = 2; i <= LAST_EXECUTION_STAGE; i++) begin
                 if (capture_div && i == DIV_RESULT_STAGE) begin
                     data_payload[i] <= div_result;
                 end else if (capture_mul && i == MUL_RESULT_STAGE) begin
@@ -352,7 +352,7 @@ module IntegerLane
             valid_payload[0] <= accept && !any_redirect;
             valid_payload[1] <= valid_payload[0] && !any_redirect;
             valid_payload[2] <= valid_payload[1] && !stage_2_flush;
-            for (int i = 3; i <= LAST_EXECUTION_STAGE; i++) begin
+            for (int unsigned i = 3; i <= LAST_EXECUTION_STAGE; i++) begin
                 valid_payload[i] <= valid_payload[i-1];
             end
         end
@@ -362,7 +362,7 @@ module IntegerLane
     always_ff @(posedge clk) begin
         if (!stall) begin
             // Stage 0 is owned by the decode latch.
-            for (int i = 1; i <= LAST_EXECUTION_STAGE; i++) begin
+            for (int unsigned i = 1; i <= LAST_EXECUTION_STAGE; i++) begin
                 decoder_payload[i] <= decoder_payload[i-1];
                 issuer_payload[i] <= issuer_payload[i-1];
             end

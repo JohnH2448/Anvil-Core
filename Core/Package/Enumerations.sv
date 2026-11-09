@@ -140,11 +140,11 @@ package Enumerations;
         SERIAL = 2'b11
     } LaneType_;
 
-    // A single execution capability is required per decoded instruction.
+    // A single execution capability is required when trap_type is NONE.
     // Conversions, bit moves and classification use the independent CAP_FP_CONVERT.
     typedef enum logic [3:0] {
         CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV, CAP_FP_F,
-        CAP_MEMORY, CAP_ATOMIC, CAP_SYSTEM, CAP_CSR, CAP_TRAP, CAP_FP_CONVERT
+        CAP_MEMORY, CAP_ATOMIC, CAP_SYSTEM, CAP_CSR, CAP_FP_CONVERT = 4'd10
     } DecodeCapability_;
 
     typedef enum logic [2:0] {

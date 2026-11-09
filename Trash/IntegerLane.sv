@@ -2,24 +2,24 @@ import Enumerations::*;
 import Definitions::*;
 
 module IntegerLane #(
-    parameter IS_ALU = 1,
-    parameter IS_BRU = 1,
-    parameter IS_MUL = 1,
-    parameter IS_DIV = 1,
-    parameter UNROLL_CUTOFF = 1, // execution stages
-    parameter BYPASS_ENABLED = 1, // worth considering for only alu, no bru
-    parameter ISSUE_WIDTH = 2, // for inter slice age bits
-    parameter LANE_ID = 0, // 0 is first
-    parameter INTEGER_LANE_COUNT = 1, // 1 lane
-    parameter MEMORY_LANE_COUNT = 1, 
-    parameter FLOATING_LANE_COUNT = 1,
-    parameter SERIAL_LANE_COUNT = 1, 
-    parameter TOTAL_LANE_COUNT = INTEGER_LANE_COUNT + MEMORY_LANE_COUNT + FLOATING_LANE_COUNT + SERIAL_LANE_COUNT,
+    parameter unsigned IS_ALU = 1,
+    parameter unsigned IS_BRU = 1,
+    parameter unsigned IS_MUL = 1,
+    parameter unsigned IS_DIV = 1,
+    parameter unsigned UNROLL_CUTOFF = 1, // execution stages
+    parameter unsigned BYPASS_ENABLED = 1, // worth considering for only alu, no bru
+    parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
+    parameter unsigned LANE_ID = 0, // 0 is first
+    parameter unsigned INTEGER_LANE_COUNT = 1, // 1 lane
+    parameter unsigned MEMORY_LANE_COUNT = 1, 
+    parameter unsigned FLOATING_LANE_COUNT = 1,
+    parameter unsigned SERIAL_LANE_COUNT = 1, 
+    parameter unsigned TOTAL_LANE_COUNT = INTEGER_LANE_COUNT + MEMORY_LANE_COUNT + FLOATING_LANE_COUNT + SERIAL_LANE_COUNT,
     parameter logic INT_FORWARD_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0] = '0,
     parameter logic READY_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0] = '0, // memory and iteration points
-    parameter AGE_WIDTH = (ISSUE_WIDTH > 1) ? $clog2(ISSUE_WIDTH) : 1,
-    parameter UNROLL_WIDTH = (UNROLL_CUTOFF > 1) ? $clog2(UNROLL_CUTOFF) : 1,
-    parameter LANE_WIDTH = (TOTAL_LANE_COUNT > 1) ? $clog2(TOTAL_LANE_COUNT) : 1
+    parameter unsigned AGE_WIDTH = (ISSUE_WIDTH > 1) ? $clog2(ISSUE_WIDTH) : 1,
+    parameter unsigned UNROLL_WIDTH = (UNROLL_CUTOFF > 1) ? $clog2(UNROLL_CUTOFF) : 1,
+    parameter unsigned LANE_WIDTH = (TOTAL_LANE_COUNT > 1) ? $clog2(TOTAL_LANE_COUNT) : 1
 )(
     // Standard Inputs
     input logic clk,
@@ -96,7 +96,7 @@ module IntegerLane #(
                 pipeline_rd[0] <= packet_in.common.rd;
                 pipeline_capability[0] <= packet_in.common.capability;
             end
-            for (int i = 1; i <= UNROLL_CUTOFF; i++) begin
+            for (int unsigned i = 1; i <= UNROLL_CUTOFF; i++) begin
                 pipeline_age[i] <= pipeline_age[i-1];
                 pipeline_rd[i] <= pipeline_rd[i-1];
                 pipeline_capability[i] <= pipeline_capability[i-1];
@@ -112,7 +112,7 @@ module IntegerLane #(
     always_comb begin
         temp_redirect_age = '0;
         any_redirect = 1'b0;
-        for (int i = TOTAL_LANE_COUNT - 1; i >= 0; i--) begin
+        for (int signed i = int'(TOTAL_LANE_COUNT - 1); i >= 0; i--) begin
             if (redirect_taken_in[i]) begin
                 if (!any_redirect || redirect_age_in[i] < temp_redirect_age) begin
                     temp_redirect_age = redirect_age_in[i];
@@ -147,12 +147,12 @@ module IntegerLane #(
                 next_pipeline_valid[1] = '0;
                 // flush if redirect is older than current same slice instruction
                 next_pipeline_valid[2] = pipeline_valid[1] && !(redirect_age_reg < pipeline_age[1]);
-                for (int i = 3; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 3; i <= UNROLL_CUTOFF; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i-1];
                 end
             end else begin
                 next_pipeline_valid[0] = accept;
-                for (int i = 1; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 1; i <= UNROLL_CUTOFF; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i-1];
                 end
             end
@@ -161,11 +161,11 @@ module IntegerLane #(
                 next_pipeline_valid[0] = '0;
                 next_pipeline_valid[1] = pipeline_valid[1] && !(redirect_age_reg < pipeline_age[1]);
                 // flush if redirect is older than current same slice instruction
-                for (int i = 2; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 2; i <= UNROLL_CUTOFF; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i];
                 end
             end else begin
-                for (int i = 0; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 0; i <= UNROLL_CUTOFF; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i];
                 end
             end
@@ -425,7 +425,7 @@ module IntegerLane #(
     always_ff @(posedge clk) begin
         if (!stall_in) begin
             pipeline_data[2] <= step_2_result;
-            for (int i = 3; i <= UNROLL_CUTOFF; i++) begin
+            for (int unsigned i = 3; i <= UNROLL_CUTOFF; i++) begin
                 pipeline_data[i] <= pipeline_data[i-1];
             end
         end else begin

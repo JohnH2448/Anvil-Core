@@ -1,10 +1,10 @@
 module Queue
     import Definitions::*;
 #(
-    parameter FETCH_WORDS = 2,
-    parameter FIFO_WORDS = 8,
-    parameter SERVE_WORDS = 2,
-    parameter RESET_VECTOR = 32'h0000_0000
+    parameter unsigned FETCH_WORDS = 2,
+    parameter unsigned FIFO_WORDS = 8,
+    parameter unsigned SERVE_WORDS = 2,
+    parameter unsigned RESET_VECTOR = 32'h0000_0000
 )(
 
     // Standard Inputs
@@ -46,10 +46,10 @@ module Queue
 );
 
     // Derived Constants
-    localparam FETCH_SLOTS = FETCH_WORDS * 2;
-    localparam FIFO_INDEX_W = $clog2(FIFO_WORDS);
-    localparam PUSH_COUNT_W = $clog2(FETCH_SLOTS + 1);
-    localparam SERVE_COUNT_W = $clog2(SERVE_WORDS + 1);
+    localparam unsigned FETCH_SLOTS = FETCH_WORDS * 2;
+    localparam unsigned FIFO_INDEX_W = $clog2(FIFO_WORDS);
+    localparam unsigned PUSH_COUNT_W = $clog2(FETCH_SLOTS + 1);
+    localparam unsigned SERVE_COUNT_W = $clog2(SERVE_WORDS + 1);
 
     // FIFO Power of Two Check
     if (!(FIFO_WORDS > 0 && (FIFO_WORDS & (FIFO_WORDS - 1)) == 0)) begin : invalid_fifo_words
@@ -193,8 +193,8 @@ module Queue
     // Calculates True PC Delta from Serve Consumption
     always_comb begin
         consumed_pc_step = '0;
-        for (int i = 0; i < SERVE_WORDS; i++) begin
-            if (serve_valid_reg[i] && (i < int'(serve_consumed)))
+        for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
+            if (serve_valid_reg[i] && (i < $unsigned(int'(serve_consumed))))
                 consumed_pc_step = consumed_pc_step +
                     pc_step(serve_data_reg[i], serve_c_reg[i], serve_taken_reg[i]);
         end
@@ -207,7 +207,7 @@ module Queue
         packet_partial_half = '0;
         packet_partial_pc = '0;
         // Constructs Every Possible Packet
-        for (int i = 0; i < FETCH_SLOTS; i++) begin
+        for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
             packet_data[i] = fetch_c_reg[i] ?
                 {16'b0, packet_half_window[i*16 +: 16]} 
                 : packet_half_window[i*16 +: 32];
@@ -221,7 +221,7 @@ module Queue
         packet_start[0] = !tail_partial;
         packet_start[1] = tail_partial || fetch_c_reg[0];
         // Creates All Subsequent Instruction Boundaries
-        for (int i = 2; i < FETCH_SLOTS; i++) begin
+        for (int unsigned i = 2; i < FETCH_SLOTS; i++) begin
             packet_start[i] =
                 (packet_start[i-2] && !fetch_c_reg[i-2]) ||
                 (packet_start[i-1] && fetch_c_reg[i-1]);
@@ -235,7 +235,7 @@ module Queue
             packet_branch[0] = partial_branch_reg;
         end
         // Identifies Final Valid Packets and Forms New Partial Word if Applicable
-        for (int i = 0; i < FETCH_SLOTS; i++) begin
+        for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
             if (packet_start[i]) begin
                 if (!fetch_c_reg[i] && i == FETCH_SLOTS-1) begin
                     packet_new_partial = 1'b1;
@@ -253,7 +253,7 @@ module Queue
         logic earlier_taken;
         earlier_taken = 1'b0;
         packet_redirect_pc = '0;
-        for (int i = 0; i < FETCH_SLOTS; i++) begin
+        for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
             // Operates on Fetch Staging Registered Data
             branch_input[i] = '{
                 bp_pc: packet_pc[i],
@@ -279,7 +279,7 @@ module Queue
         logic earlier_taken;
         earlier_taken = 1'b0;
         stage_push_count = '0;
-        for (int i = 0; i < FETCH_SLOTS; i++) begin
+        for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
             stage_push_count += PUSH_COUNT_W'(packet_valid[i] && !earlier_taken);
             earlier_taken |= packet_valid[i] && packet_branch[i] &&
                 branch_output[i].bp_valid && branch_output[i].bp_taken;
@@ -310,7 +310,7 @@ module Queue
         end else if (redirect_taken) begin
             prefetch_pc_next = redirect_pc;
         end else if (packet_commit && packet_taken) begin
-            for (int i = 0; i < FETCH_SLOTS; i++) begin
+            for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                 if (packet_lane_selected[i]) begin
                     prefetch_pc_next = prediction_result[i].bp_redirect_pc;
                 end
@@ -336,7 +336,7 @@ module Queue
             fetch_staging_reg_valid <= 1'b0;
             fetch_branch_reg <= '0;
             fetch_c_reg <= '0;
-            for (int i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= int'(RESET_VECTOR) + (i*2);
+            for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= $unsigned(int'(RESET_VECTOR)) + (i*2);
         end else begin
             // Tracks Memory Response Address and Consumed Instruction PC
             response_pc_reg <= req_address;
@@ -348,7 +348,7 @@ module Queue
             end else if (fetch_accept) begin
                 fetch_staging_reg <= fetch_data;
                 // Predecodes Each Halfword Before Instruction Boundary Resolution
-                for (int i = 0; i < FETCH_SLOTS; i++) begin
+                for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                     fetch_lane_pc[i] <= response_pc_reg + $unsigned(i*2);
                     fetch_c_reg[i] <= fetch_data[i*16 +: 2] != 2'b11;
                     fetch_branch_reg[i] <= is_branch16(fetch_data[i*16 +: 16]) ||
@@ -369,7 +369,7 @@ module Queue
             prediction_stage_valid <= 1'b0;
             prediction_pc <= '0;
             packet_push_count <= '0;
-            for (int i = 0; i < FETCH_SLOTS; i++) begin
+            for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                 prediction_payload[i] <= '0;
                 prediction_result[i] <= '0;
                 prediction_lane_valid[i] <= 1'b0;
@@ -384,7 +384,7 @@ module Queue
                 prediction_stage_valid <= 1'b1;
                 prediction_pc <= fetch_staging_pc;
                 packet_push_count <= stage_push_count;
-                for (int i = 0; i < FETCH_SLOTS; i++) begin
+                for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                     prediction_payload[i] <= branch_input[i];
                     prediction_result[i] <= branch_output[i];
                     prediction_lane_valid[i] <= packet_valid[i];
@@ -409,7 +409,7 @@ module Queue
         if (!reset_reg && !redirect_taken && packet_commit) begin
             logic [PUSH_COUNT_W-1:0] write_offset;
             write_offset = '0;
-            for (int i = 0; i < FETCH_SLOTS; i++) begin
+            for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                 logic [FIFO_INDEX_W-1:0] index;
                 index = fifo_tail[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(write_offset);
                 if (packet_keep[i]) begin
@@ -434,9 +434,9 @@ module Queue
     // Counts Retained Serve Entries and Limits Refill to Available FIFO Entries
     assign serve_keep_count = SERVE_COUNT_W'($countones(serve_keep));
     assign fifo_pull_count =
-        (int'(fifo_occipied_slots) < (SERVE_WORDS - int'(serve_keep_count)))
+        ($unsigned(int'(fifo_occipied_slots)) < (SERVE_WORDS - $unsigned(int'(serve_keep_count))))
         ? SERVE_COUNT_W'(fifo_occipied_slots)
-        : SERVE_COUNT_W'(SERVE_WORDS - int'(serve_keep_count));
+        : SERVE_COUNT_W'(SERVE_WORDS - $unsigned(int'(serve_keep_count)));
 
     // Builds Parallel Selection Logic for Each Serve Lane
     for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : serve_lanes
@@ -444,7 +444,7 @@ module Queue
         logic [67:0] selected;
 
         // A consumed count leaves a contiguous suffix of the served entries.
-        assign serve_keep[lane] = serve_valid_reg[lane] && (lane >= int'(serve_consumed));
+        assign serve_keep[lane] = serve_valid_reg[lane] && (lane >= $unsigned(int'(serve_consumed)));
         // Reads Fixed FIFO Head Offsets Independently of Late Consumption
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
@@ -456,14 +456,14 @@ module Queue
         // Mutually Exclusive Masks Unroll Into Parallel Selection Logic
         always_comb begin
             selected = '0;
-            for (int source_lane = 0; source_lane < SERVE_WORDS; source_lane++) begin
+            for (int unsigned source_lane = 0; source_lane < SERVE_WORDS; source_lane++) begin
                 selected |= {68{serve_keep[source_lane] &&
-                    (source_lane == lane + int'(serve_consumed))}}
+                    (source_lane == lane + $unsigned(int'(serve_consumed)))}}
                     & retained_candidate[source_lane];
             end
-            for (int fifo_lane = 0; fifo_lane <= lane; fifo_lane++) begin
+            for (int unsigned fifo_lane = 0; fifo_lane <= lane; fifo_lane++) begin
                 selected |= {68{(serve_keep_count == SERVE_COUNT_W'(lane - fifo_lane)) &&
-                    (int'(fifo_occipied_slots) > fifo_lane)}}
+                    ($unsigned(int'(fifo_occipied_slots)) > fifo_lane)}}
                     & fifo_candidate[fifo_lane];
             end
             {serve_valid_next[lane], serve_c_next[lane], serve_taken_next[lane],
@@ -477,7 +477,7 @@ module Queue
     // Registers Serve Outputs for Decode and Clears Them on External Redirect
     always_ff @(posedge clk) begin
         if (reset_reg || redirect_taken) begin
-            for (int i = 0; i < SERVE_WORDS; i++) begin
+            for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
                 serve_data_reg[i] <= 32'hdeadbeef;
                 serve_pc_reg[i] <= RESET_VECTOR;
                 serve_valid_reg[i] <= 1'b0;
@@ -486,7 +486,7 @@ module Queue
                 serve_branch_reg[i] <= 1'b0;
             end
         end else begin
-            for (int i = 0; i < SERVE_WORDS; i++) begin
+            for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
                 serve_data_reg[i] <= serve_data_next[i];
                 serve_pc_reg[i] <= serve_pc_next[i];
                 serve_valid_reg[i] <= serve_valid_next[i];

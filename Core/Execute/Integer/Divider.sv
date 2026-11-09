@@ -2,8 +2,8 @@ module Divider
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter integer UNROLL_CUTOFF = 4,
-    parameter integer AUTO_PIPE = 3
+    parameter logic [31:0] UNROLL_CUTOFF = 4,
+    parameter logic [31:0] AUTO_PIPE = 3
 )(
     input logic clk, 
     input logic reset, 
@@ -18,12 +18,12 @@ module Divider
     output logic valid_out,
     output logic iteration_stall
 );
-    localparam integer STAGES=(32+AUTO_PIPE-1)/AUTO_PIPE;
+    localparam integer unsigned STAGES=(32+AUTO_PIPE-1)/AUTO_PIPE;
     // Register 0 is the magnitude latch at lane index 2. The lane's last
     // execution slot is index UNROLL_CUTOFF+1, hence this internal boundary.
-    localparam integer ITERATION_INDEX=UNROLL_CUTOFF-1;
-    localparam integer CHOICES=1<<AUTO_PIPE;
-    localparam integer MW=32+AUTO_PIPE;
+    localparam integer unsigned ITERATION_INDEX=UNROLL_CUTOFF-1;
+    localparam integer unsigned CHOICES=1<<AUTO_PIPE;
+    localparam integer unsigned MW=32+AUTO_PIPE;
     if (AUTO_PIPE<1 || AUTO_PIPE>4) begin : invalid_configuration
         initial $fatal(1,"DividerParallel AUTO_PIPE must be in 1..4");
     end
@@ -61,8 +61,8 @@ module Divider
     // Including the last valid keeps stall asserted through result capture.
     always_comb begin
         iteration_stall = 1'b0;
-        if (ITERATION_INDEX <= 0) iteration_stall |= magnitude_valid;
-        for (int i=0; i<STAGES; i++) begin
+        if (ITERATION_INDEX == 0) iteration_stall |= magnitude_valid;
+        for (int unsigned i = 0; i<STAGES; i++) begin
             if (i+1 >= ITERATION_INDEX) iteration_stall |= stage_valid[i];
         end
     end
@@ -75,10 +75,10 @@ module Divider
     end
     // Carry-save construction of k*D avoids cascading adders for 7D/11D/13D/15D.
     for (genvar k=0;k<CHOICES;k++) begin : prepare_multiple
-        wire [MW-1:0] p0 = (k&1) ? MW'(b_magnitude) : '0;
-        wire [MW-1:0] p1 = (k&2) ? MW'(b_magnitude)<<1 : '0;
-        wire [MW-1:0] p2 = (k&4) ? MW'(b_magnitude)<<2 : '0;
-        wire [MW-1:0] p3 = (k&8) ? MW'(b_magnitude)<<3 : '0;
+        wire [MW-1:0] p0 = ((k & 1) != 0) ? MW'(b_magnitude) : '0;
+        wire [MW-1:0] p1 = ((k & 2) != 0) ? MW'(b_magnitude)<<1 : '0;
+        wire [MW-1:0] p2 = ((k & 4) != 0) ? MW'(b_magnitude)<<2 : '0;
+        wire [MW-1:0] p3 = ((k & 8) != 0) ? MW'(b_magnitude)<<3 : '0;
         wire [MW-1:0] sum0=p0 ^ p1 ^ p2;
         wire [MW-1:0] carry0=((p0&p1) | (p0&p2) | (p1&p2))<<1;
         wire [MW-1:0] sum1=sum0 ^ carry0 ^ p3;
@@ -100,9 +100,9 @@ module Divider
     end
 
     for (genvar s=0;s<STAGES;s++) begin : stage
-        localparam integer BITS=(32-s*AUTO_PIPE<AUTO_PIPE) ? 32-s*AUTO_PIPE : AUTO_PIPE;
-        localparam integer N=s*AUTO_PIPE+BITS;
-        localparam integer DIGITS=1<<BITS;
+        localparam integer unsigned BITS=(32-s*AUTO_PIPE<AUTO_PIPE) ? 32-s*AUTO_PIPE : AUTO_PIPE;
+        localparam integer unsigned N=s*AUTO_PIPE+BITS;
+        localparam integer unsigned DIGITS=1<<BITS;
         logic [N-1:0] shifted;
         logic [N:0] trial [0:DIGITS-1];
         logic [DIGITS:0] ge;
@@ -126,7 +126,7 @@ module Divider
         always_comb begin
             rem_next='0;
             digit_next='0;
-            for (int k=0;k<DIGITS;k++) begin
+            for (int unsigned k = 0;k<DIGITS;k++) begin
                 rem_next |= trial[k][N-1:0] & {N{choose[k]}};
                 digit_next |= BITS'(k) & {BITS{choose[k]}};
             end
@@ -145,7 +145,7 @@ module Divider
             end
             always_ff @(posedge clk) begin
                 if (!stall || s+2>ITERATION_INDEX) begin
-                    for (int k=0;k<CHOICES;k++) multiple[s+1][k]<=multiple[s][k];
+                    for (int unsigned k = 0;k<CHOICES;k++) multiple[s+1][k]<=multiple[s][k];
                     dividend[s+1]<=dividend[s];
                     quotient[s+1]<=(quotient[s]<<BITS) | 32'(digit_next);
                     remainder_value[s+1]<=32'(rem_next);

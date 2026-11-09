@@ -2,7 +2,7 @@ module Multiplier
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter UNROLL_CUTOFF = 4
+    parameter unsigned UNROLL_CUTOFF = 4
 )(
 
     // Standard Inputs
@@ -127,7 +127,7 @@ module Multiplier
     logic [63:0] sum;
     always_comb begin
         sum = 64'b0;
-        for (int i = 0; i < 4; i++) begin
+        for (int unsigned i = 0; i < 4; i++) begin
             sum = sum + product_vector[i];
         end
     end

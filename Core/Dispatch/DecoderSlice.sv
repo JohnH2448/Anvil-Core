@@ -2,10 +2,10 @@ module DecoderSlice
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter SUPPORT_MUL = 1,
-    parameter SUPPORT_DIV = 1,
-    parameter SUPPORT_FLOAT = 1,
-    parameter SUPPORT_ATOMIC = 1
+    parameter unsigned SUPPORT_MUL = 1,
+    parameter unsigned SUPPORT_DIV = 1,
+    parameter unsigned SUPPORT_FLOAT = 1,
+    parameter unsigned SUPPORT_ATOMIC = 1
 )(
 
     // Working Input Data
@@ -643,8 +643,8 @@ module DecoderSlice
         decode_packet.common.rs2_valid = decode_packet.common.rs2_valid && (decode_packet.common.rs2_float || rs2 != 0);
         decode_packet.common.rd_valid = decode_packet.common.rd_valid && (decode_packet.common.rd_float || rd != 0);
 
-        // Optional Caller-Supplied Legality Override
-        if (decode_illegal) begin
+        // Trap packets bypass ordinary lane and capability matching.
+        if (decode_packet.common.trap_type != NONE) begin
             decode_packet.common.rs1_valid = 1'b0;
             decode_packet.common.rs2_valid = 1'b0;
             decode_packet.fp.rs3_valid = 1'b0;
@@ -657,12 +657,9 @@ module DecoderSlice
             decode_packet.csr.operation = CSR_NONE;
             decode_packet.csr.read_enable = 1'b0;
             decode_packet.csr.write_enable = 1'b0;
-            decoded_lane_type = SERIAL;
-        end
-
-        // Route by execution capability, independently of fetch branch metadata.
-        if (decode_packet.common.trap_type != NONE) decode_packet.common.capability = CAP_TRAP;
-        else case (decoded_lane_type)
+            decode_packet.common.capability = CAP_ALU;
+            decoded_lane_type = INTEGER;
+        end else case (decoded_lane_type)
             INTEGER: if (decode_packet.bru.operation != BR_NONE) decode_packet.common.capability = CAP_BRU;
             FLOATING: begin
                 // All conversions remain on floating lanes, independently of F/D arithmetic.
@@ -854,11 +851,9 @@ module DecoderSlice
             packet_compressed.memory.operation = MEM_NONE;
             packet_compressed.atomic.operation = ATOM_NONE;
             packet_compressed.bru.operation = BR_NONE;
-            lane_type_compressed = SERIAL;
-        end
-
-        if (packet_compressed.common.trap_type != NONE) packet_compressed.common.capability = CAP_TRAP;
-        else case (lane_type_compressed)
+            packet_compressed.common.capability = CAP_ALU;
+            lane_type_compressed = INTEGER;
+        end else case (lane_type_compressed)
             INTEGER: if (packet_compressed.bru.operation != BR_NONE) packet_compressed.common.capability = CAP_BRU;
             FLOATING: packet_compressed.common.capability = CAP_FP_F;
             MEMORY: packet_compressed.common.capability = packet_compressed.atomic.operation != ATOM_NONE ? CAP_ATOMIC : CAP_MEMORY;

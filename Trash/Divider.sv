@@ -2,8 +2,8 @@ import Enumerations::*;
 import Definitions::*;
 
 module Divider #(
-    parameter UNROLL_CUTOFF = 4,
-    parameter AUTO_PIPE = 2
+    parameter unsigned UNROLL_CUTOFF = 4,
+    parameter unsigned AUTO_PIPE = 2
 )(
 
     // Standard Inputs
@@ -93,9 +93,9 @@ module Divider #(
         : integer_payload.source_2;
 
     // Stage Pipeline Unroll
-    localparam STAGES = (32 / AUTO_PIPE);
-    localparam REMAINDER_STAGES = 32 % AUTO_PIPE;
-    localparam STAGE_REG_W = STAGES-1;
+    localparam unsigned STAGES = (32 / AUTO_PIPE);
+    localparam unsigned REMAINDER_STAGES = 32 % AUTO_PIPE;
+    localparam unsigned STAGE_REG_W = STAGES-1;
     logic [32:0] new_remainder_pipeline_reg [0:STAGE_REG_W];
     logic [31:0] divisor_pipeline_reg [0:STAGE_REG_W];
     logic [31:0] dividend_pipeline_reg [0:STAGE_REG_W];

@@ -91,9 +91,6 @@ An ALU+BRU+MUL unit can declare and latch exactly these 140 bits:
 import Definitions::*;
 import Enumerations::*;
 
-localparam LaneCapabilities_ SUPPORTED = '{
-    lane_type: INTEGER, alu: 1'b1, bru: 1'b1, mul: 1'b1, default: '0
-};
 typedef struct packed {
     DecodeCommon_ common;
     DecodeAlu_ alu;
@@ -102,14 +99,13 @@ typedef struct packed {
 } AluBruMulPacket_;
 AluBruMulPacket_ execution_packet;
 logic execution_valid;
-LaneType_ decoded_lane_type;
 
-// accept/flush and decoded_valid are supplied by the issue handshake.
+// Issue asserts accept after selecting a compatible lane or routing a trap.
 always_ff @(posedge clk) begin
     if (reset || flush) execution_valid <= 1'b0;
     else if (accept) begin
-        execution_valid <= decoded_valid && lane_supports(decoded.common, decoded_lane_type, SUPPORTED);
-        if (decoded_valid && lane_supports(decoded.common, decoded_lane_type, SUPPORTED))
+        execution_valid <= decoded_valid;
+        if (decoded_valid)
             execution_packet <= '{common: decoded.common, alu: decoded.alu,
                                   bru: decoded.bru, mul: decoded.mul};
     end
@@ -124,26 +120,25 @@ packet remains available to the issue queue alongside its two-bit lane
 tag. `IntegerLane.sv` is still
 an execution stub; this change supplies its control contract, not its datapath.
 
-`LaneCapabilities_` and `lane_supports(common, lane_type, supported)` separate **per-lane
-execution support** from the decoder's **core-wide ISA legality** parameters.
+The capability arrays in `Parameters.sv` configure **per-lane execution
+support**. The decoder's **core-wide ISA legality** parameters control decode.
 All 15 nonempty integer subsets are usable; an empty subset accepts no integer
 instruction. Unsupported lanes reject an operation without changing it into a
 trap: issue must find a compatible lane. The core configuration must provide
-coverage for every enabled instruction class. Trap handling is implicit in every
-lane via `common.trap_type`, with no `IS_TRAP` parameter. The decoder currently
-uses SERIAL/CAP_TRAP as its trap routing tag;
-`system` and `csr` select their ordinary instruction support independently.
+coverage for every enabled instruction class. Every lane can accept a packet
+with `common.trap_type != NONE`. Issue skips lane-type and capability matching
+for these packets. `system` and `csr` select ordinary instruction support.
 
 Single-precision arithmetic/comparison operations use `fp`. Per-lane `fp_f`
 selects `CAP_FP_F`. Conversions are an independently advertised floating-lane
-option: `LaneCapabilities_.fp_convert` accepts **only `CAP_FP_CONVERT`**, with
+option: conversion support accepts **only `CAP_FP_CONVERT`**, with
 controls in `fp_convert`. F arithmetic support does not implicitly accept
 conversions, and integer lanes never do.
 
 **D is not supported.** There is no double-precision lane option, decode gate,
 precision selector, or 64-bit floating register file. D arithmetic, fused
 operations, comparisons, classification, conversions, FLD/FSD, and compressed
-C.FLD/C.FSD/C.FLDSP/C.FSDSP all produce SERIAL/CAP_TRAP with ILLEGAL.
+C.FLD/C.FSD/C.FLDSP/C.FSDSP all decode with `common.trap_type = ILLEGAL`.
 FLW/FSW and compressed single-precision loads/stores remain supported under F.
 
 ### Floating conversion capability and ports
@@ -176,9 +171,6 @@ bit moves and classification when F is enabled core-wide. This promise is
 independent of `fp_f` arithmetic support. For example:
 
 ```systemverilog
-localparam LaneCapabilities_ FP_WITH_CONVERSIONS = '{
-    lane_type: FLOATING, fp_f: 1'b1, fp_convert: 1'b1, default: '0
-};
 typedef struct packed {
     DecodeCommon_ common;
     DecodeFloat_ fp;
@@ -236,9 +228,9 @@ per-lane `atomic` controls routing. See the
 - SYS_MRET implies a read of MEPC by system execution; it does not require
   retaining the CSR chunk. Fences retain predecessor/successor masks;
   FENCE.TSO is conservatively treated as an ordinary fence.
-- Traps route to SERIAL/CAP_TRAP with register dependency/write enables and
+- Trap packets carry their cause in `common.trap_type`, with register dependency/write enables and
   memory, atomic, branch, floating, system and CSR side-effect controls disabled.
-  Serial execution must deliver the trap even without a destination register.
+  The selected lane must deliver the trap even without a destination register.
 
 The floating register file has fixed 32-bit data paths; execution
 still must implement floating CSR aliases, fence ordering and fetch synchronization.

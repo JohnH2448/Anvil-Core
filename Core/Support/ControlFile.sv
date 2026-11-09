@@ -1,8 +1,8 @@
 module ControlFile
     import Enumerations::*;
 #(
-    parameter READ_PORTS = 1,
-    parameter WRITE_PORTS = 1
+    parameter unsigned READ_PORTS = 1,
+    parameter unsigned WRITE_PORTS = 1
 )(
     // Standard Inputs
     input logic clk,
@@ -39,7 +39,7 @@ module ControlFile
 
     // Write Latching
     always_ff @(posedge clk) begin
-        for (int i = 0; i < WRITE_PORTS; i++) begin
+        for (int unsigned i = 0; i < WRITE_PORTS; i++) begin
             if (write_en[i]) begin
                 csr_file[write_addr[i]] <= write_data[i];
             end

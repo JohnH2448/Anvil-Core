@@ -2,17 +2,16 @@ module DecodeStage
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter ISSUE_WIDTH = 2,
-    parameter SUPPORT_MUL = 1,
-    parameter SUPPORT_DIV = 1,
-    parameter SUPPORT_FLOAT = 1,
-    parameter SUPPORT_ATOMIC = 1
+    parameter unsigned ISSUE_WIDTH = 2,
+    parameter unsigned SUPPORT_MUL = 1,
+    parameter unsigned SUPPORT_DIV = 1,
+    parameter unsigned SUPPORT_FLOAT = 1,
+    parameter unsigned SUPPORT_ATOMIC = 1
 )(
 
     // Standard Inputs
     input logic clk,
     input logic reset,
-    input logic flush,
     input logic redirect_taken,
 
     // Served Data from Fetch
@@ -75,7 +74,7 @@ module DecodeStage
     logic [$clog2(ISSUE_WIDTH+1)-1:0] next_valid_inputs;
     always_comb begin
         next_valid_inputs = '0;
-        for (int i = 0; i < ISSUE_WIDTH; i++)
+        for (int unsigned i = 0; i < ISSUE_WIDTH; i++)
             next_valid_inputs += $clog2(ISSUE_WIDTH+1)'(incoming_serve_valid[i]);
     end
     always_ff @(posedge clk) begin
@@ -105,7 +104,7 @@ module DecodeStage
     end
 
     // Pop and Pull Counts from Registered Metadata
-    localparam COUNT_W = $clog2(ISSUE_WIDTH+1);
+    localparam int unsigned COUNT_W = $unsigned($clog2(ISSUE_WIDTH+1));
     logic [COUNT_W-1:0] available_slots;
     logic [COUNT_W-1:0] retained_count;
     always_comb begin
@@ -130,16 +129,16 @@ module DecodeStage
     end else begin : multiple_lanes
         always_ff @(posedge clk) begin
             if (reset_reg || redirect_taken) begin
-                for (int i = 0; i < ISSUE_WIDTH; i++) packets_valid[i] <= 1'b0;
+                for (int unsigned i = 0; i < ISSUE_WIDTH; i++) packets_valid[i] <= 1'b0;
             end else begin
-                for (int i = 0; i < ISSUE_WIDTH; i++) begin
-                    packets_valid[i] <= i < (ISSUE_WIDTH - int'(next_empty_slots));
-                    if (i < int'(retained_count)) begin
-                        packets_out[i] <= packets_out[i + int'(issue_consumed)];
-                        lane_types_out[i] <= lane_types_out[i + int'(issue_consumed)];
-                    end else if (i < (ISSUE_WIDTH - int'(next_empty_slots))) begin
-                        packets_out[i] <= packets[i - int'(retained_count)];
-                        lane_types_out[i] <= lane_types[i - int'(retained_count)];
+                for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
+                    packets_valid[i] <= i < (ISSUE_WIDTH - $unsigned(int'(next_empty_slots)));
+                    if (i < $unsigned(int'(retained_count))) begin
+                        packets_out[i] <= packets_out[i + $unsigned(int'(issue_consumed))];
+                        lane_types_out[i] <= lane_types_out[i + $unsigned(int'(issue_consumed))];
+                    end else if (i < (ISSUE_WIDTH - $unsigned(int'(next_empty_slots)))) begin
+                        packets_out[i] <= packets[i - $unsigned(int'(retained_count))];
+                        lane_types_out[i] <= lane_types[i - $unsigned(int'(retained_count))];
                     end
                 end
             end

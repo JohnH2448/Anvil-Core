@@ -117,21 +117,6 @@ package Definitions;
         Enumerations::TrapType_ trap_type;
     } IntegerOperands_; // need to change its name
 
-    // Per-lane execution support, distinct from DecoderSlice's core ISA gates.
-    // Memory lanes always support ordinary loads/stores; atomics are optional.
-    typedef struct packed {
-        Enumerations::LaneType_ lane_type;
-        logic alu;
-        logic bru;
-        logic mul;
-        logic div;
-        logic fp_f;
-        logic fp_convert; // All core-enabled conversions; independent of F/D arithmetic
-        logic atomic;
-        logic system;
-        logic csr;
-    } LaneCapabilities_;
-
     typedef struct packed {
         logic [DerivedParameters::LANE_WIDTH-1:0] forward_lane_1;
         logic [DerivedParameters::UNROLL_WIDTH-1:0] forward_index_1;
