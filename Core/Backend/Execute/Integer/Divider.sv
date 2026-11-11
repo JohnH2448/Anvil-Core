@@ -2,7 +2,7 @@ module Divider
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter logic [31:0] UNROLL_CUTOFF = 4,
+    parameter logic [31:0] EXECUTION_UNROLL = 4,
     parameter logic [31:0] AUTO_PIPE = 3
 )(
     input logic clk, 
@@ -20,8 +20,8 @@ module Divider
 );
     localparam integer unsigned STAGES=(32+AUTO_PIPE-1)/AUTO_PIPE;
     // Register 0 is the magnitude latch at lane index 2. The lane's last
-    // execution slot is index UNROLL_CUTOFF+1, hence this internal boundary.
-    localparam integer unsigned ITERATION_INDEX=UNROLL_CUTOFF-1;
+    // execution slot is index EXECUTION_UNROLL+1, hence this internal boundary.
+    localparam integer unsigned ITERATION_INDEX=EXECUTION_UNROLL-1;
     localparam integer unsigned CHOICES=1<<AUTO_PIPE;
     localparam integer unsigned MW=32+AUTO_PIPE;
     if (AUTO_PIPE<1 || AUTO_PIPE>4) begin : invalid_configuration

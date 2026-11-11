@@ -1,8 +1,8 @@
 import Enumerations::*;
 import Definitions::*;
 
-module Divider #(
-    parameter unsigned UNROLL_CUTOFF = 4,
+module OldDivider #(
+    parameter unsigned EXECUTION_UNROLL = 4,
     parameter unsigned AUTO_PIPE = 2
 )(
 
@@ -204,7 +204,7 @@ module Divider #(
     // Pipeline Registering
     for (genvar k = 0; k < STAGES; k++) begin : registering
         always_ff @(posedge clk) begin
-            if (!stall || k > UNROLL_CUTOFF-2)
+            if (!stall || k > EXECUTION_UNROLL-2)
             new_remainder_pipeline_reg[k] <= stages[k].new_remainder_comb[AUTO_PIPE-1];
             divisor_pipeline_reg[k] <= stages[k].divisor_comb;
             dividend_pipeline_reg[k] <= stages[k].dividend_comb;

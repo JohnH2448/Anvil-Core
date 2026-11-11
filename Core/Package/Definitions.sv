@@ -122,12 +122,10 @@ package Definitions;
         logic [DerivedParameters::UNROLL_WIDTH-1:0] forward_index_1;
         logic read_reg_file_1;
         logic use_bypass_1; // mutually exclusive with read_reg_file_1
-        logic [DerivedParameters::LANE_WIDTH-1:0] bypass_lane_1;
         logic [DerivedParameters::LANE_WIDTH-1:0] forward_lane_2;
         logic [DerivedParameters::UNROLL_WIDTH-1:0] forward_index_2;
         logic read_reg_file_2;
         logic use_bypass_2; // mutually exclusive with read_reg_file_2
-        logic [DerivedParameters::LANE_WIDTH-1:0] bypass_lane_2;
         logic [DerivedParameters::AGE_WIDTH-1:0] input_age;
     } IssuerPacket_;
 

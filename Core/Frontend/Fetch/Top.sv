@@ -4,7 +4,7 @@ module FetchTop #(
     parameter unsigned ISSUE_WIDTH = 2,
     parameter unsigned RESET_VECTOR = 32'h0000_0000,
     parameter unsigned IMEM_DEPTH_WORDS = 512,
-    parameter IMEM_HEX_FILE = "Core/Fetch/program.hex"
+    parameter IMEM_HEX_FILE = "Core/Frontend/Fetch/program.hex"
 )(
 
     // Standard Inputs

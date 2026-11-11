@@ -2,7 +2,7 @@ module Multiplier
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter unsigned UNROLL_CUTOFF = 4
+    parameter unsigned EXECUTION_UNROLL = 4
 )(
 
     // Standard Inputs
@@ -139,14 +139,14 @@ module Multiplier
     assign valid_out = valid_step_2;
     // Feed this request back through the lane's shared stall. The result is
     // consumed on the next edge, which also clears valid_step_2 while stalled.
-    assign iteration_stall = (UNROLL_CUTOFF == 1) && valid_step_2;
+    assign iteration_stall = (EXECUTION_UNROLL == 1) && valid_step_2;
 
     always_ff @(posedge clk) begin
         if (reset) valid_step_2 <= 1'b0;
         else if (!stall) valid_step_2 <= valid_in && !flush;
         // The lane consumes this result while iterating. Retire its valid
         // after that edge so held operands cannot produce duplicate results.
-        else if (UNROLL_CUTOFF == 1) valid_step_2 <= 1'b0;
+        else if (EXECUTION_UNROLL == 1) valid_step_2 <= 1'b0;
 
         if (!stall) begin
             multiply_payload_step_2 <= multiply_payload.operation;

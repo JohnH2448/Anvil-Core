@@ -40,7 +40,7 @@ import its dependencies.
 
 This design has one whole-core configuration per compilation. Package-sized
 packet fields describe that global configuration; local stage counts must fit
-its stage-index width. `UNROLL_WIDTH` encodes 0 through the global UNROLL_CUTOFF
+its stage-index width. `UNROLL_WIDTH` encodes 0 through the global EXECUTION_UNROLL
 inclusive, and each index width is at least one bit. Forwarding matrices remain
 zero placeholders until the topology is implemented.
 

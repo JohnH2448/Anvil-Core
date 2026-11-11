@@ -1,6 +1,6 @@
 package Parameters;
 
-    parameter unsigned UNROLL_CUTOFF = 1;
+    parameter unsigned EXECUTION_UNROLL = 1;
     parameter unsigned BYPASS_ENABLED = 1;
     parameter unsigned ISSUE_WIDTH = 2;
 
@@ -31,7 +31,5 @@ package Parameters;
     parameter logic [1:0] FLOATING_LANE_CAPABILITIES [FLOATING_LANE_COUNT] = '{
         2'b11 // Lane 0: FLOAT, CONVERSION
     };
-
-    parameter unsigned SERIAL_LANE_COUNT = 1;
 
 endpackage

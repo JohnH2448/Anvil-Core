@@ -7,7 +7,7 @@ module IntegerLane
     parameter unsigned IS_BRU = 1,
     parameter unsigned IS_MUL = 1,
     parameter unsigned IS_DIV = 1,
-    parameter unsigned UNROLL_CUTOFF = 1, // execution stages (min 1)
+    parameter unsigned EXECUTION_UNROLL = 1, // execution stages (min 1)
     parameter unsigned BYPASS_ENABLED = 1, // worth considering for only alu, no bru
     parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
     parameter unsigned LANE_ID = 0, // 0 is first
@@ -23,11 +23,11 @@ module IntegerLane
     input logic accept,
 
     // Forwarding Inputs
-    input logic [31:0] forward_data [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0], // used by all valid int forward points
-    input logic forward_ready [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0], // tie all non iterative/memory points to 1 in top
+    input logic [31:0] forward_data [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0], // used by all valid int forward points
+    input logic forward_ready [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0], // tie all non iterative/memory points to 1 in top
 
     // Forwarding Outputs
-    output logic [31:0] forward_data_out [UNROLL_CUTOFF:0],
+    output logic [31:0] forward_data_out [EXECUTION_UNROLL:0],
     output logic forward_ready_out, // only used if iteration point exists
 
     // Bypass Inputs
@@ -75,13 +75,13 @@ module IntegerLane
     end
 
     // Stage 0 is decode, stage 1 selects operands, execution starts at 2.
-    localparam int unsigned LAST_EXECUTION_STAGE = UNROLL_CUTOFF + 1;
+    localparam int unsigned LAST_EXECUTION_STAGE = EXECUTION_UNROLL + 1;
     localparam int unsigned MUL_RESULT_STAGE = LAST_EXECUTION_STAGE < 3 ? LAST_EXECUTION_STAGE : 3;
     localparam int unsigned DIV_RESULT_LATENCY = (32 + DIVIDER_AUTO_PIPE - 1) / DIVIDER_AUTO_PIPE + 1;
     localparam int unsigned DIV_RESULT_STAGE = LAST_EXECUTION_STAGE < DIV_RESULT_LATENCY + 2 ?
         LAST_EXECUTION_STAGE : DIV_RESULT_LATENCY + 2;
-    localparam bit MUL_ITERATES = UNROLL_CUTOFF == 1;
-    localparam bit DIV_ITERATES = UNROLL_CUTOFF <= DIV_RESULT_LATENCY;
+    localparam bit MUL_ITERATES = EXECUTION_UNROLL == 1;
+    localparam bit DIV_ITERATES = EXECUTION_UNROLL <= DIV_RESULT_LATENCY;
     logic reset_active;
     assign reset_active = reset || reset_reg;
 
@@ -90,10 +90,10 @@ module IntegerLane
     IssuerPacket_ issuer_payload [LAST_EXECUTION_STAGE:0];
     logic [31:0] data_payload [LAST_EXECUTION_STAGE:2];
     logic valid_payload [LAST_EXECUTION_STAGE:0];
-    // Forward index 1 is lane stage 2; index UNROLL_CUTOFF is the final slot.
+    // Forward index 1 is lane stage 2; index EXECUTION_UNROLL is the final slot.
     // Index 0 has no registered execution result; same-cycle data uses bypass.
     assign forward_data_out[0] = 'x;
-    for (genvar i = 1; i <= UNROLL_CUTOFF; i++) begin : gen_forward_output
+    for (genvar i = 1; i <= EXECUTION_UNROLL; i++) begin : gen_forward_output
         assign forward_data_out[i] = data_payload[i+1];
     end
 
@@ -127,7 +127,7 @@ module IntegerLane
 
     // Decode Payload Latch (validity has one owner below).
     always_ff @(posedge clk) begin
-        if (!stall && accept && !any_redirect) begin
+        if (accept) begin
             decoder_payload[0] <= decoder_packet;
             issuer_payload[0] <= issuer_packet;
         end
@@ -155,8 +155,8 @@ module IntegerLane
     logic [31:0] bypass_data_2;
     if (BYPASS_ENABLED) begin : gen_bypass_selection
         always_comb begin
-            bypass_data_1 = bypass_data[issuer_payload[0].bypass_lane_1];
-            bypass_data_2 = bypass_data[issuer_payload[0].bypass_lane_2];
+            bypass_data_1 = bypass_data[issuer_payload[0].forward_lane_1];
+            bypass_data_2 = bypass_data[issuer_payload[0].forward_lane_2];
         end
     end else begin : gen_no_bypass_selection
         assign bypass_data_1 = 'x;
@@ -256,7 +256,7 @@ module IntegerLane
     end if (IS_MUL) begin : gen_mul
         logic [31:0] result;
         logic valid;
-        Multiplier #(.UNROLL_CUTOFF(UNROLL_CUTOFF)) multiplier (
+        Multiplier #(.EXECUTION_UNROLL(EXECUTION_UNROLL)) multiplier (
             .clk(clk),
             .reset(reset_active),
             .stall(stall),
@@ -275,7 +275,7 @@ module IntegerLane
     end if (IS_DIV) begin : gen_div
         logic [31:0] result;
         logic valid;
-        Divider #(.UNROLL_CUTOFF(UNROLL_CUTOFF), .AUTO_PIPE(DIVIDER_AUTO_PIPE)) divider (
+        Divider #(.EXECUTION_UNROLL(EXECUTION_UNROLL), .AUTO_PIPE(DIVIDER_AUTO_PIPE)) divider (
             .clk(clk),
             .reset(reset_active),
             .stall(stall),

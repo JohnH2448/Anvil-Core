@@ -1,7 +1,7 @@
 module InstructionMemory #(
     parameter unsigned FETCH_WORDS = 2,
     parameter unsigned DEPTH_WORDS = 512,
-    parameter HEX_FILE = "Core/Fetch/program.hex"
+    parameter HEX_FILE = "Core/Frontend/Fetch/program.hex"
 )(
     // Standard Inputs
     input logic clk,

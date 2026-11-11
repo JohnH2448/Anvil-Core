@@ -1,24 +1,23 @@
 import Enumerations::*;
 import Definitions::*;
 
-module IntegerLane #(
+module OldIntegerLane #(
     parameter unsigned IS_ALU = 1,
     parameter unsigned IS_BRU = 1,
     parameter unsigned IS_MUL = 1,
     parameter unsigned IS_DIV = 1,
-    parameter unsigned UNROLL_CUTOFF = 1, // execution stages
+    parameter unsigned EXECUTION_UNROLL = 1, // execution stages
     parameter unsigned BYPASS_ENABLED = 1, // worth considering for only alu, no bru
     parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
     parameter unsigned LANE_ID = 0, // 0 is first
     parameter unsigned INTEGER_LANE_COUNT = 1, // 1 lane
     parameter unsigned MEMORY_LANE_COUNT = 1, 
     parameter unsigned FLOATING_LANE_COUNT = 1,
-    parameter unsigned SERIAL_LANE_COUNT = 1, 
-    parameter unsigned TOTAL_LANE_COUNT = INTEGER_LANE_COUNT + MEMORY_LANE_COUNT + FLOATING_LANE_COUNT + SERIAL_LANE_COUNT,
-    parameter logic INT_FORWARD_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0] = '0,
-    parameter logic READY_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0] = '0, // memory and iteration points
+    parameter unsigned TOTAL_LANE_COUNT = INTEGER_LANE_COUNT + MEMORY_LANE_COUNT + FLOATING_LANE_COUNT + 1,
+    parameter logic INT_FORWARD_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0] = '0,
+    parameter logic READY_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0] = '0, // memory and iteration points
     parameter unsigned AGE_WIDTH = (ISSUE_WIDTH > 1) ? $clog2(ISSUE_WIDTH) : 1,
-    parameter unsigned UNROLL_WIDTH = (UNROLL_CUTOFF > 1) ? $clog2(UNROLL_CUTOFF) : 1,
+    parameter unsigned UNROLL_WIDTH = (EXECUTION_UNROLL > 1) ? $clog2(EXECUTION_UNROLL) : 1,
     parameter unsigned LANE_WIDTH = (TOTAL_LANE_COUNT > 1) ? $clog2(TOTAL_LANE_COUNT) : 1
 )(
     // Standard Inputs
@@ -42,14 +41,14 @@ module IntegerLane #(
     input logic [AGE_WIDTH-1:0] input_age,
 
     // Forwarding Inputs
-    input logic [31:0] forward_data [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0], // used by all valid int forward points
-    input logic forward_ready [TOTAL_LANE_COUNT-1:0][UNROLL_CUTOFF:0], // tie all non iterative/memory points to 1 in top
+    input logic [31:0] forward_data [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0], // used by all valid int forward points
+    input logic forward_ready [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0], // tie all non iterative/memory points to 1 in top
 
     // Bypass Inputs
     input logic [31:0] bypass_data [TOTAL_LANE_COUNT-1:0],
 
     // Forwarding Outputs
-    output logic [31:0] forward_data_out [UNROLL_CUTOFF:0],
+    output logic [31:0] forward_data_out [EXECUTION_UNROLL:0],
     output logic forward_ready_out, // only used if iteration point exists
 
     // Redirect Inputs
@@ -80,12 +79,12 @@ module IntegerLane #(
 );
 
     // Cannonical Data Pipeline Registers
-    logic [31:0] pipeline_data [UNROLL_CUTOFF:0];
-    logic [AGE_WIDTH-1:0] pipeline_age [UNROLL_CUTOFF:0];
-    logic [4:0] pipeline_rd [UNROLL_CUTOFF:0];
-    logic [31:0] pipeline_pc [UNROLL_CUTOFF:0];
-    DecodeCapability_ pipeline_capability [UNROLL_CUTOFF:0];
-    logic pipeline_valid [UNROLL_CUTOFF:0];
+    logic [31:0] pipeline_data [EXECUTION_UNROLL:0];
+    logic [AGE_WIDTH-1:0] pipeline_age [EXECUTION_UNROLL:0];
+    logic [4:0] pipeline_rd [EXECUTION_UNROLL:0];
+    logic [31:0] pipeline_pc [EXECUTION_UNROLL:0];
+    DecodeCapability_ pipeline_capability [EXECUTION_UNROLL:0];
+    logic pipeline_valid [EXECUTION_UNROLL:0];
     assign forward_data_out = pipeline_data;
 
     // Generic Pipeline Metadata Propagation
@@ -96,15 +95,15 @@ module IntegerLane #(
                 pipeline_rd[0] <= packet_in.common.rd;
                 pipeline_capability[0] <= packet_in.common.capability;
             end
-            for (int unsigned i = 1; i <= UNROLL_CUTOFF; i++) begin
+            for (int unsigned i = 1; i <= EXECUTION_UNROLL; i++) begin
                 pipeline_age[i] <= pipeline_age[i-1];
                 pipeline_rd[i] <= pipeline_rd[i-1];
                 pipeline_capability[i] <= pipeline_capability[i-1];
             end
         end
     end
-    assign result_age = pipeline_age[UNROLL_CUTOFF];
-    assign result_destination = pipeline_rd[UNROLL_CUTOFF];
+    assign result_age = pipeline_age[EXECUTION_UNROLL];
+    assign result_destination = pipeline_rd[EXECUTION_UNROLL];
 
     // Select Oldest Redirect
     logic [AGE_WIDTH-1:0] temp_redirect_age;
@@ -139,7 +138,7 @@ module IntegerLane #(
     end
 
     // Validity Shift Register and Flusher
-    logic next_pipeline_valid [UNROLL_CUTOFF:0];
+    logic next_pipeline_valid [EXECUTION_UNROLL:0];
     always_comb begin // assumes a stall on redirect and a flush next cycle (matches frontend timing)
         if (!stall_in) begin
             if (redirect_taken_reg) begin
@@ -147,12 +146,12 @@ module IntegerLane #(
                 next_pipeline_valid[1] = '0;
                 // flush if redirect is older than current same slice instruction
                 next_pipeline_valid[2] = pipeline_valid[1] && !(redirect_age_reg < pipeline_age[1]);
-                for (int unsigned i = 3; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 3; i <= EXECUTION_UNROLL; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i-1];
                 end
             end else begin
                 next_pipeline_valid[0] = accept;
-                for (int unsigned i = 1; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 1; i <= EXECUTION_UNROLL; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i-1];
                 end
             end
@@ -161,11 +160,11 @@ module IntegerLane #(
                 next_pipeline_valid[0] = '0;
                 next_pipeline_valid[1] = pipeline_valid[1] && !(redirect_age_reg < pipeline_age[1]);
                 // flush if redirect is older than current same slice instruction
-                for (int unsigned i = 2; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 2; i <= EXECUTION_UNROLL; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i];
                 end
             end else begin
-                for (int unsigned i = 0; i <= UNROLL_CUTOFF; i++) begin
+                for (int unsigned i = 0; i <= EXECUTION_UNROLL; i++) begin
                     next_pipeline_valid[i] = pipeline_valid[i];
                 end
             end
@@ -425,15 +424,15 @@ module IntegerLane #(
     always_ff @(posedge clk) begin
         if (!stall_in) begin
             pipeline_data[2] <= step_2_result;
-            for (int unsigned i = 3; i <= UNROLL_CUTOFF; i++) begin
+            for (int unsigned i = 3; i <= EXECUTION_UNROLL; i++) begin
                 pipeline_data[i] <= pipeline_data[i-1];
             end
         end else begin
             forward_ready_out <= mul_ready_reg || div_ready_reg; // could also do is cap_mul/div and !stall, but this is faster
-            if (pipeline_capability[UNROLL_CUTOFF] == CAP_MUL) begin
-                pipeline_data[UNROLL_CUTOFF] <= mul_result;
-            end else if (pipeline_capability[UNROLL_CUTOFF] == CAP_DIV) begin
-                pipeline_data[UNROLL_CUTOFF] <= div_result;
+            if (pipeline_capability[EXECUTION_UNROLL] == CAP_MUL) begin
+                pipeline_data[EXECUTION_UNROLL] <= mul_result;
+            end else if (pipeline_capability[EXECUTION_UNROLL] == CAP_DIV) begin
+                pipeline_data[EXECUTION_UNROLL] <= div_result;
             end
         end
     end

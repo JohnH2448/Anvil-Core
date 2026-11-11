@@ -2,7 +2,7 @@
 module SerialLane
     import DerivedParameters::*;
 #(
-    parameter unsigned UNROLL_CUTOFF = 1, // execution stages
+    parameter unsigned EXECUTION_UNROLL = 1, // execution stages
     parameter unsigned ISSUE_WIDTH = 2 // for inter slice age bits
 )(
 
