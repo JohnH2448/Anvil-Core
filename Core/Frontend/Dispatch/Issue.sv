@@ -2,7 +2,6 @@ module Issuer
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-    import Parameters::*;
 #(
     parameter unsigned EXECUTION_UNROLL = 1,
     parameter unsigned BYPASS_ENABLED = 1, 
@@ -26,23 +25,19 @@ module Issuer
     // Packets To Backend
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
-    output logic accept_vector [TOTAL_LANE_COUNT-1:0],
+    output logic accept_vector [TOTAL_LANE_COUNT-1:0], // Lane selection; backend latches only when !stall.
 
-    // Producer Table Reads
-    output logic [4:0] rs1 [ISSUE_WIDTH-1:0],
-    output logic [4:0] rs2 [ISSUE_WIDTH-1:0],
+    // Latched Producer Table Data from Decode
+    input logic [UNROLLED_W-1:0] rs1_index_in [ISSUE_WIDTH-1:0],
+    input logic [UNROLLED_W-1:0] rs2_index_in [ISSUE_WIDTH-1:0],
+    input logic [UNROLLED_W-1:0] rs1_countdown_in [ISSUE_WIDTH-1:0],
+    input logic [UNROLLED_W-1:0] rs2_countdown_in [ISSUE_WIDTH-1:0],
+    input logic [LANE_WIDTH-1:0] rs1_lane_in [ISSUE_WIDTH-1:0],
+    input logic [LANE_WIDTH-1:0] rs2_lane_in [ISSUE_WIDTH-1:0],
+    input DecodeCapability_ rs1_capability_in [ISSUE_WIDTH-1:0],
+    input DecodeCapability_ rs2_capability_in [ISSUE_WIDTH-1:0],
 
-    // Producer Table Recipient Data
-    input logic [UNROLLED_W-1:0] rs1_index [ISSUE_WIDTH-1:0],
-    input logic [UNROLLED_W-1:0] rs2_index [ISSUE_WIDTH-1:0],
-    input logic [UNROLLED_W-1:0] rs1_countdown [ISSUE_WIDTH-1:0],
-    input logic [UNROLLED_W-1:0] rs2_countdown [ISSUE_WIDTH-1:0],
-    input logic [LANE_WIDTH-1:0] rs1_lane [ISSUE_WIDTH-1:0],
-    input logic [LANE_WIDTH-1:0] rs2_lane [ISSUE_WIDTH-1:0],
-    input DecodeCapability_ rs1_capability [ISSUE_WIDTH-1:0],
-    input DecodeCapability_ rs2_capability [ISSUE_WIDTH-1:0],
-
-    // Producer Table Writes
+    // Prospective Producer Table Writes (committed by the table only when !stall)
     output logic [4:0] op_rd [ISSUE_WIDTH-1:0],
     output logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0],
     output logic op_accept [ISSUE_WIDTH-1:0], // gate on if wb or not
@@ -54,15 +49,24 @@ module Issuer
     input logic serial_active
 );
 
-    // Producer Table Reads
-    for (genvar i = 0; i < ISSUE_WIDTH; i++) begin : gen_prod_table_addr
-        assign rs1[i] = packets_out[i].common.rs1;
-        assign rs2[i] = packets_out[i].common.rs2;
-    end
-
     // Instructions Valid to Issue
     logic issue_good [ISSUE_WIDTH-1:0];
 
+    // Consumption depends only on the contract, independently of lane selection.
+    always_comb begin
+        issue_consumed = '0;
+        for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
+            issue_consumed += $clog2(ISSUE_WIDTH+1)'(issue_good[slot]);
+        end
+        if (reset || redirect_taken || stall) issue_consumed = '0;
+    end
+
+    // The current lookahead allocator guarantees the contract's mask at widths 1/2.
+    if (ISSUE_WIDTH > 2) begin : unsupported_direct_consumption
+        initial $fatal(1, "Direct contract consumption requires an exact allocator for ISSUE_WIDTH > 2");
+    end
+
+    // Decode maintains producer metadata and captures accepted older writes.
     IssueContract #(
         .ISSUE_WIDTH(ISSUE_WIDTH),
         .BYPASS_ENABLED(BYPASS_ENABLED),
@@ -74,20 +78,20 @@ module Issuer
         .SUPPORT_FLOAT(Parameters::SUPPORT_FLOAT),
         .SUPPORT_ATOMIC(Parameters::SUPPORT_ATOMIC)
     ) issue_contract (
-        .redirect_taken(redirect_taken),
-        .stall(stall),
+        .redirect_taken(1'b0), // Normal readiness is independent of flush; gate outputs below.
+        .stall(1'b0), // Let readiness and allocation settle independently of stall.
         .packets(packets_out),
         .lane_types(lane_types_out),
         .packets_valid(packets_valid),
         .serial_active(serial_active),
-        .rs1_index(rs1_index),
-        .rs2_index(rs2_index),
-        .rs1_countdown(rs1_countdown),
-        .rs2_countdown(rs2_countdown),
-        .rs1_lane(rs1_lane),
-        .rs2_lane(rs2_lane),
-        .rs1_capability(rs1_capability),
-        .rs2_capability(rs2_capability),
+        .rs1_index(rs1_index_in),
+        .rs2_index(rs2_index_in),
+        .rs1_countdown(rs1_countdown_in),
+        .rs2_countdown(rs2_countdown_in),
+        .rs1_lane(rs1_lane_in),
+        .rs2_lane(rs2_lane_in),
+        .rs1_capability(rs1_capability_in),
+        .rs2_capability(rs2_capability_in),
         .issue_good(issue_good)
     );
 
@@ -95,32 +99,32 @@ module Issuer
     IssuerPacket_ issuer_packet_internal [ISSUE_WIDTH-1:0];
     always_comb begin
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            issuer_packet_internal[i].input_age = i;
+            issuer_packet_internal[i].input_age = AGE_WIDTH'(i);
 
-            issuer_packet_internal[i].forward_lane_1 = rs1_lane[i];
-            issuer_packet_internal[i].forward_index_1 = UNROLL_WIDTH'(rs1_index[i]);
-            issuer_packet_internal[i].read_reg_file_1 = rs1_index[i] >= (EXECUTION_UNROLL+1); // in reg file next cycle
-            issuer_packet_internal[i].use_bypass_1 = (rs1_index[i] == 0); // already gated by issue contract on bad cases
+            issuer_packet_internal[i].forward_lane_1 = rs1_lane_in[i];
+            issuer_packet_internal[i].forward_index_1 = UNROLL_WIDTH'(rs1_index_in[i]);
+            issuer_packet_internal[i].read_reg_file_1 = rs1_index_in[i] >= (EXECUTION_UNROLL+1); // in reg file next cycle
+            issuer_packet_internal[i].use_bypass_1 = (rs1_index_in[i] == 0); // already gated by issue contract on bad cases
 
-            issuer_packet_internal[i].forward_lane_2 = rs2_lane[i];
-            issuer_packet_internal[i].forward_index_2 = UNROLL_WIDTH'(rs2_index[i]);
-            issuer_packet_internal[i].read_reg_file_2 = rs2_index[i] >= (EXECUTION_UNROLL+1); // in reg file next cycle
-            issuer_packet_internal[i].use_bypass_2 = (rs2_index[i] == 0); // already gated by issue contract on bad cases
+            issuer_packet_internal[i].forward_lane_2 = rs2_lane_in[i];
+            issuer_packet_internal[i].forward_index_2 = UNROLL_WIDTH'(rs2_index_in[i]);
+            issuer_packet_internal[i].read_reg_file_2 = rs2_index_in[i] >= (EXECUTION_UNROLL+1); // in reg file next cycle
+            issuer_packet_internal[i].use_bypass_2 = (rs2_index_in[i] == 0); // already gated by issue contract on bad cases
 
         end
     end
 
     // Lane Selection
     logic [AGE_WIDTH-1:0] index_array [TOTAL_LANE_COUNT-1:0];
-    localparam int unsigned INT_LANE_MAX = 1 + INTEGER_LANE_COUNT;
-    localparam int unsigned MEM_LANE_MAX = INT_LANE_MAX + MEMORY_LANE_COUNT;
+    localparam int unsigned INT_LANE_MAX = 1 + Parameters::INTEGER_LANE_COUNT;
+    localparam int unsigned MEM_LANE_MAX = INT_LANE_MAX + Parameters::MEMORY_LANE_COUNT;
     always_comb begin
         logic [TOTAL_LANE_COUNT-1:0] compatible [ISSUE_WIDTH-1:0];
         logic [TOTAL_LANE_COUNT-1:0] used_lanes;
         logic stop_issue;
 
         used_lanes = '0;
-        stop_issue = reset || stall || redirect_taken;
+        stop_issue = reset;
         index_array = '{default: 'x};
         accept_vector = '{default: 1'b0};
 
@@ -129,25 +133,25 @@ module Issuer
             case (packets_out[slot].common.capability)
                 CAP_SYSTEM, CAP_CSR: compatible[slot][0] = 1'b1;
                 CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV: begin
-                    for (int lane = 0; lane < INTEGER_LANE_COUNT; lane++) begin
+                    for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
                         case (packets_out[slot].common.capability)
-                            CAP_ALU: compatible[slot][lane+1] = INTEGER_LANE_CAPABILITIES[lane][0];
-                            CAP_BRU: compatible[slot][lane+1] = INTEGER_LANE_CAPABILITIES[lane][1];
-                            CAP_MUL: compatible[slot][lane+1] = INTEGER_LANE_CAPABILITIES[lane][2];
-                            CAP_DIV: compatible[slot][lane+1] = INTEGER_LANE_CAPABILITIES[lane][3];
+                            CAP_ALU: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][0];
+                            CAP_BRU: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][1];
+                            CAP_MUL: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][2];
+                            CAP_DIV: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][3];
                             default: ;
                         endcase
                     end
                 end
                 CAP_MEMORY, CAP_ATOMIC: begin
-                    for (int lane = 0; lane < MEMORY_LANE_COUNT; lane++) begin
-                        compatible[slot][INT_LANE_MAX+lane] = MEMORY_LANE_CAPABILITIES[lane]
-                            [packets_out[slot].common.capability == CAP_ATOMIC];
+                    for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
+                        compatible[slot][INT_LANE_MAX+lane] = Parameters::MEMORY_LANE_CAPABILITIES[lane]
+                            [2'(packets_out[slot].common.capability == CAP_ATOMIC)];
                     end
                 end
                 CAP_FP_F, CAP_FP_CONVERT: begin
-                    for (int lane = 0; lane < FLOATING_LANE_COUNT; lane++) begin
-                        compatible[slot][MEM_LANE_MAX+lane] = FLOATING_LANE_CAPABILITIES[lane]
+                    for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
+                        compatible[slot][MEM_LANE_MAX+lane] = Parameters::FLOATING_LANE_CAPABILITIES[lane]
                             [packets_out[slot].common.capability == CAP_FP_CONVERT];
                     end
                 end
@@ -169,7 +173,7 @@ module Issuer
             if (preferred == '0) preferred = available;
 
             selected_lane = -1;
-            for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
+            for (int lane = 0; lane < int'(TOTAL_LANE_COUNT); lane++) begin
                 if (selected_lane == -1 && preferred[lane]) selected_lane = lane;
             end
 
@@ -183,31 +187,36 @@ module Issuer
                 stop_issue = 1'b1;
             end
         end
+        // Redirect suppresses acceptance directly, after normal lane selection.
+        if (redirect_taken) accept_vector = '{default: 1'b0};
     end
     for (genvar i = 0; i < TOTAL_LANE_COUNT; i++) begin : gen_lane_mux
         assign decoder_packet[i] = accept_vector[i] ? packets_out[index_array[i]] : 'x;
         assign issuer_packet[i] = accept_vector[i] ? issuer_packet_internal[index_array[i]] : 'x;
     end
 
-    // Count actual accepts and record each accepted instruction's producer.
+    // Describe each selected instruction's producer, even while stalled.
+    // ProducerTable and decode qualify state updates locally with !stall.
     always_comb begin
-        issue_consumed = '0;
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
             op_rd[slot] = packets_out[slot].common.rd;
             op_lane[slot] = '0;
             op_accept[slot] = 1'b0;
             op_age[slot] = AGE_WIDTH'(slot);
             op_type[slot] = packets_out[slot].common.capability;
-            op_wb[slot] = packets_out[slot].common.rd_valid;
+            // This table tracks integer registers; FP writes must not alias x registers.
+            op_wb[slot] = packets_out[slot].common.rd_valid && !packets_out[slot].common.rd_float;
         end
         for (int unsigned lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
             if (accept_vector[lane]) begin
-                issue_consumed++;
                 op_lane[index_array[lane]] = LANE_WIDTH'(lane);
                 op_accept[index_array[lane]] = 1'b1;
             end
         end
     end
+
+
+
 endmodule
 
 // may need to pipeline this. low friction addition
@@ -238,3 +247,19 @@ endmodule
 // serial lane instructions, not pipeline flow.
 // ALWAYS SINGLE SERIAL LANE
 // serial maybe only needs to block other serial lane instructions
+
+// wire pops direct into frontend queue. late/bad fills in decode are ok
+// this could eliminate the full dependency chain
+
+// USE BRAMS FOR PRODUCER TABLE AND OTHER STUFF. TAKE ADVANTAGE DECODE STAGE
+// TO REGISTER EVERYTHING
+// POSSIBLY READ PRODUCER TABLE IN DECODE STAGE (can change though)
+
+// at some point get chatgpt to rethink my parameter sourcing as its messy right now
+
+// Producer metadata is read and maintained in decode alongside each packet.
+// Accepted issue writes feed both the producer table and decode's operand refresh.
+// Issue uses that registered metadata directly for readiness and forwarding.
+
+// ENSURE REDIRECT HAS PRIORITY OVER STALL IF TIMING ALLOWS FOR IPC REASONS
+// backend pipeline stages MUST NOT LATCH ON STALL

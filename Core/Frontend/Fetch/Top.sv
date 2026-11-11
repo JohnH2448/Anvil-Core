@@ -46,6 +46,7 @@ module FetchTop #(
         .RESET_VECTOR(RESET_VECTOR)
     ) queue (
         .clk(clk),
+        .flush(1'b0), // Reserved queue interface; redirects perform the active flush.
         .reset(reset),
 
         .redirect_pc(redirect_pc),

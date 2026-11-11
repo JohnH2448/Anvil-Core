@@ -46,6 +46,16 @@ module DispatchTop
     DecodeCapability_ rs1_capability [ISSUE_WIDTH-1:0];
     DecodeCapability_ rs2_capability [ISSUE_WIDTH-1:0];
 
+    // Registered producer lookups from decode to issue
+    logic [UNROLLED_W-1:0] rs1_index_out [ISSUE_WIDTH-1:0];
+    logic [UNROLLED_W-1:0] rs2_index_out [ISSUE_WIDTH-1:0];
+    logic [UNROLLED_W-1:0] rs1_countdown_out [ISSUE_WIDTH-1:0];
+    logic [UNROLLED_W-1:0] rs2_countdown_out [ISSUE_WIDTH-1:0];
+    logic [LANE_WIDTH-1:0] rs1_lane_out [ISSUE_WIDTH-1:0];
+    logic [LANE_WIDTH-1:0] rs2_lane_out [ISSUE_WIDTH-1:0];
+    DecodeCapability_ rs1_capability_out [ISSUE_WIDTH-1:0];
+    DecodeCapability_ rs2_capability_out [ISSUE_WIDTH-1:0];
+
     // ProducerTable updates from accepted issue slots
     logic [4:0] op_rd [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0];
@@ -56,12 +66,14 @@ module DispatchTop
 
     DecodeStage #(
         .ISSUE_WIDTH(ISSUE_WIDTH),
+        .EXECUTION_UNROLL(EXECUTION_UNROLL),
         .SUPPORT_MUL(Parameters::SUPPORT_MUL),
         .SUPPORT_DIV(Parameters::SUPPORT_DIV),
         .SUPPORT_FLOAT(Parameters::SUPPORT_FLOAT),
         .SUPPORT_ATOMIC(Parameters::SUPPORT_ATOMIC)
     ) decode_stage (
         .clk(clk),
+        .stall(stall),
         .reset(reset),
         .redirect_taken(redirect_taken),
         .serve_data_reg(serve_data_reg),
@@ -75,7 +87,30 @@ module DispatchTop
         .lane_types_out(lane_types_out),
         .packets_valid(packets_valid),
         .issue_consumed(issue_consumed),
-        .serve_consumed(serve_consumed)
+        .serve_consumed(serve_consumed),
+        .op_rd(op_rd),
+        .op_lane(op_lane),
+        .op_accept(op_accept),
+        .op_wb(op_wb),
+        .op_type(op_type),
+        .rs1(rs1),
+        .rs2(rs2),
+        .rs1_index(rs1_index),
+        .rs2_index(rs2_index),
+        .rs1_countdown(rs1_countdown),
+        .rs2_countdown(rs2_countdown),
+        .rs1_lane(rs1_lane),
+        .rs2_lane(rs2_lane),
+        .rs1_capability(rs1_capability),
+        .rs2_capability(rs2_capability),
+        .rs1_index_out(rs1_index_out),
+        .rs2_index_out(rs2_index_out),
+        .rs1_countdown_out(rs1_countdown_out),
+        .rs2_countdown_out(rs2_countdown_out),
+        .rs1_lane_out(rs1_lane_out),
+        .rs2_lane_out(rs2_lane_out),
+        .rs1_capability_out(rs1_capability_out),
+        .rs2_capability_out(rs2_capability_out)
     );
 
     Issuer #(
@@ -95,16 +130,14 @@ module DispatchTop
         .decoder_packet(decoder_packet),
         .issuer_packet(issuer_packet),
         .accept_vector(accept_vector),
-        .rs1(rs1),
-        .rs2(rs2),
-        .rs1_index(rs1_index),
-        .rs2_index(rs2_index),
-        .rs1_countdown(rs1_countdown),
-        .rs2_countdown(rs2_countdown),
-        .rs1_lane(rs1_lane),
-        .rs2_lane(rs2_lane),
-        .rs1_capability(rs1_capability),
-        .rs2_capability(rs2_capability),
+        .rs1_index_in(rs1_index_out),
+        .rs2_index_in(rs2_index_out),
+        .rs1_countdown_in(rs1_countdown_out),
+        .rs2_countdown_in(rs2_countdown_out),
+        .rs1_lane_in(rs1_lane_out),
+        .rs2_lane_in(rs2_lane_out),
+        .rs1_capability_in(rs1_capability_out),
+        .rs2_capability_in(rs2_capability_out),
         .op_rd(op_rd),
         .op_lane(op_lane),
         .op_accept(op_accept),

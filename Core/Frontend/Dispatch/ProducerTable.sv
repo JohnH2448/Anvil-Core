@@ -39,9 +39,9 @@ module ProducerTable
     
     // Current producer position: 0 = operand select, 1 = execute,
     // 2..EXECUTION_UNROLL+1 = result registers, EXECUTION_UNROLL+2 = RF.
-    localparam int unsigned RF_INDEX = EXECUTION_UNROLL + 2;
-    localparam int unsigned DIV_RESULT_POSITION =
-        (32 + Parameters::DIVIDER_AUTO_PIPE - 1) / Parameters::DIVIDER_AUTO_PIPE + 3;
+    localparam logic [UNROLLED_W-1:0] RF_INDEX = UNROLLED_W'(EXECUTION_UNROLL + 2);
+
+    // Registered producer identity and progress, indexed by architectural register.
     logic [UNROLLED_W-1:0] index_table [31:0];
     logic [LANE_WIDTH-1:0] lane_table [31:0];
     DecodeCapability_ capability_table [31:0];
@@ -49,48 +49,45 @@ module ProducerTable
     // A consumer may issue at <= 1; execution checks variable-latency readiness.
     logic [UNROLLED_W-1:0] countdown_table [31:0];
 
+    // Select the youngest accepted writer to each register. Equal ages retain
+    // the previous priority rule: the higher issue slot wins. x0 never allocates.
+    int selected_writer [31:0];
+    logic [UNROLLED_W-1:0] issue_countdown [ISSUE_WIDTH-1:0];
+    always_comb begin
+        for (int k = 0; k < ISSUE_WIDTH; k++)
+            issue_countdown[k] = producer_countdown(op_type[k], EXECUTION_UNROLL, Parameters::DIVIDER_AUTO_PIPE);
+        foreach (selected_writer[i]) begin
+            selected_writer[i] = -1;
+            for (int k = 0; k < ISSUE_WIDTH; k++) begin
+                if (i != 0 && op_accept[k] && op_wb[k] && op_rd[k] == 5'(i)) begin
+                    if (selected_writer[i] == -1) selected_writer[i] = k;
+                    else if (op_age[k] >= op_age[selected_writer[i]]) selected_writer[i] = k;
+                end
+            end
+        end
+    end
+
+    // New writers replace old mappings; otherwise progress saturates at the RF.
+    // Both position and countdown freeze during iteration/global stalls.
+    // TODO: Redirect currently holds state; restore surviving producers before issue resumes.
     always_ff @(posedge clk) begin
         if (reset) begin
             foreach (index_table[i]) begin
                 index_table[i] <= UNROLLED_W'(RF_INDEX);
                 countdown_table[i] <= '0;
             end
-        end else if (!stall) begin
-            if (redirect_taken) begin
-                // TODO: Restore youngest surviving producers before resuming issue.
-            end else begin
-                foreach (index_table[i]) begin
-                    int winner;
-                    winner = -1;
-                    for (int k = 0; k < ISSUE_WIDTH; k++) begin
-                        if (i != 0 && op_accept[k] && op_wb[k] && op_rd[k] == i) begin
-                            if (winner == -1) winner = k;
-                            else if (op_age[k] >= op_age[winner]) winner = k;
-                        end
-                    end
-
-                    if (winner != -1) begin
-                        index_table[i] <= '0;
-                        lane_table[i] <= op_lane[winner];
-                        capability_table[i] <= op_type[winner];
-                        case (op_type[winner])
-                            CAP_ALU: countdown_table[i] <= UNROLLED_W'(1);
-                            CAP_BRU: countdown_table[i] <= UNROLLED_W'(2);
-                            CAP_MUL: countdown_table[i] <= UNROLLED_W'(
-                                EXECUTION_UNROLL < 2 ? EXECUTION_UNROLL + 1 : 3);
-                            CAP_DIV: countdown_table[i] <= UNROLLED_W'(
-                                EXECUTION_UNROLL + 1 < DIV_RESULT_POSITION ?
-                                EXECUTION_UNROLL + 1 : DIV_RESULT_POSITION);
-                            // Placeholder until the memory lane defines its first result slot.
-                            CAP_MEMORY: countdown_table[i] <= UNROLLED_W'(2);
-                            default: countdown_table[i] <= UNROLLED_W'(EXECUTION_UNROLL + 1);
-                        endcase
-                    end else begin
-                        if (index_table[i] < RF_INDEX)
-                            index_table[i] <= index_table[i] + UNROLLED_W'(1);
-                        if (countdown_table[i] != 0)
-                            countdown_table[i] <= countdown_table[i] - UNROLLED_W'(1);
-                    end
+        end else if (!stall && !redirect_taken) begin
+            foreach (index_table[i]) begin
+                if (selected_writer[i] != -1) begin
+                    index_table[i] <= '0;
+                    lane_table[i] <= op_lane[selected_writer[i]];
+                    capability_table[i] <= op_type[selected_writer[i]];
+                    countdown_table[i] <= issue_countdown[selected_writer[i]];
+                end else begin
+                    if (index_table[i] < RF_INDEX)
+                        index_table[i] <= index_table[i] + UNROLLED_W'(1);
+                    if (countdown_table[i] != 0)
+                        countdown_table[i] <= countdown_table[i] - UNROLLED_W'(1);
                 end
             end
         end

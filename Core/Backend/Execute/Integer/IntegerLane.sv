@@ -127,7 +127,7 @@ module IntegerLane
 
     // Decode Payload Latch (validity has one owner below).
     always_ff @(posedge clk) begin
-        if (accept) begin
+        if (accept && !stall) begin
             decoder_payload[0] <= decoder_packet;
             issuer_payload[0] <= issuer_packet;
         end
@@ -193,6 +193,10 @@ module IntegerLane
                 temp_source_2 = bypass_data_2;
             end
         end
+        // Invalid integer sources represent x0 or an unused operand. Decode
+        // leaves their register numbers unspecified; neither may read garbage.
+        if (!decoder_payload[0].common.rs1_valid) temp_source_1 = '0;
+        if (!decoder_payload[0].common.rs2_valid) temp_source_2 = '0;
     end
 
     // Operand Selection Stage

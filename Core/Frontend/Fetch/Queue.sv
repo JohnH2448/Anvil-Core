@@ -45,6 +45,10 @@ module Queue
     input logic [$clog2(SERVE_WORDS+1)-1:0] serve_consumed
 );
 
+    // Do not rely on redirect propagating through upstream consumption logic.
+    logic [$clog2(SERVE_WORDS+1)-1:0] serve_consumed_active;
+    assign serve_consumed_active = redirect_taken ? '0 : serve_consumed;
+
     // Derived Constants
     localparam unsigned FETCH_SLOTS = FETCH_WORDS * 2;
     localparam unsigned FIFO_INDEX_W = $clog2(FIFO_WORDS);
@@ -183,18 +187,14 @@ module Queue
     // Registers External Reset Signal
     logic reset_reg;
     always_ff @(posedge clk) begin
-        if (reset_reg) begin
-            reset_reg <= 0;
-        end else begin
-            reset_reg <= reset;
-        end
+        reset_reg <= reset;
     end
 
     // Calculates True PC Delta from Serve Consumption
     always_comb begin
         consumed_pc_step = '0;
         for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
-            if (serve_valid_reg[i] && (i < $unsigned(int'(serve_consumed))))
+            if (serve_valid_reg[i] && (i < $unsigned(int'(serve_consumed_active))))
                 consumed_pc_step = consumed_pc_step +
                     pc_step(serve_data_reg[i], serve_c_reg[i], serve_taken_reg[i]);
         end
@@ -305,7 +305,7 @@ module Queue
         advance = fetch_valid && !fetch_error &&
             (!fetch_staging_reg_valid || !prediction_stage_valid || packet_commit);
         prefetch_pc_next = prefetch_pc;
-        if (reset_reg) begin
+        if (reset || reset_reg) begin
             prefetch_pc_next = RESET_VECTOR;
         end else if (redirect_taken) begin
             prefetch_pc_next = redirect_pc;
@@ -322,12 +322,12 @@ module Queue
 
     // Tie Into External Facing Signals
     assign req_address = prefetch_pc_next;
-    assign req_valid = !reset_reg;
+    assign req_valid = !reset && !reset_reg;
     assign req_ready = fetch_accept;
 
     // Registers PC State and Accepted Fetch Data
     always_ff @(posedge clk) begin
-        if (reset_reg) begin
+        if (reset || reset_reg) begin
             real_pc <= RESET_VECTOR;
             prefetch_pc <= RESET_VECTOR;
             response_pc_reg <= RESET_VECTOR;
@@ -365,7 +365,7 @@ module Queue
 
     // Registers Prediction Results and Supports Same-Cycle Drain and Refill
     always_ff @(posedge clk) begin
-        if (reset_reg || redirect_taken || (packet_commit && packet_taken)) begin
+        if (reset || reset_reg || redirect_taken || (packet_commit && packet_taken)) begin
             prediction_stage_valid <= 1'b0;
             prediction_pc <= '0;
             packet_push_count <= '0;
@@ -406,7 +406,7 @@ module Queue
 
     // Compacts Kept Prediction Lanes Into FIFO Entries Through First Taken Branch
     always_ff @(posedge clk) begin
-        if (!reset_reg && !redirect_taken && packet_commit) begin
+        if (!reset && !reset_reg && !redirect_taken && packet_commit) begin
             logic [PUSH_COUNT_W-1:0] write_offset;
             write_offset = '0;
             for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
@@ -476,14 +476,14 @@ module Queue
 
     // Registers Serve Outputs for Decode and Clears Them on External Redirect
     always_ff @(posedge clk) begin
-        if (reset_reg || redirect_taken) begin
+        if (reset || reset_reg || redirect_taken) begin
             for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
-                serve_data_reg[i] <= 32'hdeadbeef;
-                serve_pc_reg[i] <= RESET_VECTOR;
+                serve_data_reg[i] <= 'x;
+                serve_pc_reg[i] <= 'x;
                 serve_valid_reg[i] <= 1'b0;
-                serve_c_reg[i] <= 1'b0;
-                serve_taken_reg[i] <= 1'b0;
-                serve_branch_reg[i] <= 1'b0;
+                serve_c_reg[i] <= 'x;
+                serve_taken_reg[i] <= 'x;
+                serve_branch_reg[i] <= 'x;
             end
         end else begin
             for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
@@ -499,7 +499,7 @@ module Queue
 
     // Updates FIFO Pointers, Occupancy, and Registered Admission State
     always_ff @(posedge clk) begin
-        if (reset_reg || redirect_taken) begin
+        if (reset || reset_reg || redirect_taken) begin
             fifo_occipied_slots <= '0;
             fifo_free_slots <= (FIFO_INDEX_W+1)'(FIFO_WORDS);
             fifo_tail <= '0;
@@ -542,3 +542,5 @@ endmodule
 
 // Need to change vector widths to cleaner style instead of the CONST:0 form currently
 // being used
+
+// definitely consider removing a staging register if timing can't get 250+

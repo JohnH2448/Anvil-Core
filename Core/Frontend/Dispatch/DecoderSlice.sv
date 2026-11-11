@@ -237,7 +237,19 @@ module DecoderSlice
         endcase
 
         // Full Decode
-        decode_packet = '0;
+        decode_packet = 'x;
+        decode_packet.common = '0;
+        decode_packet.common.immediate = 'x;
+        decode_packet.alu.operation = ALU_ADD;
+        decode_packet.alu.source = ALU_RS1_RS2;
+        decode_packet.bru.operation = BR_NONE;
+        decode_packet.fp.operation = FP_NONE;
+        decode_packet.fp.rs3_valid = 1'b0;
+        decode_packet.fp_convert.operation = FPC_NONE;
+        decode_packet.memory.operation = MEM_NONE;
+        decode_packet.atomic.operation = ATOM_NONE;
+        decode_packet.system.operation = SYS_NONE;
+        decode_packet.csr.operation = CSR_NONE;
         decoded_lane_type = INTEGER;
         decode_packet.common.pc = pc;
         decode_packet.bru.is_branch = is_branch;
@@ -674,7 +686,8 @@ module DecoderSlice
                 if (decode_packet.fp_convert.operation != FPC_NONE) begin
                     decode_packet.common.capability = CAP_FP_CONVERT;
                     decode_packet.fp_convert.rounding_mode = decode_packet.fp.rounding_mode;
-                    decode_packet.fp = '0;
+                    decode_packet.fp = 'x;
+                    decode_packet.fp.rs3_valid = 1'b0;
                 end else decode_packet.common.capability = CAP_FP_F;
             end
             MEMORY: decode_packet.common.capability = decode_packet.atomic.operation != ATOM_NONE ? CAP_ATOMIC : CAP_MEMORY;
@@ -690,7 +703,13 @@ module DecoderSlice
     LaneType_ lane_type_full;
     LaneType_ lane_type_compressed;
     always_comb begin
-        packet_compressed = '0;
+        packet_compressed = 'x;
+        packet_compressed.common = '0;
+        packet_compressed.common.immediate = 'x;
+        packet_compressed.alu.operation = ALU_ADD;
+        packet_compressed.bru.operation = BR_NONE;
+        packet_compressed.fp.rs3_valid = 1'b0;
+        packet_compressed.atomic.operation = ATOM_NONE;
         lane_type_compressed = INTEGER;
         compressed_immediate = '0;
         packet_compressed.common.pc = pc;
@@ -867,12 +886,103 @@ module DecoderSlice
         endcase
     end
 
+    // Only fields consumed by this capability survive into the decode register.
+    // Keep decode's internal NONE sentinels defined until capability selection
+    // finishes; they are selectors there, even when the output payload is unused.
+    function automatic DecoderPacket_ relevant_fields(input DecoderPacket_ decoded);
+        DecoderPacket_ result;
+        result = 'x;
+        result.common = decoded.common;
+        result.common.immediate = 'x;
+        result.common.next_pc = 'x;
+        // Execution supplies zero for invalid integer sources (including x0).
+        if (!decoded.common.rs1_valid) begin
+            result.common.rs1 = 'x;
+            result.common.rs1_float = 'x;
+        end
+        if (!decoded.common.rs2_valid) begin
+            result.common.rs2 = 'x;
+            result.common.rs2_float = 'x;
+        end
+        if (!decoded.common.rd_valid) begin
+            result.common.rd = 'x;
+            result.common.rd_float = 'x;
+        end
+        // Third-source validity is a control, including on non-FP packets.
+        result.fp.rs3_valid = 1'b0;
+        // The integer lane evaluates the BRU alongside every integer capability.
+        // BR_NONE must remain defined to suppress redirects and misalignment.
+        if (decoded.common.capability inside {CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV})
+            result.bru.operation = BR_NONE;
+        if (decoded.common.trap_type == NONE) begin
+            unique case (decoded.common.capability)
+                CAP_ALU: begin
+                    result.alu = decoded.alu;
+                    if (decoded.alu.source != ALU_RS1_RS2)
+                        result.common.immediate = decoded.common.immediate;
+                end
+                CAP_BRU: begin
+                    result.bru = decoded.bru;
+                    result.common.immediate = decoded.common.immediate;
+                    result.common.next_pc = decoded.common.next_pc;
+                end
+                CAP_MUL: result.mul = decoded.mul;
+                CAP_DIV: result.div = decoded.div;
+                CAP_MEMORY: begin
+                    result.memory = decoded.memory;
+                    result.atomic.operation = ATOM_NONE;
+                    result.common.immediate = decoded.common.immediate;
+                    if (decoded.memory.operation == MEM_STORE)
+                        result.memory.sign_extend = 'x;
+                end
+                CAP_ATOMIC: begin
+                    result.atomic = decoded.atomic;
+                    result.memory.operation = MEM_NONE;
+                    result.memory.size = decoded.memory.size;
+                end
+                CAP_FP_F: begin
+                    result.fp = decoded.fp;
+                    if (!decoded.fp.rs3_valid) begin
+                        result.fp.rs3 = 'x;
+                        result.fp.rs3_float = 'x;
+                    end
+                    if (!(decoded.fp.operation inside {FP_ADD, FP_SUB, FP_MUL,
+                        FP_DIV, FP_SQRT, FP_MADD, FP_MSUB, FP_NMSUB, FP_NMADD}))
+                        result.fp.rounding_mode = 'x;
+                end
+                CAP_FP_CONVERT: begin
+                    result.fp_convert = decoded.fp_convert;
+                    if (!(decoded.fp_convert.operation inside {FPC_FROM_INT, FPC_TO_INT})) begin
+                        result.fp_convert.is_unsigned = 'x;
+                        result.fp_convert.rounding_mode = 'x;
+                    end
+                end
+                CAP_SYSTEM: begin
+                    result.system.operation = decoded.system.operation;
+                    result.csr.operation = CSR_NONE;
+                    if (decoded.system.operation == SYS_FENCE) begin
+                        result.system.fence_predecessor = decoded.system.fence_predecessor;
+                        result.system.fence_successor = decoded.system.fence_successor;
+                    end
+                end
+                CAP_CSR: begin
+                    result.csr = decoded.csr;
+                    result.system.operation = SYS_NONE;
+                    if (decoded.csr.use_immediate)
+                        result.common.immediate[4:0] = decoded.common.immediate[4:0];
+                end
+            endcase
+        end
+        return result;
+    endfunction
+
     // Select Completed Packets Instead Of High-Fanout Instruction Fields
     always_comb begin
         packet_full = decode_packet(instruction, 1'b0, lane_type_full);
         packet = is_compressed ? packet_compressed : packet_full;
         // Shared fall-through address for link results and branch recovery.
         packet.common.next_pc = pc + (is_compressed ? 32'd2 : 32'd4);
+        packet = relevant_fields(packet);
         lane_type = is_compressed ? lane_type_compressed : lane_type_full;
     end
 

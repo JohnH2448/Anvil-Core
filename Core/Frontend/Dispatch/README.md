@@ -11,26 +11,61 @@ Decode validity must form contiguous prefixes beginning at lane zero.
 `serve_consumed` reports exactly the number of Fetch packets accepted on the
 next clock edge. Reset and redirect clear Decode validity and suppress Fetch
 consumption. The producer must also flush or replace its stale Fetch entries
-as part of redirect handling. `DecodedPacket_.bru.predicted_taken` preserves the
+as part of redirect handling. `DecoderPacket_.bru.predicted_taken` preserves the
 Fetch prediction alongside the decoded instruction and PC.
 
 Issue must never consume more packets than Decode holds; its count is used
 directly without a hardware clamp. Decode registers the count of Fetch's
 `incoming_serve_valid` alongside Fetch's new serve data, and maintains a
 registered empty-slot count from actual pops and accepted inputs. Both counts
-use `$clog2(ISSUE_WIDTH+1)` bits. Reset and redirects follow the registered
-control behavior in Decode. Single issue loads its packet directly on acceptance;
-wider configurations retain and append packets in order. No register is added to the
+use `$clog2(ISSUE_WIDTH+1)` bits. Reset is held through the following registered reset cycle; redirects clear
+the queue on the redirect edge. Parallel fixed-source selection retains and appends packets in order at all widths. No register is added to the
 Issue pop signal.
 
-Run `wsl bash Tests/run_decode_queue.sh` for queue tests at widths 1, 2, and 4,
-including every legal occupancy/pop/input-count combination, random packet
-contents, stalls, resets, redirects, prediction metadata, and registered count
-alignment. Packet contents and their parallel lane tags are checked against
-`DecoderReference`.
+### Producer metadata
+
+`RegisterSlice` extracts rs1/rs2 directly from the Fetch instruction, including
+compressed mappings. These addresses read `ProducerTable` during decode.
+Each decoded packet carries parallel registered source index, countdown, lane,
+and capability arrays into issue. Those arrays follow the same FIFO retain/refill
+selection as the packet, including an upper entry shifting into slot zero.
+
+A producer index advances toward `EXECUTION_UNROLL + 2` (the register file),
+and its countdown decreases toward zero. Both advance only when global `stall`
+is clear; waiting in the decode FIFO alone does not freeze them. Fresh table
+reads also receive that edge's advancement. Reset/redirect invalidate the packet
+FIFO; packet and producer payloads become unspecified during a flush.
+Normal FIFO candidates are calculated independently of redirect. Fixed-source
+producer updates precede parallel retain/refill selection; only validity and
+outward-facing consumption require defined flush values.
+
+Accepted integer writes from issue feed both the table and decode. Matching
+older writes replace a packet's source metadata with index zero, the initial
+countdown, lane, and capability. Later issue slots win multiple matching writes.
+Fresh refills can match any accepted write; retained packets only match writers
+older than their original FIFO position. A new allocation is not advanced on
+its allocation edge. `Definitions::producer_countdown` supplies the same initial
+countdown to decode and the table, including the physical-stage clamp for MUL/DIV.
+Issue consumes this registered metadata directly; there is no recent-write buffer.
+
+Stall does not suppress readiness, lane allocation, or packet mux selection.
+`accept_vector` and the producer-write candidates can remain asserted while
+stalled. Backend input payload/valid registers and producer-table state advance
+only when stall is low; `issue_consumed` is independently forced to zero.
+Decode can still refill empty FIFO slots, using unadvanced producer snapshots.
+
+The current issuer supports widths one and two. Its readiness prefix and lane
+allocator must agree on the consumed count. Same-group RAW dependencies prevent
+a consumer from issuing alongside its producer; the write refresh supplies the
+new producer when that consumer is retained.
+
+This remains an integer producer table. Floating-register writes do not update
+it; floating dependency tracking (including rs3) remains unimplemented. Producer
+mapping restoration after backend redirects also remains unimplemented: the table
+holds on redirect and needs a backend recovery protocol before full-core use.
 
 `DecoderSlice.sv` accepts one raw RV32 instruction and emits a purely combinational
-`Definitions::DecodedPacket_` plus a separate `LaneType_` routing tag. Its inputs
+`Definitions::DecoderPacket_` plus a separate `LaneType_` routing tag. Its inputs
 are `instruction`, `pc`, `is_branch`, `predicted_taken`, and `is_compressed`; it
 has no clock or internal registers. With `is_compressed`
 set, the low 16 instruction bits are decoded as RV32C. `is_branch` is fetch
@@ -60,7 +95,7 @@ architectural destination where appropriate.
 
 ## Capability chunks
 
-`DecodedPacket_` is the complete decoder/dispatch payload. Execution units compose
+`DecoderPacket_` is the complete decoder/dispatch payload. Execution units compose
 smaller packed structs from the named chunk types in `Definitions.sv`:
 
 | Member | Type | Contents / consumers |
@@ -117,17 +152,17 @@ For a parameterized lane, put each optional chunk register inside an
 BRU/MUL/DIV. There is no zero-width struct-member trick: compose a concrete
 local struct as above, or generate individual typed registers. The complete
 packet remains available to the issue queue alongside its two-bit lane
-tag. `IntegerLane.sv` is still
-an execution stub; this change supplies its control contract, not its datapath.
+tag. `IntegerLane.sv` implements integer execution and forces invalid integer source
+operands to zero, allowing unused source register numbers to remain unspecified.
 
 The capability arrays in `Parameters.sv` configure **per-lane execution
 support**. The decoder's **core-wide ISA legality** parameters control decode.
 All 15 nonempty integer subsets are usable; an empty subset accepts no integer
 instruction. Unsupported lanes reject an operation without changing it into a
 trap: issue must find a compatible lane. The core configuration must provide
-coverage for every enabled instruction class. Every lane can accept a packet
-with `common.trap_type != NONE`. Issue skips lane-type and capability matching
-for these packets. `system` and `csr` select ordinary instruction support.
+coverage for every enabled instruction class. Decode routes trap packets as `CAP_ALU` on the integer lane type, with operand
+and destination enables cleared. The configuration therefore needs an ALU-capable
+integer lane to deliver traps. `system` and `csr` select ordinary instruction support.
 
 Single-precision arithmetic/comparison operations use `fp`. Per-lane `fp_f`
 selects `CAP_FP_F`. Conversions are an independently advertised floating-lane
@@ -211,7 +246,7 @@ per-lane `atomic` controls routing. See the
   Integer x0 has no dependency/destination; execution supplies zero when needed.
   Floating f0 is ordinary. Fused floating operations additionally use `fp.rs3`.
 - `common.immediate` holds the shared 32-bit ALU, branch, or memory immediate.
-  CSR zimm is zero-extended into that field, with its value in bits [4:0].
+  CSR zimm occupies bits [4:0]; the remaining bits are unspecified.
   Branch/jump displacements are byte offsets. JALR uses rs1 and clears target
   bit zero; `common.next_pc` carries pc + 4 (pc + 2 for compressed instructions)
   for BRU link results and fall-through recovery.
@@ -229,8 +264,9 @@ per-lane `atomic` controls routing. See the
   retaining the CSR chunk. Fences retain predecessor/successor masks;
   FENCE.TSO is conservatively treated as an ordinary fence.
 - Trap packets carry their cause in `common.trap_type`, with register dependency/write enables and
-  memory, atomic, branch, floating, system and CSR side-effect controls disabled.
-  The selected lane must deliver the trap even without a destination register.
+  ordinary operation payloads unspecified. `BR_NONE` remains defined to suppress
+  the integer lane's parallel branch logic. The selected lane must deliver the
+  trap even without a destination register.
 
 The floating register file has fixed 32-bit data paths; execution
 still must implement floating CSR aliases, fence ordering and fetch synchronization.
@@ -247,26 +283,24 @@ members does not make instruction decode detect runtime access or alignment faul
 Trap entry must resolve ECALL privilege and interrupt cause separately.
 Zero-initialized packets remain non-trapping because `NONE` is zero.
 
-From the project root, run `bash Tests/run_decoder.sh` with Verilator and a C++
-compiler installed. On this Windows workspace, use `wsl bash Tests/run_decoder.sh`.
-The script lints the decoder and runs the self-checking SystemVerilog testbench.
-It omits DecoderOld.sv, which is reference code with a duplicate module name and
-obsolete dependencies. Packages compile in Enumerations, Definitions order.
+No permanent test suite is checked into this workspace. A frontend lint check is:
 
-The tests cover all 16 extension configurations, exhaustive compressed legality,
-integer and OP-FP function spaces, atomic function/width legality, CSR addresses
-and write intent, compressed branch/jump offsets, directed operand/immediate
-checks, and random transitions with metadata and trap side-effect invariants.
-The tests also compare every packet bit against the pre-optimization decode
-algorithm in `Tests/DecoderReference.sv`, across the same 16 configurations.
-Its representation was migrated to the new chunk contract; its independent
-expansion-based decode and legality algorithm are retained.
-`DecoderCapabilitiesTest.sv` additionally checks every integer lane subset,
-independent F/conversion routing and rejection of removed D instructions, conversion operand banks and zero registers,
-atomic and serial capability
-selection, and a real register containing only the ALU/BRU/MUL chunks.
-The reference is a test oracle and should not be added to synthesis sources.
-This is decoder-level verification; it is not a full-core ISA compliance test.
+```sh
+verilator --lint-only --timing -Wall -Wno-fatal --top-module FrontendTop \
+  -f Core/Package/packages.f Core/Frontend/Fetch/*.sv \
+  Core/Frontend/Dispatch/*.sv Core/Frontend/Top.sv
+```
+
+On Windows, run it through WSL. Remaining lint categories include filename/module
+naming, unused placeholder interfaces, and incomplete `unique case` statements
+whose legal capability values are selected upstream. These cases intentionally
+have no default arm.
+
+The refactor was checked with temporary, uncommitted simulations: fetch/issue PC
+ordering, partial consumption, global stalls, long resets, redirect flushing,
+decode metadata versus the live integer table, and source extraction versus full
+decode. These are frontend checks, not execution-result or ISA compliance tests;
+redirect checks do not validate restoration of killed backend producers.
 
 Encoding references: [RISC-V ISA manuals](https://docs.riscv.org/reference/isa/)
 and the [C extension specification](https://docs.riscv.org/reference/isa/v20260120/unpriv/c-st-ext.html).

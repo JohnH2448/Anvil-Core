@@ -93,13 +93,9 @@ module IssueContract
             for (int unsigned k = 0; k < ISSUE_WIDTH; k++) begin
                 if (k > i && packets_valid[i] && packets_valid[k] &&
                     packets[i].common.rd_valid) begin
-                    logic [4:0] source_1;
-                    logic [4:0] source_2;
-                    source_1 = packets[k].common.rs1;
-                    source_2 = packets[k].common.rs2;
-                    if ((packets[k].common.rs1_valid && destination == source_1 &&
+                    if ((packets[k].common.rs1_valid && destination == packets[k].common.rs1 &&
                          packets[i].common.rd_float == packets[k].common.rs1_float) ||
-                        (packets[k].common.rs2_valid && destination == source_2 &&
+                        (packets[k].common.rs2_valid && destination == packets[k].common.rs2 &&
                          packets[i].common.rd_float == packets[k].common.rs2_float)) begin
                         bad_raw[k] |= '1;
                     end
@@ -159,7 +155,7 @@ module IssueContract
                     for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
                         if (lane < MEMORY_LANE_COUNT) begin
                             compatible_lanes[i][MEMORY_LANE_BASE + lane] =
-                                Parameters::MEMORY_LANE_CAPABILITIES[lane][packets[i].common.capability == CAP_ATOMIC];
+                                Parameters::MEMORY_LANE_CAPABILITIES[lane][2'(packets[i].common.capability == CAP_ATOMIC)];
                         end
                     end
                 end
@@ -235,9 +231,13 @@ module IssueContract
         end
     end 
 
-    assign issue_good[0] = issue_good_internal[0];
-    for (genvar i = 1; i < ISSUE_WIDTH; i++) begin : gen_issue_prefix
-        assign issue_good[i] = issue_good[i-1] && issue_good_internal[i];
+    always_comb begin
+        logic prefix_good;
+        prefix_good = 1'b1;
+        for (int i = 0; i < ISSUE_WIDTH; i++) begin
+            prefix_good = prefix_good && issue_good_internal[i];
+            issue_good[i] = prefix_good;
+        end
     end
 
 

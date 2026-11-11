@@ -108,6 +108,29 @@ package Definitions;
         DecodeCsr_ csr;
     } DecoderPacket_;
 
+    // Pipeline advances from allocation to the first usable result.
+    // Iterative units finish in the last physical slot and hold global stall.
+    function automatic logic [DerivedParameters::UNROLLED_W-1:0] producer_countdown(
+        input Enumerations::DecodeCapability_ capability,
+        input int unsigned execution_unroll,
+        input int unsigned divider_auto_pipe
+    );
+        int unsigned last_position;
+        int unsigned div_position;
+        last_position = execution_unroll + 1;
+        div_position = (32 + divider_auto_pipe - 1) / divider_auto_pipe + 3;
+        case (capability)
+            Enumerations::CAP_ALU: producer_countdown = DerivedParameters::UNROLLED_W'(1);
+            Enumerations::CAP_BRU, Enumerations::CAP_MEMORY:
+                producer_countdown = DerivedParameters::UNROLLED_W'(2);
+            Enumerations::CAP_MUL: producer_countdown = DerivedParameters::UNROLLED_W'(
+                last_position < 3 ? last_position : 3);
+            Enumerations::CAP_DIV: producer_countdown = DerivedParameters::UNROLLED_W'(
+                last_position < div_position ? last_position : div_position);
+            default: producer_countdown = DerivedParameters::UNROLLED_W'(last_position);
+        endcase
+    endfunction
+
     // Integer execution payload shared with multiplier and divider.
     typedef struct packed {
         logic [31:0] source_1;
