@@ -19,14 +19,13 @@ module DecodeStage
 
     // Served Data from Fetch
     input logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0],
+    input logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0],
+    input logic [4:0] serve_rs2 [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
-
-    // Metadata from Fetch
-    input logic incoming_serve_valid [ISSUE_WIDTH-1:0],
 
     // Output to Issue Stage
     output DecoderPacket_ packets_out [ISSUE_WIDTH-1:0],
@@ -98,34 +97,16 @@ module DecodeStage
         );
     end
 
-    // Extract Sources and Latch Producer Data
-    for (genvar i = 0; i < ISSUE_WIDTH; i++) begin : extract_sources
-        RegisterSlice #(
-            .SUPPORT_MUL(SUPPORT_MUL),
-            .SUPPORT_DIV(SUPPORT_DIV),
-            .SUPPORT_FLOAT(SUPPORT_FLOAT),
-            .SUPPORT_ATOMIC(SUPPORT_ATOMIC)
-        ) register_slice (
-            .instruction(serve_data_reg[i]),
-            .is_compressed(serve_c_reg[i]),
-            .rs1(rs1[i]),
-            .rs2(rs2[i])
-        );
-    end
-    // Registered Input Metadata
+    // Predecoded source addresses travel with the selected fetch window.
+    assign rs1 = serve_rs1;
+    assign rs2 = serve_rs2;
+    // Fetch selects a registered speculative window after the clock edge.
+    // Count that window's validity directly so metadata cannot lag its payload.
     logic [$clog2(ISSUE_WIDTH+1)-1:0] valid_inputs;
-    logic [$clog2(ISSUE_WIDTH+1)-1:0] next_valid_inputs;
     always_comb begin
-        next_valid_inputs = '0;
+        valid_inputs = '0;
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++)
-            next_valid_inputs += $clog2(ISSUE_WIDTH+1)'(incoming_serve_valid[i]);
-    end
-    always_ff @(posedge clk) begin
-        if (reset || reset_reg || redirect_taken) begin
-            valid_inputs <= 0;
-        end else begin
-            valid_inputs <= next_valid_inputs;
-        end
+            valid_inputs += $clog2(ISSUE_WIDTH+1)'(serve_valid_reg[i]);
     end
 
     // Normal FIFO counts are independent of flush. Only the outward-facing
@@ -213,11 +194,11 @@ module DecodeStage
                 !packets_out[source_slot].common.rs2_float,
                 source_slot);
             refill_producers[source_slot].rs1 = refresh_source(fresh_1,
-                packets[source_slot].common.rs1,
+                serve_rs1[source_slot],
                 !packets[source_slot].common.rs1_float,
                 ISSUE_WIDTH);
             refill_producers[source_slot].rs2 = refresh_source(fresh_2,
-                packets[source_slot].common.rs2,
+                serve_rs2[source_slot],
                 !packets[source_slot].common.rs2_float,
                 ISSUE_WIDTH);
         end
@@ -299,3 +280,8 @@ module DecodeStage
         end
     end
 endmodule
+
+// MOVE NEXT PC CALC FORWARD INTO INTEGER LANE OR SOMETHING
+
+// not sure if this is presently being done but you dont need
+// to zero serve_consumed on stall, only issue_consumed

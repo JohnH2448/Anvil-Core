@@ -2,6 +2,10 @@ module Queue
     import Definitions::*;
 #(
     parameter unsigned FETCH_WORDS = 2,
+    parameter unsigned SUPPORT_MUL = Parameters::SUPPORT_MUL,
+    parameter unsigned SUPPORT_DIV = Parameters::SUPPORT_DIV,
+    parameter unsigned SUPPORT_FLOAT = Parameters::SUPPORT_FLOAT,
+    parameter unsigned SUPPORT_ATOMIC = Parameters::SUPPORT_ATOMIC,
     parameter unsigned FIFO_WORDS = 8,
     parameter unsigned SERVE_WORDS = 2,
     parameter unsigned RESET_VECTOR = 32'h0000_0000
@@ -28,14 +32,13 @@ module Queue
 
     // Linear Instruction Outputs
     output logic [31:0] serve_data_reg [SERVE_WORDS-1:0],
+    output logic [4:0] serve_rs1 [SERVE_WORDS-1:0],
+    output logic [4:0] serve_rs2 [SERVE_WORDS-1:0],
     output logic [31:0] serve_pc_reg [SERVE_WORDS-1:0],
     output logic serve_valid_reg [SERVE_WORDS-1:0],
     output logic serve_c_reg [SERVE_WORDS-1:0],
     output logic serve_taken_reg [SERVE_WORDS-1:0],
     output logic serve_branch_reg [SERVE_WORDS-1:0],
-
-    // Metadata to Decode Stage
-    output logic incoming_serve_valid [SERVE_WORDS-1:0],
 
     // Branch Preditor Communication
     output BranchInput_ branch_input [FETCH_WORDS*2-1:0],
@@ -131,6 +134,26 @@ module Queue
     logic [31:0] packet_partial_pc;
     logic [PUSH_COUNT_W-1:0] stage_push_count;
 
+    logic [4:0] packet_rs1 [FETCH_SLOTS-1:0];
+    logic [4:0] packet_rs2 [FETCH_SLOTS-1:0];
+    logic [4:0] prediction_rs1 [FETCH_SLOTS-1:0];
+    logic [4:0] prediction_rs2 [FETCH_SLOTS-1:0];
+    logic [4:0] fifo_rs1 [FIFO_WORDS-1:0];
+    logic [4:0] fifo_rs2 [FIFO_WORDS-1:0];
+    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : predecode_sources
+        RegisterSlice #(
+            .SUPPORT_MUL(SUPPORT_MUL),
+            .SUPPORT_DIV(SUPPORT_DIV),
+            .SUPPORT_FLOAT(SUPPORT_FLOAT),
+            .SUPPORT_ATOMIC(SUPPORT_ATOMIC)
+        ) register_slice (
+            .instruction(packet_data[lane]),
+            .is_compressed(packet_c[lane]),
+            .rs1(packet_rs1[lane]),
+            .rs2(packet_rs2[lane])
+        );
+    end
+
     // Registered Prediction Result Stage
     logic prediction_stage_valid;
     logic prediction_lane_valid [FETCH_SLOTS-1:0];
@@ -159,7 +182,7 @@ module Queue
     logic fifo_evaluated [FIFO_WORDS-1:0];
     logic fifo_taken [FIFO_WORDS-1:0];
 
-    // Registered FIFO Occupancy and Admission
+    // Selected FIFO State and Registered Tail/Admission
     logic [FIFO_INDEX_W:0] fifo_occipied_slots;
     logic [FIFO_INDEX_W:0] fifo_free_slots;
     logic [FIFO_INDEX_W:0] fifo_tail;
@@ -168,21 +191,17 @@ module Queue
     logic fifo_empty;
     logic fifo_packet_room;
 
-    // Combinational Serve Refill
-    logic [31:0] serve_data_next [SERVE_WORDS-1:0];
-    logic [31:0] serve_pc_next [SERVE_WORDS-1:0];
-    logic serve_valid_next [SERVE_WORDS-1:0];
-    logic serve_c_next [SERVE_WORDS-1:0];
-    logic serve_taken_next [SERVE_WORDS-1:0];
-    logic serve_branch_next [SERVE_WORDS-1:0];
-    logic [SERVE_COUNT_W-1:0] fifo_pull_count;
+    // Each bank is the next state for one possible binary consumption count.
+    // The actual count is registered alongside all banks, not used to build them.
+    logic [SERVE_COUNT_W-1:0] prev_serve_consumed;
+    logic [77:0] serve_bank [SERVE_WORDS+1][SERVE_WORDS];
+    logic [FIFO_INDEX_W:0] head_bank [SERVE_WORDS+1];
+    logic [FIFO_INDEX_W:0] occupied_bank [SERVE_WORDS+1];
+    logic [FIFO_INDEX_W:0] free_bank [SERVE_WORDS+1];
 
     // Decode-Consumption PC Tracking
     logic [31:0] real_pc;
     logic [31:0] consumed_pc_step;
-
-    // Metadata Assignment
-    assign incoming_serve_valid = serve_valid_next;
 
     // Registers External Reset Signal
     logic reset_reg;
@@ -370,6 +389,8 @@ module Queue
             prediction_pc <= '0;
             packet_push_count <= '0;
             for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
+                prediction_rs1[i] <= 'x;
+                prediction_rs2[i] <= 'x;
                 prediction_payload[i] <= '0;
                 prediction_result[i] <= '0;
                 prediction_lane_valid[i] <= 1'b0;
@@ -385,6 +406,8 @@ module Queue
                 prediction_pc <= fetch_staging_pc;
                 packet_push_count <= stage_push_count;
                 for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
+                    prediction_rs1[i] <= packet_rs1[i];
+                    prediction_rs2[i] <= packet_rs2[i];
                     prediction_payload[i] <= branch_input[i];
                     prediction_result[i] <= branch_output[i];
                     prediction_lane_valid[i] <= packet_valid[i];
@@ -413,6 +436,8 @@ module Queue
                 logic [FIFO_INDEX_W-1:0] index;
                 index = fifo_tail[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(write_offset);
                 if (packet_keep[i]) begin
+                    fifo_rs1[index] <= prediction_rs1[i];
+                    fifo_rs2[index] <= prediction_rs2[i];
                     fifo_data[index] <= prediction_payload[i].bp_instruction;
                     fifo_pc[index] <= prediction_payload[i].bp_pc;
                     fifo_c[index] <= prediction_payload[i].bp_compressed;
@@ -425,113 +450,107 @@ module Queue
         end
     end
 
-    // Combinational Serve Retention and Refill Candidates
-    logic [SERVE_WORDS-1:0] serve_keep;
-    logic [SERVE_COUNT_W-1:0] serve_keep_count;
-    logic [67:0] fifo_candidate [SERVE_WORDS];
-    logic [67:0] retained_candidate [SERVE_WORDS];
+    // Read the current FIFO head offsets once for all speculative windows.
+    logic [77:0] fifo_candidate [SERVE_WORDS];
+    logic [77:0] retained_candidate [SERVE_WORDS];
+    logic [FIFO_INDEX_W:0] push_count;
+    logic [FIFO_INDEX_W:0] admission_free;
+    assign push_count = packet_commit ? (FIFO_INDEX_W+1)'(packet_push_count) : '0;
+    assign admission_free = fifo_free_slots - push_count;
 
-    // Counts Retained Serve Entries and Limits Refill to Available FIFO Entries
-    assign serve_keep_count = SERVE_COUNT_W'($countones(serve_keep));
-    assign fifo_pull_count =
-        ($unsigned(int'(fifo_occipied_slots)) < (SERVE_WORDS - $unsigned(int'(serve_keep_count))))
-        ? SERVE_COUNT_W'(fifo_occipied_slots)
-        : SERVE_COUNT_W'(SERVE_WORDS - $unsigned(int'(serve_keep_count)));
+    assign fifo_head = head_bank[prev_serve_consumed];
+    assign fifo_occipied_slots = occupied_bank[prev_serve_consumed];
+    assign fifo_free_slots = free_bank[prev_serve_consumed];
+    assign fifo_full = fifo_free_slots == '0;
+    assign fifo_empty = fifo_occipied_slots == '0;
 
-    // Builds Parallel Selection Logic for Each Serve Lane
     for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : serve_lanes
         logic [FIFO_INDEX_W-1:0] read_index;
-        logic [67:0] selected;
-
-        // A consumed count leaves a contiguous suffix of the served entries.
-        assign serve_keep[lane] = serve_valid_reg[lane] && (lane >= $unsigned(int'(serve_consumed)));
-        // Reads Fixed FIFO Head Offsets Independently of Late Consumption
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
-            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index]};
-        assign retained_candidate[lane] = {1'b1, serve_c_reg[lane], serve_taken_reg[lane],
-            serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane]};
+            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index],
+            fifo_rs1[read_index], fifo_rs2[read_index]};
+        assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
+            serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
+            serve_rs1[lane], serve_rs2[lane]};
+        // All fields, including validity, select the same registered outcome.
+        assign {serve_valid_reg[lane], serve_c_reg[lane], serve_taken_reg[lane],
+            serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
+            serve_rs1[lane], serve_rs2[lane]} =
+            serve_bank[prev_serve_consumed][lane];
+    end
 
-        // Selects Retained Instructions First, Then Appends FIFO Refill Entries
-        // Mutually Exclusive Masks Unroll Into Parallel Selection Logic
+    for (genvar consumed = 0; consumed <= SERVE_WORDS; consumed++) begin : serve_outcomes
+        logic [SERVE_COUNT_W-1:0] keep_count;
+        logic [SERVE_COUNT_W-1:0] pull_count;
+        logic [77:0] next_window [SERVE_WORDS];
+
         always_comb begin
-            selected = '0;
-            for (int unsigned source_lane = 0; source_lane < SERVE_WORDS; source_lane++) begin
-                selected |= {68{serve_keep[source_lane] &&
-                    (source_lane == lane + $unsigned(int'(serve_consumed)))}}
-                    & retained_candidate[source_lane];
+            keep_count = '0;
+            for (int unsigned lane = consumed; lane < SERVE_WORDS; lane++)
+                keep_count += SERVE_COUNT_W'(serve_valid_reg[lane]);
+        end
+        // Only entries already in the FIFO can be pulled. Same-edge pushes
+        // become available next cycle, just as with the original serve register.
+        assign pull_count =
+            ($unsigned(int'(fifo_occipied_slots)) < (SERVE_WORDS - $unsigned(int'(keep_count))))
+            ? SERVE_COUNT_W'(fifo_occipied_slots)
+            : SERVE_COUNT_W'(SERVE_WORDS - $unsigned(int'(keep_count)));
+
+        for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : window_lanes
+            logic [77:0] retained;
+            // Generate-time bounds keep every elaborated source index valid.
+            if (lane + consumed < SERVE_WORDS) begin : retained_source
+                assign retained = retained_candidate[lane + consumed];
+            end else begin : no_retained_source
+                assign retained = {1'b0, 3'bxxx, 32'hxxxxxxxx, 32'hxxxxxxxx, 10'bx};
             end
-            for (int unsigned fifo_lane = 0; fifo_lane <= lane; fifo_lane++) begin
-                selected |= {68{(serve_keep_count == SERVE_COUNT_W'(lane - fifo_lane)) &&
-                    ($unsigned(int'(fifo_occipied_slots)) > fifo_lane)}}
-                    & fifo_candidate[fifo_lane];
+            always_comb begin
+                next_window[lane] = {1'b0, 3'b000, 32'hxxxxxxxx, 32'b0, 10'bx};
+                if (lane < int'(keep_count)) begin
+                    // Legal windows have a contiguous prefix of valid entries.
+                    next_window[lane] = retained;
+                end else begin
+                    for (int unsigned source = 0; source <= lane; source++) begin
+                        if (keep_count == SERVE_COUNT_W'(lane - source) &&
+                            fifo_occipied_slots > (FIFO_INDEX_W+1)'(source))
+                            next_window[lane] = fifo_candidate[source];
+                    end
+                end
             end
-            {serve_valid_next[lane], serve_c_next[lane], serve_taken_next[lane],
-                serve_branch_next[lane], serve_data_next[lane], serve_pc_next[lane]} = selected;
-            // Marks Invalid Serve Data With the Debug Sentinel
-            if (!selected[67])
-                serve_data_next[lane] = 'x;
+        end
+
+        always_ff @(posedge clk) begin
+            if (reset || reset_reg || redirect_taken) begin
+                head_bank[consumed] <= '0;
+                occupied_bank[consumed] <= '0;
+                free_bank[consumed] <= (FIFO_INDEX_W+1)'(FIFO_WORDS);
+                for (int unsigned lane = 0; lane < SERVE_WORDS; lane++)
+                    serve_bank[consumed][lane] <= {1'b0, 3'bxxx, 32'hxxxxxxxx, 32'hxxxxxxxx, 10'bx};
+            end else begin
+                head_bank[consumed] <= fifo_head + (FIFO_INDEX_W+1)'(pull_count);
+                occupied_bank[consumed] <= fifo_occipied_slots + push_count -
+                    (FIFO_INDEX_W+1)'(pull_count);
+                free_bank[consumed] <= admission_free + (FIFO_INDEX_W+1)'(pull_count);
+                for (int unsigned lane = 0; lane < SERVE_WORDS; lane++)
+                    serve_bank[consumed][lane] <= next_window[lane];
+            end
         end
     end
 
-    // Registers Serve Outputs for Decode and Clears Them on External Redirect
+    // Late consumption only clocks the selector. Tail and admission do not
+    // depend on this cycle's pulls; admission deliberately gives no pop credit.
     always_ff @(posedge clk) begin
         if (reset || reset_reg || redirect_taken) begin
-            for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
-                serve_data_reg[i] <= 'x;
-                serve_pc_reg[i] <= 'x;
-                serve_valid_reg[i] <= 1'b0;
-                serve_c_reg[i] <= 'x;
-                serve_taken_reg[i] <= 'x;
-                serve_branch_reg[i] <= 'x;
-            end
-        end else begin
-            for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
-                serve_data_reg[i] <= serve_data_next[i];
-                serve_pc_reg[i] <= serve_pc_next[i];
-                serve_valid_reg[i] <= serve_valid_next[i];
-                serve_c_reg[i] <= serve_c_next[i];
-                serve_taken_reg[i] <= serve_taken_next[i];
-                serve_branch_reg[i] <= serve_branch_next[i];
-            end
-        end
-    end
-
-    // Updates FIFO Pointers, Occupancy, and Registered Admission State
-    always_ff @(posedge clk) begin
-        if (reset || reset_reg || redirect_taken) begin
-            fifo_occipied_slots <= '0;
-            fifo_free_slots <= (FIFO_INDEX_W+1)'(FIFO_WORDS);
+            prev_serve_consumed <= '0;
             fifo_tail <= '0;
-            fifo_head <= '0;
-            fifo_full <= 1'b0;
-            fifo_empty <= 1'b1;
             fifo_packet_room <= 1'b1;
         end else begin
-            logic [FIFO_INDEX_W:0] occupied_next;
-            logic [FIFO_INDEX_W:0] free_next;
-            logic [FIFO_INDEX_W:0] admission_free;
-            // Reserves Current Pushes Without Crediting Current Pops for Admission
-            admission_free = fifo_free_slots -
-                (packet_commit ? (FIFO_INDEX_W+1)'(packet_push_count) : '0);
-            occupied_next = fifo_occipied_slots +
-                (packet_commit ? (FIFO_INDEX_W+1)'(packet_push_count) : '0) -
-                (FIFO_INDEX_W+1)'(fifo_pull_count);
-            // Updates Free Space Independently of the Occupancy Arithmetic
-            free_next = admission_free + (FIFO_INDEX_W+1)'(fifo_pull_count);
-            fifo_occipied_slots <= occupied_next;
-            fifo_free_slots <= free_next;
-            fifo_tail <= fifo_tail +
-                (packet_commit ? (FIFO_INDEX_W+1)'(packet_push_count) : '0);
-            fifo_head <= fifo_head + (FIFO_INDEX_W+1)'(fifo_pull_count);
-            fifo_full <= free_next == '0;
-            fifo_empty <= occupied_next == '0;
-            // Predicts Fit for the Replacement or Held Packet Without Late Pops
-            // Newly Freed Space May Require an Extra Admission Cycle
-            // A Committed Taken Branch Clears the Prediction Stage
+            prev_serve_consumed <= serve_consumed;
+            fifo_tail <= fifo_tail + push_count;
             if (packet_commit && packet_taken) begin
                 fifo_packet_room <= 1'b1;
-            end else begin 
+            end else begin
                 fifo_packet_room <= admission_free >= (stage_transfer ?
                     (FIFO_INDEX_W+1)'(stage_push_count) :
                     (FIFO_INDEX_W+1)'(packet_push_count));

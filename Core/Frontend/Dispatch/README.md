@@ -15,9 +15,11 @@ as part of redirect handling. `DecoderPacket_.bru.predicted_taken` preserves the
 Fetch prediction alongside the decoded instruction and PC.
 
 Issue must never consume more packets than Decode holds; its count is used
-directly without a hardware clamp. Decode registers the count of Fetch's
-`incoming_serve_valid` alongside Fetch's new serve data, and maintains a
-registered empty-slot count from actual pops and accepted inputs. Both counts
+directly without a hardware clamp. Fetch registers a candidate serve window and
+FIFO head/occupancy for every possible consumption count, alongside the actual
+consumption selector. Decode counts validity from the selected window directly,
+keeping it aligned with the selected payload without another cycle of latency.
+Decode maintains a registered empty-slot count from actual pops and accepted inputs. Both counts
 use `$clog2(ISSUE_WIDTH+1)` bits. Reset is held through the following registered reset cycle; redirects clear
 the queue on the redirect edge. Parallel fixed-source selection retains and appends packets in order at all widths. No register is added to the
 Issue pop signal.

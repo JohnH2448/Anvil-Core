@@ -15,12 +15,13 @@ module DispatchTop
 
     // FetchTop serve interface
     input logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0],
+    input logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0],
+    input logic [4:0] serve_rs2 [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
-    input logic incoming_serve_valid [ISSUE_WIDTH-1:0],
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed,
 
     // Issuer outputs to the backend
@@ -77,12 +78,13 @@ module DispatchTop
         .reset(reset),
         .redirect_taken(redirect_taken),
         .serve_data_reg(serve_data_reg),
+        .serve_rs1(serve_rs1),
+        .serve_rs2(serve_rs2),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
-        .incoming_serve_valid(incoming_serve_valid),
         .packets_out(packets_out),
         .lane_types_out(lane_types_out),
         .packets_valid(packets_valid),

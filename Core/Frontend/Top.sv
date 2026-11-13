@@ -24,12 +24,13 @@ module FrontendTop
 );
 
     logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0];
+    logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0];
+    logic [4:0] serve_rs2 [ISSUE_WIDTH-1:0];
     logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0];
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
     logic serve_c_reg [ISSUE_WIDTH-1:0];
     logic serve_taken_reg [ISSUE_WIDTH-1:0];
     logic serve_branch_reg [ISSUE_WIDTH-1:0];
-    logic incoming_serve_valid [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed;
 
     FetchTop #(
@@ -45,12 +46,13 @@ module FrontendTop
         .redirect_pc(redirect_pc),
         .redirect_taken(redirect_taken),
         .serve_data_reg(serve_data_reg),
+        .serve_rs1(serve_rs1),
+        .serve_rs2(serve_rs2),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
-        .incoming_serve_valid(incoming_serve_valid),
         .serve_consumed(serve_consumed)
     );
 
@@ -65,12 +67,13 @@ module FrontendTop
         .stall(stall),
         .serial_active(serial_active),
         .serve_data_reg(serve_data_reg),
+        .serve_rs1(serve_rs1),
+        .serve_rs2(serve_rs2),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
-        .incoming_serve_valid(incoming_serve_valid),
         .serve_consumed(serve_consumed),
         .decoder_packet(decoder_packet),
         .issuer_packet(issuer_packet),
