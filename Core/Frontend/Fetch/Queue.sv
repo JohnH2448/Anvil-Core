@@ -470,7 +470,7 @@ module Queue
                 serve_branch_next[lane], serve_data_next[lane], serve_pc_next[lane]} = selected;
             // Marks Invalid Serve Data With the Debug Sentinel
             if (!selected[67])
-                serve_data_next[lane] = 32'hdeadbeef;
+                serve_data_next[lane] = 'x;
         end
     end
 
@@ -544,3 +544,5 @@ endmodule
 // being used
 
 // definitely consider removing a staging register if timing can't get 250+
+
+// Wire redirects direct onto address bus when possible.

@@ -48,10 +48,10 @@ its allocation edge. `Definitions::producer_countdown` supplies the same initial
 countdown to decode and the table, including the physical-stage clamp for MUL/DIV.
 Issue consumes this registered metadata directly; there is no recent-write buffer.
 
-Stall does not suppress readiness, lane allocation, or packet mux selection.
-`accept_vector` and the producer-write candidates can remain asserted while
-stalled. Backend input payload/valid registers and producer-table state advance
-only when stall is low; `issue_consumed` is independently forced to zero.
+`IssueContract` has no stall or redirect inputs. Readiness and normal lane
+allocation are independent of both controls. Issuer directly forces the final
+`accept_vector` and `issue_consumed` to zero on stall or redirect. Backend
+input registers and producer-table state also retain their local stall enables.
 Decode can still refill empty FIFO slots, using unadvanced producer snapshots.
 
 The current issuer supports widths one and two. Its readiness prefix and lane

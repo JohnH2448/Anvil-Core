@@ -25,7 +25,7 @@ module Issuer
     // Packets To Backend
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
-    output logic accept_vector [TOTAL_LANE_COUNT-1:0], // Lane selection; backend latches only when !stall.
+    output logic accept_vector [TOTAL_LANE_COUNT-1:0], // Forced low directly on stall/redirect.
 
     // Latched Producer Table Data from Decode
     input logic [UNROLLED_W-1:0] rs1_index_in [ISSUE_WIDTH-1:0],
@@ -78,8 +78,6 @@ module Issuer
         .SUPPORT_FLOAT(Parameters::SUPPORT_FLOAT),
         .SUPPORT_ATOMIC(Parameters::SUPPORT_ATOMIC)
     ) issue_contract (
-        .redirect_taken(1'b0), // Normal readiness is independent of flush; gate outputs below.
-        .stall(1'b0), // Let readiness and allocation settle independently of stall.
         .packets(packets_out),
         .lane_types(lane_types_out),
         .packets_valid(packets_valid),
@@ -187,15 +185,15 @@ module Issuer
                 stop_issue = 1'b1;
             end
         end
-        // Redirect suppresses acceptance directly, after normal lane selection.
-        if (redirect_taken) accept_vector = '{default: 1'b0};
+        // Stall/redirect suppress acceptance directly, after normal lane selection.
+        if (stall || redirect_taken) accept_vector = '{default: 1'b0};
     end
     for (genvar i = 0; i < TOTAL_LANE_COUNT; i++) begin : gen_lane_mux
         assign decoder_packet[i] = accept_vector[i] ? packets_out[index_array[i]] : 'x;
         assign issuer_packet[i] = accept_vector[i] ? issuer_packet_internal[index_array[i]] : 'x;
     end
 
-    // Describe each selected instruction's producer, even while stalled.
+    // Describe each accepted instruction's producer.
     // ProducerTable and decode qualify state updates locally with !stall.
     always_comb begin
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin

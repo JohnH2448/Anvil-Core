@@ -130,7 +130,7 @@ module DecodeStage
 
     // Normal FIFO counts are independent of flush. Only the outward-facing
     // consumption and registered validity are forced low on redirect.
-    localparam int unsigned COUNT_W = $clog2(ISSUE_WIDTH + 1);
+    localparam int unsigned COUNT_W = $unsigned($clog2(ISSUE_WIDTH + 1));
     logic [COUNT_W-1:0] empty_slots;
     logic [COUNT_W-1:0] available_slots;
     logic [COUNT_W-1:0] serve_consumed_normal;
@@ -165,10 +165,12 @@ module DecodeStage
 
     // Update each fixed source slot before the late FIFO-selection signal.
     // A new write wins over aging; later accepted writers win over earlier ones.
+    // Prepare metadata even for unused operands; issue ignores it when rs*_valid
+    // is low. Full instruction legality must not gate producer-write matching.
     function automatic SourceProducer_ refresh_source(
         input SourceProducer_ current,
         input logic [4:0] source_register,
-        input logic source_used,
+        input logic source_is_integer,
         input int older_slots
     );
         SourceProducer_ updated;
@@ -177,7 +179,7 @@ module DecodeStage
         if (current.countdown != 0) updated.countdown = current.countdown - 1'b1;
         for (int j = 0; j < ISSUE_WIDTH; j++) begin
             if (j < older_slots && op_accept[j] && op_wb[j] && op_rd[j] != 0 &&
-                source_used && op_rd[j] == source_register) begin
+                source_is_integer && op_rd[j] == source_register) begin
                 updated.index = '0;
                 updated.countdown = write_countdown[j];
                 updated.lane = op_lane[j];
@@ -204,19 +206,19 @@ module DecodeStage
         always_comb begin
             retained_producers[source_slot].rs1 = refresh_source(old_1,
                 packets_out[source_slot].common.rs1,
-                packets_out[source_slot].common.rs1_valid && !packets_out[source_slot].common.rs1_float,
+                !packets_out[source_slot].common.rs1_float,
                 source_slot);
             retained_producers[source_slot].rs2 = refresh_source(old_2,
                 packets_out[source_slot].common.rs2,
-                packets_out[source_slot].common.rs2_valid && !packets_out[source_slot].common.rs2_float,
+                !packets_out[source_slot].common.rs2_float,
                 source_slot);
             refill_producers[source_slot].rs1 = refresh_source(fresh_1,
                 packets[source_slot].common.rs1,
-                packets[source_slot].common.rs1_valid && !packets[source_slot].common.rs1_float,
+                !packets[source_slot].common.rs1_float,
                 ISSUE_WIDTH);
             refill_producers[source_slot].rs2 = refresh_source(fresh_2,
                 packets[source_slot].common.rs2,
-                packets[source_slot].common.rs2_valid && !packets[source_slot].common.rs2_float,
+                !packets[source_slot].common.rs2_float,
                 ISSUE_WIDTH);
         end
     end

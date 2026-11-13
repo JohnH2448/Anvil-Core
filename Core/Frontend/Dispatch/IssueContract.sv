@@ -14,8 +14,6 @@ module IssueContract
     parameter unsigned SUPPORT_ATOMIC = Parameters::SUPPORT_ATOMIC
 )(
     // Input Metadata
-    input logic redirect_taken,
-    input logic stall,
     input DecoderPacket_ packets [ISSUE_WIDTH-1:0],
     input LaneType_ lane_types [ISSUE_WIDTH-1:0],
     input logic packets_valid [ISSUE_WIDTH-1:0],
@@ -37,8 +35,6 @@ module IssueContract
 
     // Combined + Masked Authoritative Goods
     logic issue_good_internal [ISSUE_WIDTH-1:0];
-    logic bad_redirect;
-    assign bad_redirect = redirect_taken;
 
     // Cause Specific Per Index
     logic bad_bypass [ISSUE_WIDTH-1:0];
@@ -227,7 +223,7 @@ module IssueContract
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
             issue_good_internal[i] = !(bad_bypass[i] || bad_raw[i] ||
                 bad_valid[i] || bad_execution_unit[i] || bad_operand[i] ||
-                bad_serial[i] || serial_active || bad_redirect || stall);
+                bad_serial[i] || serial_active);
         end
     end 
 
