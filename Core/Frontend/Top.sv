@@ -26,6 +26,12 @@ module FrontendTop
     logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0];
     logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0];
     logic [4:0] serve_rs2 [ISSUE_WIDTH-1:0];
+    logic [4:0] serve_rd [ISSUE_WIDTH-1:0];
+    logic [4:0] serve_rs3 [ISSUE_WIDTH-1:0];
+    logic serve_rs1_float [ISSUE_WIDTH-1:0];
+    logic serve_rs2_float [ISSUE_WIDTH-1:0];
+    logic serve_rs3_float [ISSUE_WIDTH-1:0];
+    logic serve_rd_float [ISSUE_WIDTH-1:0];
     logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0];
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
     logic serve_c_reg [ISSUE_WIDTH-1:0];
@@ -48,6 +54,12 @@ module FrontendTop
         .serve_data_reg(serve_data_reg),
         .serve_rs1(serve_rs1),
         .serve_rs2(serve_rs2),
+        .serve_rd(serve_rd),
+        .serve_rs3(serve_rs3),
+        .serve_rs1_float(serve_rs1_float),
+        .serve_rs2_float(serve_rs2_float),
+        .serve_rs3_float(serve_rs3_float),
+        .serve_rd_float(serve_rd_float),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
@@ -69,6 +81,12 @@ module FrontendTop
         .serve_data_reg(serve_data_reg),
         .serve_rs1(serve_rs1),
         .serve_rs2(serve_rs2),
+        .serve_rd(serve_rd),
+        .serve_rs3(serve_rs3),
+        .serve_rs1_float(serve_rs1_float),
+        .serve_rs2_float(serve_rs2_float),
+        .serve_rs3_float(serve_rs3_float),
+        .serve_rd_float(serve_rd_float),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),

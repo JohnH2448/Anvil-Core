@@ -21,6 +21,12 @@ module DecodeStage
     input logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0],
     input logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0],
     input logic [4:0] serve_rs2 [ISSUE_WIDTH-1:0],
+    input logic [4:0] serve_rd [ISSUE_WIDTH-1:0],
+    input logic [4:0] serve_rs3 [ISSUE_WIDTH-1:0],
+    input logic serve_rs1_float [ISSUE_WIDTH-1:0],
+    input logic serve_rs2_float [ISSUE_WIDTH-1:0],
+    input logic serve_rs3_float [ISSUE_WIDTH-1:0],
+    input logic serve_rd_float [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
@@ -88,6 +94,14 @@ module DecodeStage
             .SUPPORT_ATOMIC(SUPPORT_ATOMIC)
         ) decoder (
             .instruction(serve_data_reg[i]),
+            .rs1_in(serve_rs1[i]),
+            .rs2_in(serve_rs2[i]),
+            .rd_in(serve_rd[i]),
+            .rs3_in(serve_rs3[i]),
+            .rs1_float_in(serve_rs1_float[i]),
+            .rs2_float_in(serve_rs2_float[i]),
+            .rs3_float_in(serve_rs3_float[i]),
+            .rd_float_in(serve_rd_float[i]),
             .pc(serve_pc_reg[i]),
             .is_branch(serve_branch_reg[i]),
             .is_compressed(serve_c_reg[i]),
@@ -195,11 +209,11 @@ module DecodeStage
                 source_slot);
             refill_producers[source_slot].rs1 = refresh_source(fresh_1,
                 serve_rs1[source_slot],
-                !packets[source_slot].common.rs1_float,
+                !serve_rs1_float[source_slot],
                 ISSUE_WIDTH);
             refill_producers[source_slot].rs2 = refresh_source(fresh_2,
                 serve_rs2[source_slot],
-                !packets[source_slot].common.rs2_float,
+                !serve_rs2_float[source_slot],
                 ISSUE_WIDTH);
         end
     end

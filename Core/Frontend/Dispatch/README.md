@@ -1,5 +1,7 @@
 # Decoder
 
+See [frontend architecture and timing history](../ARCHITECTURE_HISTORY.md) for the original boundaries and the reasons for stage changes.
+
 ## Decode queue
 
 `Decode.sv` defines `DecodeStage`, an ISSUE_WIDTH-entry queue of decoded
@@ -26,8 +28,9 @@ Issue pop signal.
 
 ### Producer metadata
 
-`RegisterSlice` extracts rs1/rs2 directly from the Fetch instruction, including
-compressed mappings. These addresses read `ProducerTable` during decode.
+`RegisterSlice` extracts rs1/rs2 in Fetch alongside prediction, after instruction
+reconstruction. Those addresses travel with the instruction through the FIFO
+and speculative serve banks and directly address `ProducerTable` in decode.
 Each decoded packet carries parallel registered source index, countdown, lane,
 and capability arrays into issue. Those arrays follow the same FIFO retain/refill
 selection as the packet, including an upper entry shifting into slot zero.
@@ -41,14 +44,13 @@ Normal FIFO candidates are calculated independently of redirect. Fixed-source
 producer updates precede parallel retain/refill selection; only validity and
 outward-facing consumption require defined flush values.
 
-Accepted integer writes from issue feed both the table and decode. Matching
-older writes replace a packet's source metadata with index zero, the initial
-countdown, lane, and capability. Later issue slots win multiple matching writes.
-Fresh refills can match any accepted write; retained packets only match writers
-older than their original FIFO position. A new allocation is not advanced on
-its allocation edge. `Definitions::producer_countdown` supplies the same initial
-countdown to decode and the table, including the physical-stage clamp for MUL/DIV.
-Issue consumes this registered metadata directly; there is no recent-write buffer.
+Accepted integer writes feed both the producer table and decode refresh.
+Matching older writers override retained source metadata; fresh refills consider
+all accepted writers. Later slots win. New writes start at index zero with the
+shared producer_countdown result, without aging on their allocation edge.
+Issue consumes these corrected snapshots directly; there is no history buffer.
+Allocation produces per-slot write acceptance and lane directly, alongside the
+per-lane backend acceptance outputs.
 
 `IssueContract` has no stall or redirect inputs. Readiness and normal lane
 allocation are independent of both controls. Issuer directly forces the final
@@ -58,7 +60,7 @@ Decode can still refill empty FIFO slots, using unadvanced producer snapshots.
 
 The current issuer supports widths one and two. Its readiness prefix and lane
 allocator must agree on the consumed count. Same-group RAW dependencies prevent
-a consumer from issuing alongside its producer; the write refresh supplies the
+a consumer from issuing alongside its producer; the decode write refresh supplies the
 new producer when that consumer is retained.
 
 This remains an integer producer table. Floating-register writes do not update
@@ -68,7 +70,7 @@ holds on redirect and needs a backend recovery protocol before full-core use.
 
 `DecoderSlice.sv` accepts one raw RV32 instruction and emits a purely combinational
 `Definitions::DecoderPacket_` plus a separate `LaneType_` routing tag. Its inputs
-are `instruction`, `pc`, `is_branch`, `predicted_taken`, and `is_compressed`; it
+are `instruction`, predecoded `rs1_in`/`rs2_in`, `pc`, `is_branch`, `predicted_taken`, and `is_compressed`; it
 has no clock or internal registers. With `is_compressed`
 set, the low 16 instruction bits are decoded as RV32C. `is_branch` is fetch
 metadata, not a condition for recognizing branches. Dispatch owns validity and
@@ -306,3 +308,14 @@ redirect checks do not validate restoration of killed backend producers.
 
 Encoding references: [RISC-V ISA manuals](https://docs.riscv.org/reference/isa/)
 and the [C extension specification](https://docs.riscv.org/reference/isa/v20260120/unpriv/c-st-ext.html).
+
+DecoderSlice uses the carried source addresses for packet register fields. Raw
+instruction fields remain local inputs to zero-register validity checks, CSR
+controls/immediates, and FP/atomic legality checks; unused predecoded operands
+may be unspecified and must not replace those encoding fields.
+
+Register predecode now carries rs1, rs2, rs3, rd and their integer/floating bank
+flags from reconstructed Fetch packets through prediction/FIFO/serve candidates.
+DecoderSlice receives all identities and bank flags directly. Fresh producer
+refresh uses carried source-bank flags; full decode still owns legality and
+operand-valid controls. Extension support parameters gate predecode cases.

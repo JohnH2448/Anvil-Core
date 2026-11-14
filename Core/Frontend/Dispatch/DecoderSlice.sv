@@ -10,6 +10,14 @@ module DecoderSlice
 
     // Working Input Data
     input logic [31:0] instruction,
+    input logic [4:0] rs1_in,
+    input logic [4:0] rs2_in,
+    input logic [4:0] rd_in,
+    input logic [4:0] rs3_in,
+    input logic rs1_float_in,
+    input logic rs2_float_in,
+    input logic rs3_float_in,
+    input logic rd_float_in,
     input logic [31:0] pc,
     input logic is_branch,
     input logic is_compressed,
@@ -193,6 +201,8 @@ module DecoderSlice
         opcode = decode_instruction[6:0];
         funct3 = decode_instruction[14:12];
         funct7 = decode_instruction[31:25];
+        // Raw fields also encode CSR immediates and FP/atomic legality.
+        // Keep these independent of predecoded unused-source don't-cares.
         rs1 = decode_instruction[19:15];
         rs2 = decode_instruction[24:20];
         rd = decode_instruction[11:7];
@@ -256,10 +266,10 @@ module DecoderSlice
         decode_packet.bru.is_compressed = is_compressed;
         decode_packet.bru.predicted_taken = predicted_taken;
         decode_packet.csr.index = ROZ_R;
-        decode_packet.common.rs1 = rs1;
-        decode_packet.common.rs2 = rs2;
-        decode_packet.fp.rs3 = decode_instruction[31:27];
-        decode_packet.common.rd = rd;
+        decode_packet.common.rs1 = rs1_in;
+        decode_packet.common.rs2 = rs2_in;
+        decode_packet.fp.rs3 = rs3_in;
+        decode_packet.common.rd = rd_in;
         uses_rounding = 1'b0;
 
         case (opcode)
@@ -717,11 +727,11 @@ module DecoderSlice
         packet_compressed.bru.is_compressed = is_compressed;
         packet_compressed.bru.predicted_taken = predicted_taken;
         packet_compressed.csr.index = ROZ_R;
-        // Expansion Is Used Only For Architectural Register Numbers
-        packet_compressed.common.rs1 = expanded_instruction[19:15];
-        packet_compressed.common.rs2 = expanded_instruction[24:20];
-        packet_compressed.fp.rs3 = expanded_instruction[31:27];
-        packet_compressed.common.rd = expanded_instruction[11:7];
+        // Source addresses arrive from Fetch; expansion still supplies rd/rs3.
+        packet_compressed.common.rs1 = rs1_in;
+        packet_compressed.common.rs2 = rs2_in;
+        packet_compressed.fp.rs3 = rs3_in;
+        packet_compressed.common.rd = rd_in;
         packet_compressed.alu.source = ALU_RS1_IMM;
 
         case (c[1:0])
@@ -980,6 +990,10 @@ module DecoderSlice
     always_comb begin
         packet_full = decode_packet(instruction, 1'b0, lane_type_full);
         packet = is_compressed ? packet_compressed : packet_full;
+        packet.common.rs1_float = rs1_float_in;
+        packet.common.rs2_float = rs2_float_in;
+        packet.common.rd_float = rd_float_in;
+        packet.fp.rs3_float = rs3_float_in;
         // Shared fall-through address for link results and branch recovery.
         packet.common.next_pc = pc + (is_compressed ? 32'd2 : 32'd4);
         packet = relevant_fields(packet);

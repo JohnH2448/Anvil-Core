@@ -125,6 +125,8 @@ module Issuer
         stop_issue = reset;
         index_array = '{default: 'x};
         accept_vector = '{default: 1'b0};
+        op_accept = '{default: 1'b0};
+        op_lane = '{default: 'x};
 
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
             compatible[slot] = '0;
@@ -178,6 +180,8 @@ module Issuer
             if (!stop_issue && issue_good[slot] && selected_lane != -1) begin
                 index_array[selected_lane] = AGE_WIDTH'(slot);
                 accept_vector[selected_lane] = 1'b1;
+                op_accept[slot] = 1'b1;
+                op_lane[slot] = LANE_WIDTH'(selected_lane);
                 used_lanes[selected_lane] = 1'b1;
                 if (packets_out[slot].common.capability inside {CAP_SYSTEM, CAP_CSR})
                     stop_issue = 1'b1;
@@ -186,7 +190,10 @@ module Issuer
             end
         end
         // Stall/redirect suppress acceptance directly, after normal lane selection.
-        if (stall || redirect_taken) accept_vector = '{default: 1'b0};
+        if (stall || redirect_taken) begin
+            accept_vector = '{default: 1'b0};
+            op_accept = '{default: 1'b0};
+        end
     end
     for (genvar i = 0; i < TOTAL_LANE_COUNT; i++) begin : gen_lane_mux
         assign decoder_packet[i] = accept_vector[i] ? packets_out[index_array[i]] : 'x;
@@ -198,19 +205,12 @@ module Issuer
     always_comb begin
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
             op_rd[slot] = packets_out[slot].common.rd;
-            op_lane[slot] = '0;
-            op_accept[slot] = 1'b0;
             op_age[slot] = AGE_WIDTH'(slot);
             op_type[slot] = packets_out[slot].common.capability;
             // This table tracks integer registers; FP writes must not alias x registers.
             op_wb[slot] = packets_out[slot].common.rd_valid && !packets_out[slot].common.rd_float;
         end
-        for (int unsigned lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
-            if (accept_vector[lane]) begin
-                op_lane[index_array[lane]] = LANE_WIDTH'(lane);
-                op_accept[index_array[lane]] = 1'b1;
-            end
-        end
+
     end
 
 

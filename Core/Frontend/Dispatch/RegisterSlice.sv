@@ -7,19 +7,25 @@ module RegisterSlice #(
     input logic [31:0] instruction,
     input logic is_compressed,
     output logic [4:0] rs1,
-    output logic [4:0] rs2
+    output logic [4:0] rs2,
+    output logic [4:0] rd,
+    output logic [4:0] rs3,
+    output logic rs1_float,
+    output logic rs2_float,
+    output logic rs3_float,
+    output logic rd_float
 );
 
     logic [15:0] c;
     assign c = instruction[15:0];
 
-    // Source numbers only: unused sources are zero. Floating sources retain
-    // their architectural register number; register-bank selection is external.
+    // Source numbers only: unused sources are unspecified. Floating sources retain
+    // their architectural register number; bank flags are predecoded below.
     // This is not an encoding-legality decoder. Illegal encodings may produce
     // source numbers, but disabled instruction classes require no sources.
     always_comb begin
-        rs1 = '0;
-        rs2 = '0;
+        rs1 = 'x;
+        rs2 = 'x;
         if (is_compressed) begin
             case (c[1:0])
                 2'b00: begin
@@ -100,7 +106,7 @@ module RegisterSlice #(
                     if (instruction[31:27] != 5'b00010) rs2 = instruction[24:20]; // Not LR
                 end
                 7'b1000011, 7'b1000111, 7'b1001011, 7'b1001111:
-                    if (SUPPORT_FLOAT) begin // Fused FP; rs3 is outside this interface
+                    if (SUPPORT_FLOAT) begin // Fused FP
                         rs1 = instruction[19:15];
                         rs2 = instruction[24:20];
                     end
@@ -119,6 +125,90 @@ module RegisterSlice #(
                     endcase
                 end
                 default: ; // No source in the remaining encodings.
+            endcase
+        end
+    end
+
+
+    // Register identities and banks only; full decode retains legality/validity.
+    always_comb begin
+        rd = 'x;
+        rs3 = 'x;
+        rs1_float = 1'b0;
+        rs2_float = 1'b0;
+        rs3_float = 1'b0;
+        rd_float = 1'b0;
+        if (is_compressed) begin
+            case (c[1:0])
+                2'b00: begin
+                    case (c[15:13])
+                        3'b000, 3'b010: rd = {2'b01, c[4:2]};
+                        3'b011: if (SUPPORT_FLOAT) begin
+                            rd = {2'b01, c[4:2]};
+                            rd_float = 1'b1;
+                        end
+                        3'b111: if (SUPPORT_FLOAT) rs2_float = 1'b1;
+                        default: ;
+                    endcase
+                end
+                2'b01: begin
+                    case (c[15:13])
+                        3'b000, 3'b010, 3'b011: rd = c[11:7];
+                        3'b001: rd = 5'd1;
+                        3'b100: rd = {2'b01, c[9:7]};
+                        default: ;
+                    endcase
+                end
+                2'b10: begin
+                    case (c[15:13])
+                        3'b000, 3'b010: rd = c[11:7];
+                        3'b011: if (SUPPORT_FLOAT) begin
+                            rd = c[11:7];
+                            rd_float = 1'b1;
+                        end
+                        3'b100: rd = c[6:2] != 0 ? c[11:7] : (c[12] ? 5'd1 : 5'd0);
+                        3'b111: if (SUPPORT_FLOAT) rs2_float = 1'b1;
+                        default: ;
+                    endcase
+                end
+                default: ;
+            endcase
+        end else begin
+            case (instruction[6:0])
+                7'b0110011: begin
+                    if (instruction[31:25] != 7'b0000001 ||
+                        (!instruction[14] && SUPPORT_MUL) ||
+                        (instruction[14] && SUPPORT_DIV)) rd = instruction[11:7];
+                end
+                7'b0010011, 7'b0000011, 7'b1100111, 7'b1101111,
+                7'b0110111, 7'b0010111, 7'b1110011: rd = instruction[11:7];
+                7'b0101111: if (SUPPORT_ATOMIC) rd = instruction[11:7];
+                7'b0000111: if (SUPPORT_FLOAT) begin
+                    rd = instruction[11:7];
+                    rd_float = 1'b1;
+                end
+                7'b0100111: if (SUPPORT_FLOAT) rs2_float = 1'b1;
+                7'b1000011, 7'b1000111, 7'b1001011, 7'b1001111:
+                    if (SUPPORT_FLOAT) begin
+                        rd = instruction[11:7];
+                        rs3 = instruction[31:27];
+                        rs1_float = 1'b1;
+                        rs2_float = 1'b1;
+                        rs3_float = 1'b1;
+                        rd_float = 1'b1;
+                    end
+                7'b1010011: if (SUPPORT_FLOAT) begin
+                    rd = instruction[11:7];
+                    rs1_float = 1'b1;
+                    rs2_float = 1'b1;
+                    rd_float = 1'b1;
+                    case (instruction[31:27])
+                        5'b10100, 5'b11000, 5'b11100: rd_float = 1'b0;
+                        5'b11010, 5'b11110: rs1_float = 1'b0;
+                        default: ;
+                    endcase
+                end
+                default: ;
             endcase
         end
     end
