@@ -46,8 +46,6 @@ module DispatchTop
     logic [4:0] rs2 [ISSUE_WIDTH-1:0];
     logic [UNROLLED_W-1:0] rs1_index [ISSUE_WIDTH-1:0];
     logic [UNROLLED_W-1:0] rs2_index [ISSUE_WIDTH-1:0];
-    logic [UNROLLED_W-1:0] rs1_countdown [ISSUE_WIDTH-1:0];
-    logic [UNROLLED_W-1:0] rs2_countdown [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] rs1_lane [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] rs2_lane [ISSUE_WIDTH-1:0];
     DecodeCapability_ rs1_capability [ISSUE_WIDTH-1:0];
@@ -56,14 +54,12 @@ module DispatchTop
     // Registered producer lookups from decode to issue
     logic [UNROLLED_W-1:0] rs1_index_out [ISSUE_WIDTH-1:0];
     logic [UNROLLED_W-1:0] rs2_index_out [ISSUE_WIDTH-1:0];
-    logic [UNROLLED_W-1:0] rs1_countdown_out [ISSUE_WIDTH-1:0];
-    logic [UNROLLED_W-1:0] rs2_countdown_out [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] rs1_lane_out [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] rs2_lane_out [ISSUE_WIDTH-1:0];
     DecodeCapability_ rs1_capability_out [ISSUE_WIDTH-1:0];
     DecodeCapability_ rs2_capability_out [ISSUE_WIDTH-1:0];
 
-    // ProducerTable updates from accepted issue slots
+    // Registered issue write buffer, shared by table commit and decode absorption
     logic [4:0] op_rd [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0];
     logic op_write [ISSUE_WIDTH-1:0];
@@ -109,16 +105,12 @@ module DispatchTop
         .rs2(rs2),
         .rs1_index(rs1_index),
         .rs2_index(rs2_index),
-        .rs1_countdown(rs1_countdown),
-        .rs2_countdown(rs2_countdown),
         .rs1_lane(rs1_lane),
         .rs2_lane(rs2_lane),
         .rs1_capability(rs1_capability),
         .rs2_capability(rs2_capability),
         .rs1_index_out(rs1_index_out),
         .rs2_index_out(rs2_index_out),
-        .rs1_countdown_out(rs1_countdown_out),
-        .rs2_countdown_out(rs2_countdown_out),
         .rs1_lane_out(rs1_lane_out),
         .rs2_lane_out(rs2_lane_out),
         .rs1_capability_out(rs1_capability_out),
@@ -144,8 +136,6 @@ module DispatchTop
         .accept_vector(accept_vector),
         .rs1_index_in(rs1_index_out),
         .rs2_index_in(rs2_index_out),
-        .rs1_countdown_in(rs1_countdown_out),
-        .rs2_countdown_in(rs2_countdown_out),
         .rs1_lane_in(rs1_lane_out),
         .rs2_lane_in(rs2_lane_out),
         .rs1_capability_in(rs1_capability_out),
@@ -169,8 +159,6 @@ module DispatchTop
         .rs2(rs2),
         .rs1_index(rs1_index),
         .rs2_index(rs2_index),
-        .rs1_countdown(rs1_countdown),
-        .rs2_countdown(rs2_countdown),
         .rs1_lane(rs1_lane),
         .rs2_lane(rs2_lane),
         .rs1_capability(rs1_capability),

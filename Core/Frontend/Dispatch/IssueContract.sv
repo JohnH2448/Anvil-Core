@@ -4,6 +4,8 @@ module IssueContract
     import Definitions::*;
 #(
     parameter unsigned ISSUE_WIDTH = 2,
+    parameter unsigned EXECUTION_UNROLL = Parameters::EXECUTION_UNROLL,
+    parameter unsigned DIVIDER_AUTO_PIPE = Parameters::DIVIDER_AUTO_PIPE,
     parameter unsigned BYPASS_ENABLED = 1,
     parameter unsigned INTEGER_LANE_COUNT = 2,
     parameter unsigned MEMORY_LANE_COUNT = 1,
@@ -22,8 +24,6 @@ module IssueContract
     // Producer Table Recipient Data
     input logic [UNROLLED_W-1:0] rs1_index [ISSUE_WIDTH-1:0],
     input logic [UNROLLED_W-1:0] rs2_index [ISSUE_WIDTH-1:0],
-    input logic [UNROLLED_W-1:0] rs1_countdown [ISSUE_WIDTH-1:0],
-    input logic [UNROLLED_W-1:0] rs2_countdown [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] rs1_lane [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] rs2_lane [ISSUE_WIDTH-1:0],
     input DecodeCapability_ rs1_capability [ISSUE_WIDTH-1:0],
@@ -108,19 +108,36 @@ module IssueContract
         end
     end
 
-    // Operand Check
-    // Countdown measures pipeline advances to the producer's forwarding point.
-    // Accept 0 or 1 because this consumer selects operands next cycle.
-    // Variable-latency result readiness is checked by the execution lane.
+    // Readiness is a constant position threshold for each producer capability.
+    // This replaces the redundant decrementing counter; backend variable-latency
+    // completion still controls global advancement. Bypass remains a separate check.
+    localparam int unsigned RF_INDEX = EXECUTION_UNROLL + 2;
+    localparam int unsigned MUL_READY_INDEX = EXECUTION_UNROLL < 2 ? EXECUTION_UNROLL : 2;
+    localparam int unsigned DIV_RESULT_POSITION = (32 + DIVIDER_AUTO_PIPE - 1) / DIVIDER_AUTO_PIPE + 3;
+    localparam int unsigned DIV_READY_INDEX = EXECUTION_UNROLL < (DIV_RESULT_POSITION - 1)
+        ? EXECUTION_UNROLL : (DIV_RESULT_POSITION - 1);
+
+    function automatic logic producer_ready(
+        input logic [UNROLLED_W-1:0] index,
+        input DecodeCapability_ capability
+    );
+        // Reset/RF entries have unspecified capability, but must always be ready.
+        if (index >= UNROLLED_W'(RF_INDEX)) return 1'b1;
+        case (capability)
+            CAP_ALU: return 1'b1;
+            CAP_BRU, CAP_MEMORY: return index >= UNROLLED_W'(1);
+            CAP_MUL: return index >= UNROLLED_W'(MUL_READY_INDEX);
+            CAP_DIV: return index >= UNROLLED_W'(DIV_READY_INDEX);
+            CAP_SYSTEM, CAP_CSR: return index >= UNROLLED_W'(EXECUTION_UNROLL + 1);
+            default: return index >= UNROLLED_W'(EXECUTION_UNROLL);
+        endcase
+    endfunction
+
     always_comb begin
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            bad_operand[i] = '0;
-            if (packets[i].common.rs1_valid && rs1_countdown[i] > UNROLLED_W'(1)) begin
-                bad_operand[i] |= '1;
-            end
-            if (packets[i].common.rs2_valid && rs2_countdown[i] > UNROLLED_W'(1)) begin
-                bad_operand[i] |= '1;
-            end
+            bad_operand[i] =
+                (packets[i].common.rs1_valid && !producer_ready(rs1_index[i], rs1_capability[i])) ||
+                (packets[i].common.rs2_valid && !producer_ready(rs2_index[i], rs2_capability[i]));
         end
     end
 

@@ -521,11 +521,44 @@ module Queue
         assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
             serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
             serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane]};
-        // All fields, including validity, select the same registered outcome.
+        // Payload/state keeps binary selection. Source lookup gets independent
+        // local one-hot registers; preserve only these to prevent copy merging.
+        (* DONT_TOUCH = "yes" *) logic [SERVE_WORDS:0] rs1_select;
+        (* DONT_TOUCH = "yes" *) logic [SERVE_WORDS:0] rs2_select;
+        logic [5:0] selected_rs1, selected_rs2;
+        logic [91:0] selected_payload;
+        assign selected_payload = serve_bank[prev_serve_consumed][lane];
         assign {serve_valid_reg[lane], serve_c_reg[lane], serve_taken_reg[lane],
-            serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
-            serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane]} =
-            serve_bank[prev_serve_consumed][lane];
+            serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane]} =
+            selected_payload[91:24];
+        assign {serve_rd[lane], serve_rs3[lane], serve_rs3_float[lane], serve_rd_float[lane]} =
+            {selected_payload[13:4], selected_payload[1:0]};
+
+        for (genvar outcome = 0; outcome <= SERVE_WORDS; outcome++) begin : source_selectors
+            always_ff @(posedge clk) begin
+                if (reset || reset_reg || redirect_taken) begin
+                    rs1_select[outcome] <= (outcome == 0);
+                    rs2_select[outcome] <= (outcome == 0);
+                end else begin
+                    rs1_select[outcome] <= (serve_consumed == SERVE_COUNT_W'(outcome));
+                    rs2_select[outcome] <= (serve_consumed == SERVE_COUNT_W'(outcome));
+                end
+            end
+        end
+        // Packed bank tail: rs1[23:19], rs2[18:14], rd[13:9], rs3[8:4],
+        // then rs1_float[3], rs2_float[2], rs3_float[1], rd_float[0].
+        always_comb begin
+            selected_rs1 = '0;
+            selected_rs2 = '0;
+            for (int outcome = 0; outcome <= SERVE_WORDS; outcome++) begin
+                selected_rs1 |= {6{rs1_select[outcome]}} &
+                    {serve_bank[outcome][lane][23:19], serve_bank[outcome][lane][3]};
+                selected_rs2 |= {6{rs2_select[outcome]}} &
+                    {serve_bank[outcome][lane][18:14], serve_bank[outcome][lane][2]};
+            end
+        end
+        assign {serve_rs1[lane], serve_rs1_float[lane]} = selected_rs1;
+        assign {serve_rs2[lane], serve_rs2_float[lane]} = selected_rs2;
     end
 
     for (genvar consumed = 0; consumed <= SERVE_WORDS; consumed++) begin : serve_outcomes

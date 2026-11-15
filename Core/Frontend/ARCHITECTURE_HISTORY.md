@@ -16,12 +16,14 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd and their register-bank flags alongside branch prediction, using the same extension support parameters as decoding.
 2. Source addresses are latched with prediction results, compacted into the instruction FIFO, and carried through speculative serve windows with instruction, PC, validity, and prediction flags.
-3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects the current window/state combinationally. Dual issue has three outcomes: 0, 1, 2.
-4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled.
-5. Decode refreshes snapshots with same-cycle accepted integer writes: retained packets match older slots, refills match all issued slots, and youngest matching writer wins. Issue uses the registered corrected snapshots directly.
-6. Allocation generates per-slot producer acceptance/lane directly alongside backend lane acceptance. Writes update the Dispatch producer table and decode refresh on the same edge.
+3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects payload/state combinationally. Each served position has dedicated preserved one-hot selector registers for rs1 and rs2 (including bank flags); these select the same outcome. Dual issue has three outcomes: 0, 1, 2.
+4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled. Table read outputs precompute capture-edge progress per entry before source-address selection; retained snapshots and buffered corrections age independently before their correction mux.
+5. Issuer registers accepted integer writes in a one-advancing-cycle buffer, suppressing older duplicate destinations before capture. Buffered rd/source matches correct both readiness and forwarding; all buffered writers precede all current Decode packets.
+6. Decode absorbs buffered corrections into retained and refill metadata. Candidates are independently aged before correction selection, equivalent to aging the selected producer; the producer table commits the same buffer at index one. Stall holds buffer/table progress, while Decode may absorb unaged corrections into empty-slot refills. Reset/redirect clears buffer validity. No live Issue write reaches Decode refresh or table inputs combinationally.
 
-Source extraction's module file remains under Dispatch even though Fetch instantiates it. The experimental Issuer history buffer has been removed.
+Source extraction's module file remains under Dispatch even though Fetch instantiates it. The old instruction-counted history remains removed; the current write buffer is replaced every advancing cycle, including idle cycles.
+
+Current producer metadata contains only index, lane, and capability. IssueContract derives readiness directly from index/capability and configured execution/divider bounds; no countdown state or wiring remains. RF-position entries are ready independently of capability.
 
 ## Invariants introduced by timing work
 
@@ -38,7 +40,7 @@ History-specific invariants below describe the reverted experiment, not current 
 
 ## Change log
 
-### Earlier frontend work — reconstructed history
+### Earlier frontend work ï¿½ reconstructed history
 
 - Converted irrelevant decode packet fields to don't-cares according to operation capability and operand-valid controls. Semantic selectors and required common controls remain defined. Unused backend operands are forced to zero where required.
 - Introduced parameterized RegisterSlice to extract source addresses independently of full legality/operation decoding.
@@ -51,7 +53,7 @@ History-specific invariants below describe the reverted experiment, not current 
 - Experimented with invalid serve data deadbeef versus don't-care. Don't-care caused a reported roughly 0.7 ns regression in one run; temporarily restored deadbeef. Later committed RTL again used don't-care. Neither representation guarantees better placement/timing.
 - Tried Quick implementation directives for runtime; severe routing regression led back to RuntimeOptimized opt/place/route with Default synthesis. Placed and routed reports/checkpoints are saved separately. Worst-path detail is generated separately and may be stale; compare timestamps.
 
-### 2026-11-12 — speculative serve windows
+### 2026-11-12 ï¿½ speculative serve windows
 
 Baseline checkpoint: 798799b (Prototype 1.5), verified pushed before editing.
 
@@ -63,7 +65,7 @@ Tradeoff: extra candidate storage and a mux before decode. No extra instruction 
 
 Measured next worst path: registered consumption selector -> serve mux -> source decoding -> producer metadata -> decode register. Data 8.372 ns, slack -3.445 ns, routing 7.009 ns. The older deadbeef baseline was data 7.920 ns / slack -3.307 ns, so this was a structural improvement, not a demonstrated overall win against that particular baseline.
 
-### 2026-11-12 — source predecode moved into Fetch
+### 2026-11-12 ï¿½ source predecode moved into Fetch
 
 Change: instantiate RegisterSlice on reconstructed packets alongside prediction; carry 10 source-address bits through prediction registers, FIFO, and candidate serve banks. Decode table reads use these addresses directly. At this stage fresh refresh comparisons also used them; floating-bank guards still came from full decode.
 
@@ -73,7 +75,7 @@ An editing error passed SUPPORT_* overrides to InstructionMemory as well as Queu
 
 Measured new worst path: queued capability -> issue allocation/acceptance -> producer refresh -> decode rs1 lane register. Data 7.862 ns, slack -2.863 ns (0.582 ns improvement). Approximate contributions: launch/distribution 1.283 ns; allocation/shared control 3.859 ns; refresh/FIFO selection 2.720 ns. Synthesized input_age names represent shared slot/allocation selection, not an age counter in the dependency path.
 
-### 2026-11-12 — issued-instruction producer history
+### 2026-11-12 ï¿½ issued-instruction producer history
 
 Committed baseline before this edit: a959710 (Prototype 1,6). Working tree was clean.
 
@@ -89,7 +91,7 @@ Status at implementation: diff formatting checked, with measurement pending. The
 
 Append a dated entry for every subsequent frontend architecture/timing change, including reversions. Record motivation, affected stage boundaries, data alignment/control invariants, costs, validation actually performed, and measured results when available. Distinguish hypotheses from measurements. Update Current information flow when behavior changes; preserve historical entries. Do not infer exact LUT semantics solely from optimized net names.
 
-### 2026-11-13 — revert history and apply local optimizations
+### 2026-11-13 ï¿½ revert history and apply local optimizations
 
 The history experiment regressed routed data delay from 7.862 ns to 8.454 ns and slack from -2.863 ns to -3.910 ns. New path: source register -> history match/selection -> readiness/allocation -> producer-table capability synchronous-clear input. Endpoint setup differences account for part of the slack regression.
 
@@ -376,3 +378,256 @@ Preceding cleanup user result regressed from 7.152/-2.461 ns to 7.359/-2.740 ns,
 9 LUT levels, 83.504% routing; launch changed to rs2 producer index and endpoint
 remained actual capability CE. This enable change is unmeasured. Static diff
 review only; no tests, lint or synthesis run. README updated.
+
+
+### 2026-11-14 - one-cycle producer write buffer with absorption
+
+Baseline HEAD and local origin/main both 0bec3e9fb4b19caec631515739463fd8e0eb9cb6;
+working tree clean before edits. User reported the contract-driven enable helped
+slightly; no new numerical result supplied in this task.
+
+Issue.sv now registers qualified integer writes and lane/capability/destination.
+Older same-destination slots are invalidated before capture, so correction and
+table payload selection use mutually exclusive matches without youngest priority.
+No-write advancing cycles clear valids; global stall holds pending writes and
+payloads. Reset/redirect discards buffer validity. This is not an instruction-
+counted history and does not depend on issuing a full group to expire an entry.
+
+Buffered producers are index zero with the shared initial countdown. They override
+Decode snapshots before BOTH IssueContract readiness and issuer forwarding fields.
+Decode.sv absorbs these same buffered corrections into every retained/refill source,
+including retained slot zero, then ages on an advancing edge. All buffer writers
+precede current packets; bank qualification prevents integer/FP aliasing and x0
+never enters the buffer. ProducerTable.sv commits at index one and saturating
+initial countdown minus one, matching that edge's backend motion and Decode capture.
+Top.sv wiring is unchanged apart from documenting the delayed signal semantics.
+
+Correctness review covered single issue, zero issue, FIFO shift/refill, successive
+writes to the same rd, duplicate destinations within a group, and stall/refill.
+A waiting packet permanently absorbs a correction before its buffer entry expires;
+fresh reads bypass the not-yet-committed table write through Decode absorption.
+During stall, buffer/table hold while Decode may refill and absorb without aging.
+Same-group RAW blocking is unchanged. Redirect flushes pending speculative writes;
+full backend producer-map recovery remains unresolved, as before. FP/rs3 producer
+tracking remains unimplemented.
+
+Tradeoff: breaks live issue acceptance/allocation -> table/decode-refresh paths,
+but adds buffered rd matching and selection before readiness and allocation.
+No extra instruction issue latency is intended. Timing improvement is unmeasured;
+the previous history experiment regressed, and this distinct absorption-based
+buffer also needs user-run timing measurement. Static RTL/diff review only;
+no tests, lint compiler, simulation, or synthesis run. Dispatch README updated.
+
+### 2026-11-15 - targeted speculative-selector fanout experiment
+
+User authorized baseline inspection, main synthesis/implementation, and post-run
+comparison. Saved original reports and checkpoints under
+build/frontend_ooc/snapshots/20261115_before_selector_replication.
+The temporary selector_probe_tmp.tcl reads the routed checkpoint, reports overall
+and selector-launched paths, and enumerates directly driven selector LUT loads.
+Baseline: 7.189 ns data, -2.208 ns slack; selector -> rs2 lookup/correction ->
+Decode source-index capture. Six first-level selector LUT outputs have 97 logical
+loads each. This records the measured result of the preceding write-buffer change.
+
+frontend_ooc.tcl now discovers LUT drivers connected directly to registered
+prev_serve_consumed Q pins after placement. Outputs with more than 24 logical
+loads receive FORCE_MAX_FANOUT=16 (a physical fanout limit), followed by
+phys_opt_design -fanout_opt. Synthesis Default, opt/place/route RuntimeOptimized,
+part, clocks, IO constraints, and RTL remain unchanged for this experiment.
+No instruction, metadata, or handshake behavior changes. Cost is replicated LUTs
+and additional physical optimization runtime; placement/routing can still regress.
+Results and actual validation are recorded below after completion.
+
+The initial property-plus-ordinary-fanout pass completed but Vivado declined to
+replicate the critical selector nets (Physopt 32-572); it replicated redirect
+logic instead. Actual routed WNS was -2.268 ns versus -2.208 ns baseline.
+Saved this intermediate result under snapshots/20261115_selector_ordinary_fanout.
+Changed the main flow to explicit phys_opt_design -force_replication_on_nets
+for the discovered selector targets, retaining FORCE_MAX_FANOUT=16. The forced
+pass replaces the ordinary fanout pass rather than adding a general optimization
+sweep. A second full main-flow run validates this command and its routed result.
+
+Forced-run result: main synthesis and implementation completed with zero errors.
+Vivado explicitly created 42 additional LUT instances across six targeted nets;
+final slice LUT use rose 6652 -> 6694, registers unchanged at 3384. Logical loads
+can exceed 16 because FORCE_MAX_FANOUT limits physical site-pin loads.
+Overall routed data delay 7.450 ns / WNS -2.527 ns (baseline 7.189 / -2.208).
+New overall worst path: buffered op_rd -> correction/readiness -> issue_consumed
+-> Decode FIFO metadata selection -> rs2_index register. Thus overall WNS
+regressed 0.319 ns. Worst selector-launched path also regressed: 7.310 ns data,
+-2.330 ns slack, versus baseline 7.189 / -2.208, to the same endpoint but launching
+from selector bit 1 rather than bit 0.
+
+On these worst selector paths, selector decode output routing improved 0.988 ->
+0.821 ns, but selector-register distribution worsened 0.354 -> 1.039 ns; launch
+net fanout grew from 9 to 51. From launch clock edge (excluding clock insertion)
+to the first producer-lookup LUT input, delay increased 2.747 -> 3.148 ns.
+Replication moved distribution pressure upstream; this experiment did not improve
+the timing objective. These compare worst selector paths, not identical bit arcs.
+Hold WNS remains -1.191 ns; this is not a timing-clean/signoff result.
+
+The identical temporary probe was run before and after, producing
+build/frontend_ooc/selector_before.rpt and selector_after.rpt; it was then deleted.
+The tested forced-replication block remains in frontend_ooc.tcl for user review;
+recommend reverting it rather than adopting this particular setting. No RTL edits
+in this experiment. No simulation or permanent tests added. Earlier uncommitted
+write-buffer RTL changes were preserved. Existing OOC port-routing and synthesis
+warnings remain. Diff formatting checked. Main runs took approximately 3m42s
+(ordinary) and 3m47s (forced), including synthesis, reports, placement, and routing;
+the forced physical optimization itself took about 6 seconds.
+
+
+### 2026-11-15 - revert forced selector replication
+
+At user request, removed the selector discovery, FORCE_MAX_FANOUT property, and
+post-place forced physical optimization block from frontend_ooc.tcl. Restored
+Default synthesis with RuntimeOptimized opt/place/route, following the measured
+WNS regression from -2.208 to -2.527 ns. Updated Dispatch README. No RTL,
+handshake, stage, or metadata behavior changed; existing write-buffer work stays.
+Experimental reports/checkpoints and baseline snapshots are preserved. Current
+build outputs still describe the experiment until another run overwrites them.
+Validation: inspected restored flow and checked diff formatting; no synthesis,
+implementation, or tests rerun for this removal.
+
+
+### 2026-11-15 - age producer candidates before selection
+
+ProducerTable.sv now computes saturating capture_index/capture_countdown per
+architectural register before the rs1/rs2 lookup mux. Read outputs are capture-edge
+progress, not raw current progress. Decode.sv no longer ages fresh table outputs;
+it ages retained snapshots and each buffered write independently, then selects
+between the aged alternatives. Issue still sees current-cycle snapshots with
+index-zero buffered corrections; actual table register update logic is unchanged.
+
+Invariant: age(select(current, write)) equals select(age(current), age(write)).
+Every candidate ages exactly once on an unstalled capture edge. Index saturates
+at EXECUTION_UNROLL+2 and countdown at zero. Global stall leaves progress unchanged
+but still permits correction absorption and FIFO refill. Reset/redirect invalidates
+Decode payload; the actual table continues holding on redirect. Buffered writes
+remain integer/nonzero qualified, unique by destination, and youngest-at-capture.
+
+Reason: remove aging/bounds logic from after the late source lookup/correction
+mux. No pipeline latency, acceptance, FIFO, or metadata-state ownership change.
+Tradeoff: per-entry combinational aging may increase logic/fanout, though table
+update arithmetic may share it. Synthesis might already perform the transformation;
+timing improvement is unmeasured. This does not remove the serve mux or table-read
+chain, so a larger architectural change may still be necessary. Updated current
+flow and Dispatch README. Static source/diff review only; no tests or synthesis.
+
+
+### 2026-11-15 - dedicated one-hot source serve selection
+
+Fetch/Queue.sv now registers separate one-hot consumption choices per served
+position and per source (rs1/rs2). Each drives only its six-bit address/bank-flag
+masked-OR mux across speculative banks. Other payload, rd/rs3, validity, and FIFO
+state retain binary prev_serve_consumed selection. Narrow DONT_TOUCH attributes
+on selector registers prevent equivalent source copies being merged together;
+no preservation added to candidate banks, mux logic, or the broad payload path.
+Dual issue adds twelve selector bits (two positions x two sources x three outcomes).
+
+Both selector encodings capture the same serve_consumed on the same edge as the
+candidate banks. Reset/reset_reg/redirect select outcome zero in both encodings;
+queue validity still flushes. No extra stall enable: the existing queue can refill
+while backend stalls, and both encodings must keep following the same consumption.
+Legal counts remain 0..SERVE_WORDS. Source fields and bank flags cannot diverge
+from instruction/PC/validity. No producer-table or issue-contract behavior changes.
+
+Goal: move binary selector decoding before the register and isolate source mux
+select distribution from the wide payload, unlike the failed combinational LUT
+replication experiment. Cost: additional FFs/reset loads and consumption fanout;
+the backward consumption-to-selector path may worsen. Physical locality and timing
+improvement remain unmeasured; DONT_TOUCH limits optimization of those registers.
+Static field-layout/control and diff review only; no synthesis, simulation, or
+tests run. Current flow and Dispatch README updated. Prior age-before-selection
+changes remain in place; this measurement will include both unless separated.
+This very well may need to be reverted. Improved WNS but hurt TNS by ~200ns
+
+
+### 2026-11-15 - remove redundant producer countdown state
+
+Removed countdown table registers, reset/write/aging logic, read muxes, Decode
+snapshot fields, correction payload bits, Issuer/IssueContract ports, and Dispatch
+wiring. Deleted the unused producer_countdown helper from Package/Definitions.sv.
+Affected Dispatch files: ProducerTable.sv, Decode.sv, Issue.sv, IssueContract.sv,
+and Top.sv. Backend packet/interface remains unchanged.
+
+IssueContract now derives readiness using constant index comparisons selected by
+producer capability. ALU: always countdown-ready; BRU/MEMORY: index >= 1;
+MUL: index >= min(EXECUTION_UNROLL,2); DIV: index >= min(EXECUTION_UNROLL,
+ceil(32/DIVIDER_AUTO_PIPE)+2); SYSTEM/CSR: index >= EXECUTION_UNROLL+1;
+other existing capability cases: index >= EXECUTION_UNROLL. Issuer explicitly
+passes EXECUTION_UNROLL and DIVIDER_AUTO_PIPE to IssueContract. A plain case
+uses a default for the prior helper's fallback; no default added to unique case.
+
+Equivalence: before saturation, old countdown=max(initial_countdown-index,0),
+and old countdown<=1 equals index>=initial_countdown-1. All thresholds precede
+RF_INDEX, so saturation preserves readiness. RF/reset entries bypass capability
+classification entirely because capability is unspecified at reset. The separate
+index-zero ALU/bypass-enabled check is unchanged, as are same-group RAW checks.
+Buffered producers remain index zero; table commit and Decode absorption advance
+to index one, unless stalled. Pre-lookup aging now applies only to index.
+Serial and iterative-unit completion still rely on existing backend stall rules.
+
+Expected savings are redundant counter flops/decrementers, lookup and correction
+mux bits, and their fanout. Tradeoff: readiness now depends on producer capability
+and index comparisons in Issue. No instruction latency or queue protocol change;
+benefit is unmeasured. One-hot source selectors and earlier index-aging changes
+remain. Static interface/reference, formula, and diff review only; no synthesis,
+simulation, lint compiler, or tests run. README/current flow updated.
+
+### 2026-11-15 - latest routed report checkpoint
+
+At user request, preserved the routed reports generated 2026-11-15 01:23:59
+under build/frontend_ooc/snapshots/20261115_012359_latest_routed.
+Use this as the latest reported comparison baseline: data delay 6.905 ns,
+WNS -2.167 ns, nine LUT levels, logic 1.380 ns, routing 5.525 ns (80.015%).
+Launch: dispatch/issuer/op_rd_reg[0][2]/C.
+Endpoint: lane_inputs[2].decoder_packet_reg[2][common][pc][28]/CE.
+Clock period 5.000 ns; skew -0.108 ns. This is a buffered destination through
+issue control to backend sink capture-enable path, not PC payload computation.
+Exact RTL provenance of this user-run build was not verified; do not attribute
+these numbers specifically to countdown removal without checking the build inputs.
+Report inspection/copy only; no synthesis or RTL changes performed in this task.
+
+
+### 2026-11-15 - fixed producer ready-index replaces capability
+
+ProducerTable, Decode, Issuer, IssueContract and DispatchTop now carry ready_index
+at UNROLLED_W width instead of producer DecodeCapability_. Issuer classifies the
+instruction capability once before capturing the accepted-write buffer. The fixed
+threshold travels unchanged through commit, reads, absorption, and correction;
+only producer index ages. Issue readiness is index >= ready_index. Instruction
+packet capability remains intact for lane allocation and execution.
+
+Thresholds preserve prior behavior: ALU 0; BRU/MEMORY 1; MUL min(unroll,2);
+DIV min(unroll,ceil(32/divider_auto_pipe)+2); serial unroll+1; fallback unroll.
+Non-ALU thresholds are clamped to at least one so zero uniquely means ALU bypass,
+including unroll=0 configurations. This folds the prior non-ALU index-zero bypass
+prohibition into readiness without changing final issue eligibility. BYPASS_ENABLED
+still separately blocks index-zero consumers when disabled. Future non-ALU bypass
+requires revisiting this encoding. Variable-latency completion remains backend-owned;
+FP dependency/rs3 tracking is not added by this change.
+
+Reset table entries get index=RF_INDEX and ready_index=0, ensuring defined ready
+state without reading unspecified metadata. Stall holds advancement; buffered-write
+capture/redirect validity and same-group RAW rules are unchanged. No new cycle.
+Expected benefit: smaller producer payload for small unroll and simpler Issue
+comparators; tradeoff is moving threshold decode to buffer D inputs and possible
+wider fields at large unroll. Timing remains unmeasured. Static interfaces,
+threshold equivalence, reset/stall, and diff checked; no tests or synthesis run.
+README/current architecture updated. Pre-change user report after countdown removal:
+6.266 ns data / -1.687 ns slack, eight LUTs, 5.097 ns routing, queued rs1 through
+correction/readiness/allocation to backend sink CE.
+
+
+### 2026-11-15 - revert fixed ready-index experiment
+
+At user request, restored producer capability storage/interfaces in ProducerTable,
+Decode, Issuer, DispatchTop, and IssueContract. Restored capability-based position
+threshold readiness and explicit CAP_ALU bypass checking in IssueContract; RF
+entries bypass unspecified capability. Removed write-side ready-index calculation
+and threshold reset state. Countdown removal, index aging before selection,
+write buffer, and one-hot source serve selectors remain intact. No new measurement
+was supplied for the ready-index experiment; do not label it a measured failure.
+Updated README/current description, preserved experiment history. Static reference
+and diff review only; no synthesis or tests run.

@@ -31,26 +31,28 @@ Issue pop signal.
 `RegisterSlice` extracts rs1/rs2 in Fetch alongside prediction, after instruction
 reconstruction. Those addresses travel with the instruction through the FIFO
 and speculative serve banks and directly address `ProducerTable` in decode.
-Each decoded packet carries parallel registered source index, countdown, lane,
+Each decoded packet carries parallel registered source index, lane,
 and capability arrays into issue. Those arrays follow the same FIFO retain/refill
 selection as the packet, including an upper entry shifting into slot zero.
 
-A producer index advances toward `EXECUTION_UNROLL + 2` (the register file),
-and its countdown decreases toward zero. Both advance only when global `stall`
-is clear; waiting in the decode FIFO alone does not freeze them. Fresh table
+A producer index advances toward `EXECUTION_UNROLL + 2` (the register file)
+only when global `stall` is clear; waiting in the decode FIFO alone does not freeze them. Fresh table
 reads also receive that edge's advancement. Reset/redirect invalidate the packet
 FIFO; packet and producer payloads become unspecified during a flush.
 Normal FIFO candidates are calculated independently of redirect. Fixed-source
 producer updates precede parallel retain/refill selection; only validity and
 outward-facing consumption require defined flush values.
 
-Accepted integer writes feed both the producer table and decode refresh.
-Matching older writers override retained source metadata; fresh refills consider
-all accepted writers. Later slots win. New writes start at index zero with the
-shared producer_countdown result, without aging on their allocation edge.
-Issue consumes these corrected snapshots directly; there is no history buffer.
-Allocation produces per-slot write acceptance and lane directly, alongside the
-per-lane backend acceptance outputs.
+Accepted integer writes enter Issuer's one-cycle write buffer. Older duplicate
+rd entries are invalidated before capture; buffered source matches are mutually
+exclusive. Buffered metadata corrects both readiness and forwarding immediately,
+then Decode absorbs it into retained and refill snapshots at the next edge.
+The table commits on that same edge at index one.
+All buffered writers are older than every current Decode packet. There is no
+same-cycle live-write refresh and no instruction-counted history shift register.
+The buffer is replaced on every unstalled cycle, even with no accepted writes;
+stall holds it, and reset/redirect clears validity. Decode can absorb unaged
+corrections while refilling during stall. The buffer uses index zero until commit; all progress remains aligned with backend advancement.
 
 `IssueContract` has no stall or redirect inputs. Readiness and normal lane
 allocation are independent of both controls. Issuer directly forces the final
@@ -60,8 +62,8 @@ Decode can still refill empty FIFO slots, using unadvanced producer snapshots.
 
 The current issuer supports widths one and two. Its readiness prefix and lane
 allocator must agree on the consumed count. Same-group RAW dependencies prevent
-a consumer from issuing alongside its producer; the decode write refresh supplies the
-new producer when that consumer is retained.
+a consumer from issuing alongside its producer; the buffered correction supplies the
+new producer next cycle, before readiness is evaluated again.
 
 This remains an integer producer table. Floating-register writes do not update
 it; floating dependency tracking (including rs3) remains unimplemented. Producer
@@ -329,13 +331,13 @@ legality and valid controls remain authoritative for whether it is consumed.
 Serial occupancy blocks only CAP_SYSTEM/CAP_CSR. An older serial instruction
 blocks younger serial instructions in the group, while independent nonserial
 instructions can coissue. Prefix issue still prevents bypassing a blocked older
-instruction. Serial integer destinations use an RF-only countdown, shared by
-the table and decode refresh; the producer starts at index zero, not RF_INDEX.
+instruction. Serial integer destinations become issue-ready at index EXECUTION_UNROLL+1
+for the next-cycle RF read; the producer starts at index zero, not RF_INDEX.
 Floating producer-table tracking remains unimplemented.
 
-ProducerTable write arbitration uses explicit destination/writeback candidates
-qualified by acceptance. Slots are in program order; higher matching slot wins.
-The op_age port is retained but does not arbitrate writes. No write buffering.
+ProducerTable receives buffered writes with unique destinations and uses parallel
+match/payload selection. Higher issue slot wins duplicate destinations at buffer
+capture. The op_age port is retained but does not arbitrate writes.
 
 common.next_pc is reserved and unspecified throughout decode/issue. Issuer clears
 it to don't-care before packet lane selection. Integer execution derives its own
@@ -356,7 +358,37 @@ Allocator priority-encodes available/preferred masks in parallel. Lane payloads
 are unspecified when acceptance is low; their muxes do not depend on the final
 accept mask. Consumers must use acceptance/validity as their capture authority.
 
-Issuer generates op_write directly from contract success and accepted nonzero
-integer-destination qualification, independently of allocation. Table/decode
-receive this single write enable; op_lane still comes from allocation. Correctness
-requires contract/allocator agreement (also required by direct consumption).
+Issuer generates live write qualification from contract success and accepted
+nonzero integer destination, independently of allocation. Registered op_write
+and payload feed table/decode; lane payload comes from allocation before capture.
+Correctness requires contract/allocator agreement, also needed by consumption.
+
+The OOC flow uses Default synthesis and RuntimeOptimized opt/place/route.
+The 2026-11-15 forced selector-replication experiment was reverted after routed
+WNS regressed from -2.208 to -2.527 ns. See ARCHITECTURE_HISTORY.md for results.
+
+
+Producer-table read outputs now carry capture-edge progress: each table entry's
+index is aged combinationally before source-address lookup, unless stall
+is active. Decode does not age these fresh read values again. Retained snapshots
+and buffered corrections are aged independently before correction selection.
+This preserves cycle alignment while moving arithmetic ahead of the late mux;
+Issue's buffered override still represents index zero in the current cycle.
+
+
+Fetch serves rs1/rs2 and their bank flags through dedicated one-hot outcome muxes.
+Each served position/source has its own preserved selector registers, captured
+alongside the existing binary consumption selector. Instruction/PC/validity and
+other fields retain binary selection. Both encodings select the same outcome,
+including reset/redirect; no extra pipeline cycle or stall hold was introduced.
+
+
+Countdown state and interfaces have been removed. IssueContract derives operand
+readiness from producer index/capability using fixed configuration thresholds:
+ALU 0, BRU/MEMORY 1, MUL min(EXECUTION_UNROLL,2), DIV
+min(EXECUTION_UNROLL,ceil(32/DIVIDER_AUTO_PIPE)+2), SYSTEM/CSR
+EXECUTION_UNROLL+1, and other existing cases EXECUTION_UNROLL. RF-position entries
+are always ready regardless of unspecified capability. Index-zero bypass checks
+remain separate and unchanged. Producer metadata is now index/lane/capability
+throughout table reads, Decode retention/refill, and buffered correction.
+The fixed ready-index experiment was reverted; its history remains documented.

@@ -41,7 +41,7 @@ module DecodeStage
     // Consumption From Issue
     input logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed,
 
-    // Accepted producer writes from issue
+    // Previous advancing-cycle producer writes from the issue buffer
     input logic [4:0] op_rd [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0],
     input logic op_write [ISSUE_WIDTH-1:0],
@@ -54,11 +54,9 @@ module DecodeStage
     output logic [4:0] rs1 [ISSUE_WIDTH-1:0],
     output logic [4:0] rs2 [ISSUE_WIDTH-1:0],
 
-    // Producer Table Data
+    // Producer Table Data, already aged for capture unless globally stalled
     input logic [UNROLLED_W-1:0] rs1_index [ISSUE_WIDTH-1:0],
     input logic [UNROLLED_W-1:0] rs2_index [ISSUE_WIDTH-1:0],
-    input logic [UNROLLED_W-1:0] rs1_countdown [ISSUE_WIDTH-1:0],
-    input logic [UNROLLED_W-1:0] rs2_countdown [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] rs1_lane [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] rs2_lane [ISSUE_WIDTH-1:0],
     input DecodeCapability_ rs1_capability [ISSUE_WIDTH-1:0],
@@ -67,8 +65,6 @@ module DecodeStage
     // Registered Producer Table Data to Issue
     output logic [UNROLLED_W-1:0] rs1_index_out [ISSUE_WIDTH-1:0],
     output logic [UNROLLED_W-1:0] rs2_index_out [ISSUE_WIDTH-1:0],
-    output logic [UNROLLED_W-1:0] rs1_countdown_out [ISSUE_WIDTH-1:0],
-    output logic [UNROLLED_W-1:0] rs2_countdown_out [ISSUE_WIDTH-1:0],
     output logic [LANE_WIDTH-1:0] rs1_lane_out [ISSUE_WIDTH-1:0],
     output logic [LANE_WIDTH-1:0] rs2_lane_out [ISSUE_WIDTH-1:0],
     output DecodeCapability_ rs1_capability_out [ISSUE_WIDTH-1:0],
@@ -141,7 +137,6 @@ module DecodeStage
 
     typedef struct packed {
         logic [UNROLLED_W-1:0] index;
-        logic [UNROLLED_W-1:0] countdown;
         logic [LANE_WIDTH-1:0] lane;
         DecodeCapability_ capability;
     } SourceProducer_;
@@ -151,69 +146,68 @@ module DecodeStage
     } OperandProducers_;
 
     localparam logic [UNROLLED_W-1:0] RF_INDEX = UNROLLED_W'(EXECUTION_UNROLL + 2);
-    logic [UNROLLED_W-1:0] write_countdown [ISSUE_WIDTH];
-    always_comb begin
-        for (int j = 0; j < ISSUE_WIDTH; j++)
-            write_countdown[j] = producer_countdown(op_type[j], EXECUTION_UNROLL, Parameters::DIVIDER_AUTO_PIPE);
+    function automatic SourceProducer_ age_source(input SourceProducer_ current);
+        SourceProducer_ aged;
+        aged = current;
+        if (!stall) begin
+            if (current.index < RF_INDEX) aged.index = current.index + 1'b1;
+        end
+        return aged;
+    endfunction
+
+    // Each buffered candidate advances independently of destination matching.
+    SourceProducer_ write_producer [ISSUE_WIDTH];
+    for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : write_progress
+        assign write_producer[slot] = age_source({UNROLLED_W'(0),
+            op_lane[slot], op_type[slot]});
     end
 
     // Update each fixed source slot before the late FIFO-selection signal.
-    // A new write wins over aging; later accepted writers win over earlier ones.
+    // All candidates are already aged to the capture edge before selection.
     // Prepare metadata even for unused operands; issue ignores it when rs*_valid
     // is low. Full instruction legality must not gate producer-write matching.
     function automatic SourceProducer_ refresh_source(
-        input SourceProducer_ current,
+        input SourceProducer_ aged_current,
         input logic [4:0] source_register,
-        input logic source_is_integer,
-        input int older_slots
+        input logic source_is_integer
     );
-        SourceProducer_ updated;
-        updated = current;
-        if (current.index < RF_INDEX) updated.index = current.index + 1'b1;
-        if (current.countdown != 0) updated.countdown = current.countdown - 1'b1;
+        SourceProducer_ selected;
+        logic hit, matched;
+        selected = '0;
+        matched = 1'b0;
         for (int j = 0; j < ISSUE_WIDTH; j++) begin
-            if (j < older_slots && op_write[j] &&
-                source_is_integer && op_rd[j] == source_register) begin
-                updated.index = '0;
-                updated.countdown = write_countdown[j];
-                updated.lane = op_lane[j];
-                updated.capability = op_type[j];
-            end
+            hit = op_write[j] && source_is_integer && op_rd[j] == source_register;
+            selected |= {$bits(SourceProducer_){hit}} &
+                write_producer[j];
+            matched |= hit;
         end
-        // Stall selects the held state after the normal write-selection logic.
-        // Fresh FIFO refills likewise capture the unadvanced table snapshot.
-        return stall ? current : updated;
+        // All buffered writers precede every current packet, including slot zero.
+        // Stall still permits absorption/refill, but all candidates remain unaged.
+        return matched ? selected : aged_current;
     endfunction
 
     OperandProducers_ retained_producers [ISSUE_WIDTH];
     OperandProducers_ refill_producers [ISSUE_WIDTH];
     for (genvar source_slot = 0; source_slot < ISSUE_WIDTH; source_slot++) begin : producer_candidates
         SourceProducer_ old_1, old_2, fresh_1, fresh_2;
-        assign old_1 = {rs1_index_out[source_slot], rs1_countdown_out[source_slot],
-            rs1_lane_out[source_slot], rs1_capability_out[source_slot]};
-        assign old_2 = {rs2_index_out[source_slot], rs2_countdown_out[source_slot],
-            rs2_lane_out[source_slot], rs2_capability_out[source_slot]};
-        assign fresh_1 = {rs1_index[source_slot], rs1_countdown[source_slot],
-            rs1_lane[source_slot], rs1_capability[source_slot]};
-        assign fresh_2 = {rs2_index[source_slot], rs2_countdown[source_slot],
-            rs2_lane[source_slot], rs2_capability[source_slot]};
+        assign old_1 = {rs1_index_out[source_slot], rs1_lane_out[source_slot], rs1_capability_out[source_slot]};
+        assign old_2 = {rs2_index_out[source_slot], rs2_lane_out[source_slot], rs2_capability_out[source_slot]};
+        // Table outputs already include capture-edge aging before address selection.
+        assign fresh_1 = {rs1_index[source_slot], rs1_lane[source_slot], rs1_capability[source_slot]};
+        assign fresh_2 = {rs2_index[source_slot], rs2_lane[source_slot], rs2_capability[source_slot]};
         always_comb begin
-            retained_producers[source_slot].rs1 = refresh_source(old_1,
+            retained_producers[source_slot].rs1 = refresh_source(age_source(old_1),
                 packets_out[source_slot].common.rs1,
-                !packets_out[source_slot].common.rs1_float,
-                source_slot);
-            retained_producers[source_slot].rs2 = refresh_source(old_2,
+                !packets_out[source_slot].common.rs1_float);
+            retained_producers[source_slot].rs2 = refresh_source(age_source(old_2),
                 packets_out[source_slot].common.rs2,
-                !packets_out[source_slot].common.rs2_float,
-                source_slot);
+                !packets_out[source_slot].common.rs2_float);
             refill_producers[source_slot].rs1 = refresh_source(fresh_1,
                 serve_rs1[source_slot],
-                !serve_rs1_float[source_slot],
-                ISSUE_WIDTH);
+                !serve_rs1_float[source_slot]);
             refill_producers[source_slot].rs2 = refresh_source(fresh_2,
                 serve_rs2[source_slot],
-                !serve_rs2_float[source_slot],
-                ISSUE_WIDTH);
+                !serve_rs2_float[source_slot]);
         end
     end
 
@@ -278,17 +272,13 @@ module DecodeStage
             if (reset || reset_reg || redirect_taken || !valid_next) begin
                 packets_out[destination] <= 'x;
                 lane_types_out[destination] <= LaneType_'('x);
-                {rs1_index_out[destination], rs1_countdown_out[destination],
-                    rs1_lane_out[destination], rs1_capability_out[destination]} <= 'x;
-                {rs2_index_out[destination], rs2_countdown_out[destination],
-                    rs2_lane_out[destination], rs2_capability_out[destination]} <= 'x;
+                {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination]} <= 'x;
+                {rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]} <= 'x;
             end else begin
                 packets_out[destination] <= packet_next;
                 lane_types_out[destination] <= lane_next;
-                {rs1_index_out[destination], rs1_countdown_out[destination],
-                    rs1_lane_out[destination], rs1_capability_out[destination]} <= producers_next.rs1;
-                {rs2_index_out[destination], rs2_countdown_out[destination],
-                    rs2_lane_out[destination], rs2_capability_out[destination]} <= producers_next.rs2;
+                {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination]} <= producers_next.rs1;
+                {rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]} <= producers_next.rs2;
             end
         end
     end
