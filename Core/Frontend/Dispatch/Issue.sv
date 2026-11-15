@@ -26,6 +26,8 @@ module Issuer
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed,
     // Decode payload selection ignores flush, but must retain packets on stall.
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count,
+    output logic issue_select_any,
+    output logic issue_select_two,
 
     // Packets To Backend
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
@@ -135,6 +137,15 @@ module Issuer
 
     // Instructions Valid to Issue
     logic issue_good [ISSUE_WIDTH-1:0];
+
+    // Early oldest eligibility does not wait for the younger readiness cone.
+    // Flush acts on validity/effective acceptance, not internal payload selection.
+    assign issue_select_any = issue_good[0] && !stall;
+    if (ISSUE_WIDTH == 2) begin : second_selection
+        assign issue_select_two = issue_good[1] && !stall;
+    end else begin : single_selection
+        assign issue_select_two = 1'b0;
+    end
 
     // Consumption depends only on the contract, independently of lane selection.
     always_comb begin

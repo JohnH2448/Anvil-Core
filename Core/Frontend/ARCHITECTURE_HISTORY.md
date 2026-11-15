@@ -17,7 +17,7 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd, their register-bank flags, encoding-only operand-use bits and capability alongside branch prediction, using the same extension support parameters as decoding.
 2. Source addresses are latched with prediction results, compacted into the instruction FIFO, and carried through speculative serve windows with instruction, PC, validity, and prediction flags.
 3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects all payload fields and FIFO state combinationally, including rs1/rs2 and their bank flags. Dual issue has three outcomes: 0, 1, 2.
-4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled. Table read outputs precompute capture-edge progress per entry before source-address selection; retained snapshots and buffered corrections age independently before their correction mux.
+4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled. Table reads expose raw indices; Decode ages fresh reads, retained snapshots and buffered corrections locally before their correction mux.
 5. Issuer registers accepted integer writes in a one-advancing-cycle buffer, suppressing older duplicate destinations before capture. Buffered rd/source matches correct both readiness and forwarding; all buffered writers precede all current Decode packets.
 6. Decode absorbs buffered corrections into retained and refill metadata. Candidates are independently aged before correction selection, equivalent to aging the selected producer; the producer table commits the same buffer at index one. Stall holds buffer/table progress, while Decode may absorb unaged corrections into empty-slot refills. Reset/redirect clears buffer validity. No live Issue write reaches Decode refresh or table inputs combinationally.
 
@@ -61,6 +61,11 @@ selects the complete snapshot into its register, without post-mux validity/flush
 DecoderSlice also consumes carried operand-use bits: actual rs1/rs2/rd validity is
 ok AND the corresponding predecoded bit. MUL/DIV/atomic/CSR class predicates use
 carried capability; detailed operation and legality decoding remain local.
+
+Decode packet movement now uses stall-qualified issue prefix bits directly.
+issue_select_any resolves zero/one-pop occupancy candidates; issue_select_two
+selects the all-fresh pair at the final mux. Only selected packets are registered.
+Producer snapshots and structural flags retain binary-count outcome selection.
 
 ## Invariants introduced by timing work
 
@@ -1063,3 +1068,71 @@ endpoint. Timing summary synthesis timestamp is 16:32:29; DecoderSlice/Decode la
 write is 16:35:34, so this run predates the latest served-metadata DecoderSlice
 cleanup. Exact inclusion of the producer-outcome change is not established by
 these timestamps alone, without an RTL snapshot. No RTL edits or runs performed.
+
+
+### 2026-11-15 - early oldest-issue selection for Decode packet movement
+
+Started from clean committed b6ea7d9 (Prototype 2.1), verified locally. Issue.sv
+exports issue_select_any = issue_good[0] AND !stall, and issue_select_two =
+issue_good[1] AND !stall for width two (constant zero for width one). Neither bit
+is reset/redirect masked; effective acceptance/writes/consumption remain masked.
+Dispatch/Top.sv wires both directly to Decode.sv.
+
+Decode replaces packet/usage/lane/valid keep-refill masked-OR selection with
+combinational occupancy choices for zero and one consumed. The oldest prefix bit
+selects those alternatives first. For dual issue the younger prefix bit selects
+fresh[destination] at the final mux: consuming two necessarily empties a two-entry
+queue. No replicated decoders or registered candidate banks; only the final packet
+is captured. Packet payload/usage/lane capture is unconditional and validity alone
+flushes. Binary count still controls occupancy/refill accounting and existing
+producer/structural candidate selection, so their treatment is unchanged.
+
+Correctness invariants: issue_good is a prefix, so two implies any and both slots
+valid; count equals the number of asserted stall-qualified bits. Zero/one outcomes
+select retained old[d+consumed] or fresh[d-retained] with corresponding validity,
+lane and use bits. Generated branches bound indices. On stall both selects are
+zero, retaining packets while allowing empty-slot refill; reset/delayed reset and
+redirect clear packet validity/occupancy and outward Fetch consumption. Invalid
+payload can change but is unobservable. No pipeline stage or added packet state.
+
+Reason: avoid binary count decoding/shared keep control on the measured wide
+packet feedback tail; let oldest readiness resolve the first selection before
+late younger readiness arrives. Cost: extra prefix-bit fanout and occupancy mux
+logic; oldest arrival may not be sufficiently early, and synthesis can refactor
+selection. No timing improvement claimed. Static source mapping, width-one/two,
+prefix/count consistency, interface and diff review only; no tests/lint/synthesis.
+Updated current flow and Dispatch README. Prior timing and experiments retained.
+
+### 2026-11-15 - early-prefix packet selection timing result
+
+User reports TNS magnitude reduced from roughly 1100 to 800 ns after early-prefix
+packet selection (approximately 27% reduction). Supplied report WNS is -1.983 ns,
+versus preceding reported -2.082 ns, an improvement of 0.099 ns. New worst path
+starts at external stall with 3.750 ns input delay and ends at Decode slot-zero
+rs2_index[0]/D. Internal data delay 4.386 ns (logic 0.988, routing 3.398), eight
+levels including MUXF7/MUXF8. It traverses stall-dependent producer capture aging,
+table lookup, buffered correction and snapshot selection. Interpretation of
+individual LUT boundaries is approximate without netlist inspection. The previous
+queued-rs2-to-wide-packet-selection path is no longer the reported worst path;
+its new delay is not supplied. This result supports retaining the experiment,
+but does not isolate every affected path. No additional RTL changes or runs.
+
+
+### 2026-11-15 - restore raw producer reads and local capture aging
+
+ProducerTable.sv removed capture_index's per-entry stall-controlled hold/advance
+selection from read outputs. Reads now directly select index_table; registered
+entry advancement/writes/reset behavior is unchanged. Decode.sv applies age_source
+to each fresh read before buffered correction, just like retained snapshots.
+Buffered corrections still age from zero to one when advancing, or remain zero
+on stall. Fresh reads must age exactly once; RF saturation remains identical.
+
+Reason: latest worst path enters through stall-dependent per-entry capture aging
+then traverses the large table read mux. RTL explicitly selected hold/advance;
+physical LUT absorption versus separate mux cells was not established. Local
+aging removes this stall-to-read-mux dependency but adds arithmetic after source
+address selection and may sacrifice sharing with per-entry state advancement.
+No stage or functional timing change. Previous pre-read-aging experiment/history
+retained; this reverses its read placement under the newer architecture.
+Static equation/interface/diff review only; no tests, lint or synthesis. Benefit
+unmeasured. Current description and Dispatch README updated.

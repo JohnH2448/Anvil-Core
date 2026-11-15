@@ -17,7 +17,7 @@ module ProducerTable
     input logic [4:0] rs1 [ISSUE_WIDTH-1:0],
     input logic [4:0] rs2 [ISSUE_WIDTH-1:0],
 
-    // Capture-edge progress outputs for Decode (already aged unless stalled)
+    // Current producer indices; Decode applies capture-edge aging locally.
     output logic [UNROLLED_W-1:0] rs1_index [ISSUE_WIDTH-1:0],
     output logic [UNROLLED_W-1:0] rs2_index [ISSUE_WIDTH-1:0],
     output logic [LANE_WIDTH-1:0] rs1_lane [ISSUE_WIDTH-1:0],
@@ -42,14 +42,6 @@ module ProducerTable
     logic [UNROLLED_W-1:0] index_table [31:0];
     logic [LANE_WIDTH-1:0] lane_table [31:0];
     DecodeCapability_ capability_table [31:0];
-    // Compute progress per entry before the source-address read mux.
-    // Decode must not age these outputs again. Buffered writes bypass in Decode.
-    logic [UNROLLED_W-1:0] capture_index [31:0];
-    for (genvar regno = 0; regno < 32; regno++) begin : read_progress
-        assign capture_index[regno] = (!stall && index_table[regno] < RF_INDEX)
-            ? index_table[regno] + UNROLLED_W'(1) : index_table[regno];
-    end
-
     // Issuer buffers writes and suppresses older duplicate destinations before capture.
     // Commit advances the buffered producer from index zero to index one.
     // op_age remains an interface tag, not a dynamic arbitration input.
@@ -102,8 +94,8 @@ module ProducerTable
     // Operand Serving
     always_comb begin
         for (int unsigned s = 0; s < ISSUE_WIDTH; s++) begin
-            rs1_index[s] = capture_index[rs1[s]];
-            rs2_index[s] = capture_index[rs2[s]];
+            rs1_index[s] = index_table[rs1[s]];
+            rs2_index[s] = index_table[rs2[s]];
             rs1_lane[s] = lane_table[rs1[s]];
             rs2_lane[s] = lane_table[rs2[s]];
             rs1_capability[s] = capability_table[rs1[s]];
@@ -129,7 +121,7 @@ module ProducerTable
     // is contentious. need smart dual condition logic to handle it. 
     // need to block same cycle producer consumer dependencies at issue.
 
-    // Reads expose aged current mappings, with buffered-write bypass in Decode.
+    // Reads expose current mappings; Decode owns capture aging and write bypass.
 
 
 endmodule

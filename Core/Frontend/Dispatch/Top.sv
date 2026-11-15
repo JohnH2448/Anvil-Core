@@ -48,6 +48,7 @@ module DispatchTop
     logic group_resource_bad [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed;
     logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count;
+    logic issue_select_any, issue_select_two;
 
     // ProducerTable lookups
     logic [4:0] rs1 [ISSUE_WIDTH-1:0];
@@ -111,6 +112,8 @@ module DispatchTop
         .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
         .issue_select_count(issue_select_count),
+        .issue_select_any(issue_select_any),
+        .issue_select_two(issue_select_two),
         .serve_consumed(serve_consumed),
         .op_rd(op_rd),
         .op_lane(op_lane),
@@ -150,6 +153,8 @@ module DispatchTop
         .group_resource_bad(group_resource_bad),
         .issue_consumed(issue_consumed),
         .issue_select_count(issue_select_count),
+        .issue_select_any(issue_select_any),
+        .issue_select_two(issue_select_two),
         .decoder_packet(decoder_packet),
         .issuer_packet(issuer_packet),
         .accept_vector(accept_vector),

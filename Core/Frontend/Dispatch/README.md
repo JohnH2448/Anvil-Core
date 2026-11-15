@@ -368,12 +368,12 @@ The 2026-11-15 forced selector-replication experiment was reverted after routed
 WNS regressed from -2.208 to -2.527 ns. See ARCHITECTURE_HISTORY.md for results.
 
 
-Producer-table read outputs now carry capture-edge progress: each table entry's
-index is aged combinationally before source-address lookup, unless stall
-is active. Decode does not age these fresh read values again. Retained snapshots
-and buffered corrections are aged independently before correction selection.
-This preserves cycle alignment while moving arithmetic ahead of the late mux;
-Issue's buffered override still represents index zero in the current cycle.
+Producer-table read outputs expose current raw indices. Decode applies local
+capture-edge aging to fresh reads and retained snapshots, unless stall is active.
+Buffered corrections age independently before correction selection. Each source
+ages exactly once with RF saturation; Issue's buffered override still represents
+index zero in the current cycle. Stall no longer controls per-entry read payload
+before the table lookup, though local aging now follows source-address selection.
 
 
 Fetch selects all serve fields, including rs1/rs2 and bank flags, using the
@@ -477,3 +477,14 @@ class predicates; optional payload logic retains SUPPORT_* guards. Detailed
 suboperation/format/immediate decoding and legality checks remain local. This
 removes duplicated operand-use and zero-register checks after serve selection
 without changing producer write qualification.
+
+
+Decode packet movement now receives two stall-qualified issue prefix bits.
+issue_select_any chooses the zero/one-consumed occupancy outcome early;
+issue_select_two selects the all-fresh outcome at the final dual-issue packet mux.
+This bypasses binary count and shared keep/refill control for packet/lane/use-bit
+selection. Only selected payload is registered; no speculative packet bank is
+stored. Packet validity flushes independently, with arbitrary invalid payload.
+Producer snapshots, structural flags and FIFO accounting retain the equivalent
+binary-count path. Width one uses only the oldest bit. The two-bit selection relies
+on the contract's oldest-first prefix and retains stall refill behavior.
