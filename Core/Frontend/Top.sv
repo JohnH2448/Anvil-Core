@@ -1,6 +1,7 @@
 module FrontendTop
     import DerivedParameters::*;
     import Definitions::*;
+    import Enumerations::*;
 #(
     parameter unsigned FETCH_WORDS = Parameters::CACHE_LINE_WORDS,
     parameter unsigned FIFO_WORDS = Parameters::FETCH_FIFO_WORDS,
@@ -22,6 +23,11 @@ module FrontendTop
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
     output logic accept_vector [TOTAL_LANE_COUNT-1:0]
 );
+
+    // Raw frontend outputs terminate at representative backend input registers.
+    DecoderPacket_ dispatch_packet [TOTAL_LANE_COUNT-1:0];
+    IssuerPacket_ dispatch_issuer [TOTAL_LANE_COUNT-1:0];
+    logic dispatch_accept [TOTAL_LANE_COUNT-1:0];
 
     logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0];
     logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0];
@@ -93,9 +99,99 @@ module FrontendTop
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
         .serve_consumed(serve_consumed),
-        .decoder_packet(decoder_packet),
-        .issuer_packet(issuer_packet),
-        .accept_vector(accept_vector)
+        .decoder_packet(dispatch_packet),
+        .issuer_packet(dispatch_issuer),
+        .accept_vector(dispatch_accept)
     );
+
+    // Lane order matches Dispatch/actual backend generation: serial, integer,
+    // memory, floating. This models consumption only, not execution or readiness.
+    for (genvar lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin : lane_inputs
+        localparam bit SERIAL = lane == 0;
+        localparam bit INTEGER_LANE = lane >= 1 && lane < 1 + Parameters::INTEGER_LANE_COUNT;
+        localparam bit MEMORY_LANE = lane >= 1 + Parameters::INTEGER_LANE_COUNT &&
+            lane < 1 + Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT;
+        localparam bit FLOATING_LANE = lane >= 1 + Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT;
+        // Generate-time guards avoid indexing capability arrays for other banks.
+        DecoderPacket_ consumed_packet;
+        IssuerPacket_ consumed_issuer;
+        if (SERIAL) begin : serial_lane
+            always_comb begin
+                consumed_packet = 'x;
+                consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.next_pc = 'x;
+                consumed_packet.system = dispatch_packet[lane].system;
+                consumed_packet.csr = dispatch_packet[lane].csr;
+            end
+        end else if (INTEGER_LANE) begin : integer_lane
+            localparam logic [3:0] CAPS = Parameters::INTEGER_LANE_CAPABILITIES[lane-1];
+            always_comb begin
+                consumed_packet = 'x;
+                consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.next_pc = 'x;
+                consumed_packet.common.rs1_float = 'x;
+                consumed_packet.common.rs2_float = 'x;
+                consumed_packet.common.rd_float = 'x;
+                if (CAPS[0]) consumed_packet.alu = dispatch_packet[lane].alu;
+                if (CAPS[1]) consumed_packet.bru = dispatch_packet[lane].bru;
+                if (CAPS[2] && Parameters::SUPPORT_MUL)
+                    consumed_packet.mul = dispatch_packet[lane].mul;
+                if (CAPS[3] && Parameters::SUPPORT_DIV)
+                    consumed_packet.div = dispatch_packet[lane].div;
+            end
+        end else if (MEMORY_LANE) begin : memory_lane
+            localparam logic [2:0] CAPS = Parameters::MEMORY_LANE_CAPABILITIES[
+                lane-1-Parameters::INTEGER_LANE_COUNT];
+            always_comb begin
+                consumed_packet = 'x;
+                consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.next_pc = 'x;
+                if (CAPS[0] || (CAPS[2] && Parameters::SUPPORT_FLOAT))
+                    consumed_packet.memory = dispatch_packet[lane].memory;
+                if (CAPS[1] && Parameters::SUPPORT_ATOMIC) begin
+                    consumed_packet.atomic = dispatch_packet[lane].atomic;
+                    consumed_packet.memory.size = dispatch_packet[lane].memory.size;
+                end
+                if (!CAPS[2] || !Parameters::SUPPORT_FLOAT) begin
+                    consumed_packet.common.rs1_float = 'x;
+                    consumed_packet.common.rs2_float = 'x;
+                    consumed_packet.common.rd_float = 'x;
+                end
+            end
+        end else if (FLOATING_LANE) begin : floating_lane
+            localparam logic [1:0] CAPS = Parameters::FLOATING_LANE_CAPABILITIES[
+                lane-1-Parameters::INTEGER_LANE_COUNT-Parameters::MEMORY_LANE_COUNT];
+            always_comb begin
+                consumed_packet = 'x;
+                consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.next_pc = 'x;
+                consumed_packet.common.immediate = 'x;
+                if (CAPS[0] && Parameters::SUPPORT_FLOAT)
+                    consumed_packet.fp = dispatch_packet[lane].fp;
+                if (CAPS[1] && Parameters::SUPPORT_FLOAT)
+                    consumed_packet.fp_convert = dispatch_packet[lane].fp_convert;
+            end
+        end
+        always_comb begin
+            consumed_issuer = dispatch_issuer[lane];
+            if (!BYPASS_ENABLED) begin
+                consumed_issuer.use_bypass_1 = 'x;
+                consumed_issuer.use_bypass_2 = 'x;
+            end
+        end
+        always_ff @(posedge clk) begin
+            if (reset || redirect_taken) begin
+                accept_vector[lane] <= 1'b0;
+                decoder_packet[lane] <= 'x;
+                issuer_packet[lane] <= 'x;
+            end else if (!stall) begin
+                accept_vector[lane] <= dispatch_accept[lane];
+                if (dispatch_accept[lane]) begin
+                    decoder_packet[lane] <= consumed_packet;
+                    issuer_packet[lane] <= consumed_issuer;
+                end
+            end
+        end
+    end
 
 endmodule

@@ -210,6 +210,10 @@ module IntegerLane
     end
 
     // First Execution Stage Combinational Logic
+    // Fall-through is local to execution; frontend next_pc is unspecified.
+    logic [31:0] fallthrough_pc;
+    assign fallthrough_pc = decoder_payload[1].common.pc +
+        (decoder_payload[1].bru.is_compressed ? 32'd2 : 32'd4);
     logic [31:0] alu_result;
     logic bru_misaligned;
     if (IS_ALU) begin : gen_alu
@@ -251,7 +255,7 @@ module IntegerLane
         // A redirect means direction disagreed with prediction. A predicted
         // taken branch therefore recovers to fall-through, otherwise target.
         assign redirect_pc_out = decoder_payload[1].bru.predicted_taken ?
-            decoder_payload[1].common.next_pc : target;
+            fallthrough_pc : target;
     end else begin : gen_no_bru
         assign bru_misaligned = 1'b0;
         assign redirect_taken_out = 1'b0;
@@ -306,14 +310,14 @@ module IntegerLane
         assign mul_result = gen_mul.result;
     end else begin : gen_no_mul_completion
         assign mul_result_valid = 1'b0;
-        assign mul_result = '0;
+        assign mul_result = 'x;
     end
     if (IS_DIV) begin : gen_div_completion
         assign div_result_valid = gen_div.valid;
         assign div_result = gen_div.result;
     end else begin : gen_no_div_completion
         assign div_result_valid = 1'b0;
-        assign div_result = '0;
+        assign div_result = 'x;
     end
     logic capture_mul, capture_div, final_completion;
     // Early results advance with metadata. Iterating results must be captured
@@ -339,7 +343,7 @@ module IntegerLane
                 end else if (!stall) begin
                     if (i == 2) begin
                         data_payload[i] <= decoder_payload[1].common.capability == CAP_ALU ?
-                            alu_result : decoder_payload[1].common.next_pc;
+                            alu_result : fallthrough_pc;
                     end else begin
                         data_payload[i] <= data_payload[i-1];
                     end

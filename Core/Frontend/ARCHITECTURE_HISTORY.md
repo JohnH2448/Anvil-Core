@@ -17,7 +17,7 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd and their register-bank flags alongside branch prediction, using the same extension support parameters as decoding.
 2. Source addresses are latched with prediction results, compacted into the instruction FIFO, and carried through speculative serve windows with instruction, PC, validity, and prediction flags.
 3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects the current window/state combinationally. Dual issue has three outcomes: 0, 1, 2.
-4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled.
+4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled.
 5. Decode refreshes snapshots with same-cycle accepted integer writes: retained packets match older slots, refills match all issued slots, and youngest matching writer wins. Issue uses the registered corrected snapshots directly.
 6. Allocation generates per-slot producer acceptance/lane directly alongside backend lane acceptance. Writes update the Dispatch producer table and decode refresh on the same edge.
 
@@ -183,3 +183,196 @@ banks use predecode; legality, operand validity, raw CSR fields and x0 checks
 remain in full decode. FP, MUL, DIV and atomic cases retain constant support
 parameter guards. Invalid payload remains unspecified, validity remains defined.
 No added stage. Static diff review only; no tests or synthesis run. Timing pending.
+
+
+### 2026-11-14 - measured complete-register predecode result
+
+User routed report at 16:05:43: slack -2.570 ns, data delay 7.526 ns,
+10 LUT levels, logic 1.622 ns and routing 5.904 ns (78.449%). Compared with
+the preceding -3.108 ns / 7.977 ns run, slack improved 0.538 ns and data delay
+improved 0.451 ns. Also better than the pre-history -2.863 ns baseline.
+New worst path: prev_serve_consumed[1] -> selected instruction bit 29 -> shared
+operation/legality/capability decode -> immediate bit 20 selection -> decode
+slot 1 packet register. Source-bank producer refresh is no longer the reported
+worst path. Approximate split: serve selection/distribution 2.375 ns, shared
+decode through capability-named node 4.459 ns, final immediate/FIFO selection
+0.692 ns. Names do not establish exact logic equations. relevant_fields gates
+immediate relevance by trap/capability and is a candidate for further inspection;
+no change made or causal proof established. Measurement supplied by user;
+assistant only inspected report and RTL.
+
+
+### 2026-11-14 - independent immediate format decoding
+
+DecoderSlice now generates final immediate payload in a separate opcode/format
+case tree with a don't-care default, assigned after relevant_fields. Includes
+RV32 I/S/B/U/J, CSR zimm, supported compressed arithmetic/memory/branch/jump
+formats, and explicit zero offset for C.JR/C.JALR. Floating memory cases are
+parameter-gated. Unsupported compressed double-width memory remains don't-care
+because existing legality traps it. Raw encoding controls legality independently.
+Existing internal immediate calculations no longer drive the final output;
+synthesis can prune them. No new stage, and no changes to trap/valid controls.
+Goal: remove legality/capability serialization from immediate[20]'s reported
+critical path. Diff reviewed; no tests or synthesis run. Benefit unmeasured.
+
+
+### 2026-11-14 - field-oriented DecoderSlice rewrite
+
+Replaced instruction-by-instruction packet assembly, operation-derived capability
+selection, whole-packet compressed/full muxing, and relevant_fields with explicit
+per-output case tables/equations. Encoding predicates feed ALU, BRU, MUL/DIV,
+FP arithmetic/conversion, memory, atomic, system, CSR, capability and lane
+selection independently. Register identities/banks wire directly from predecode.
+Immediate format decoding remains independent. Removed canonical compressed
+expansion; compressed legality now checks the encoding fields directly.
+
+Legality is a separate cone retaining the prior instruction/CSR policy, including
+read-only-zero CSR ranges, unsupported extensions, rounding encodings, LR rs2,
+FP conversion constraints, compressed reserved encodings, ECALL and EBREAK.
+Trap output qualifies operand validity, routing to CAP_ALU/INTEGER, and defined
+BR_NONE/MEM_NONE/ATOM_NONE/SYS_NONE/CSR_NONE suppression controls. Payload defaults
+are don't-care. No produced payload field is used to classify another payload
+or capability. The constant SUPPORT_* guards remain on predicates and legality.
+
+Correctness obligations: f0 remains a valid FP operand; x0 has no dependency;
+CSR zimm/legality use raw bits, not unused-source predecode values; C.JR/JALR
+retain zero offset; FP conversions keep their separate capability; BR_NONE stays
+defined for the integer lane's parallel branch unit. No pipeline latency change.
+
+Tradeoff: independent truth tables can duplicate encoding terms or increase
+instruction fanout, and required trap qualification still creates control paths.
+The goal is removing payload serialization through operation/capability decoding,
+not a guaranteed timing gain. Static field/encoding and diff review performed;
+no test suite, simulator, lint compiler, or synthesis run. Baseline before the
+unmeasured immediate experiment/rewrite: 7.526 ns data, -2.570 ns routed slack.
+The immediate-only intermediate edit was not measured separately.
+
+
+### 2026-11-14 - serial-only occupancy and RF readiness
+
+IssueContract now applies serial_active and earlier-serial blocking only to
+CAP_SYSTEM/CAP_CSR. Issuer no longer stops allocation after a serial instruction;
+a younger independent nonserial can coissue. The single serial lane and contract
+still prevent two serial instructions issuing together. In-order prefix remains:
+a blocked serial at the head blocks younger instructions of any type.
+
+Shared producer_countdown initializes serial writes to EXECUTION_UNROLL + 2.
+Producer index still starts at zero and advances normally. Countdown becomes
+one at index EXECUTION_UNROLL+1, permitting issue whose next-cycle operand read
+uses the RF, matching Issuer's existing read_reg_file threshold. Both actual
+table writes and decode fresh-write overrides use this helper. This does not
+mark an unfinished serial result ready immediately or add FP table support.
+Floating destinations remain excluded from the integer table; FP bank/rs3
+tracking is still a separate unimplemented requirement. Static diff review only;
+no simulation or synthesis run. Serial completion must prevent pipeline motion
+past writeback until its result is available, as with other variable-latency units.
+
+
+### 2026-11-14 - explicit producer-table writer selection
+
+Replaced ProducerTable's integer selected_writer sentinel, variable payload
+indexing, and dynamic op_age comparisons with per-entry constant-index write
+candidates (op_wb and destination match), late acceptance hits, and explicit
+slot-priority payload selection. Highest matching slot wins, relying on Issuer's
+program-order slot numbering (op_age equals slot). op_age port retained for
+interface compatibility but no longer controls table priority. Works at parameter
+widths by elaborating the same fixed-slot selection; current issue supports 1/2.
+
+x0 never accepts a write. No added buffer or cycle; reset, stall, redirect hold,
+new-write index/countdown, and saturating aging semantics unchanged. Intended
+benefit is shallower/clearer write control after acceptance; synthesis may have
+already simplified the prior implementation. Diff review only, no tests or
+synthesis. Latest user baseline: 7.022 ns data, -2.546 ns slack, packet validity
+through issue allocation to actual capability_table[29][1]/R. This entry also
+records that the preceding field-oriented decoder rewrite moved the reported
+worst path out of decode; endpoint setup/skew absorbed most of its data gain.
+
+
+### 2026-11-14 - prune next_pc from frontend payload
+
+DecoderSlice drives the reserved common.next_pc field only as don't-care; no
+fall-through adder remains there. Issuer replaces that field with don't-care in
+its packet candidates before lane muxing. The field remains in Definitions for
+interface compatibility. IntegerLane computes PC + compressed/full instruction
+length locally for link results and predicted-taken recovery, preserving its two
+existing consumers. No new stage. Diff review only; no tests or synthesis run.
+Latest preceding output worst path: capability -> allocation -> PC output mux,
+7.020 ns data / -3.263 ns slack; output capture constraints differ from the prior
+register endpoint. Pruning next_pc is an area/fanout hypothesis, not a measured
+fix for the PC[14] path itself.
+
+
+### 2026-11-14 - representative lane input sinks in FrontendTop
+
+FrontendTop now routes raw Dispatch outputs into generated per-lane input
+registers and exposes those registered packets/valids at its existing outputs.
+Serial/integer/memory/floating lane ordering and capability-array indices match
+Dispatch. Common state is retained conservatively (next_pc always unspecified);
+integer lanes retain only configured ALU/BRU/MUL/DIV chunks, memory lanes retain
+memory/atomic chunks according to masks, floating lanes retain FP/conversion
+chunks, and serial retains CSR/system. Global extension guards and bypass
+parameter prune unavailable consumers. Integer bank flags and floating immediate
+are unspecified. Payload captures only on acceptance and !stall; reset/redirect
+clears valid, stall holds. This is a synthesis sink model, not a backend.
+
+External FrontendTop observation now includes one backend-input register cycle.
+OOC issue paths terminate at real capture registers instead of ideal-clock output
+ports. Results are therefore not directly comparable to earlier raw-output slack.
+Serial/memory/floating implementations are stubs, so their field consumption is
+an intended conservative model, not validated actual downstream usage. No actual
+execution/result/ready/LSU state is instantiated. No tests or synthesis run;
+static diff reviewed. Existing raw frontend interface users must account for
+registered outputs. README updated.
+
+
+### 2026-11-14 - local issue/backend optimization pass
+
+Baseline reports copied to build/frontend_ooc/snapshots/*_before_local_cleanup.
+Latest user baseline: capability -> issue allocation -> actual x16 capability
+CE, 7.152 ns data, -2.461 ns slack, 9 LUT levels, 82.299% routing. Lane input
+sink registers remain the timing model; no constraints or stage boundaries changed.
+
+IssueContract: compatibility generation is now separate from resource evaluation.
+For supported widths 1/2, replace subset enumeration/popcounts with nonempty-mask
+and two-distinct-lanes checks. Slot 1's simplified resource result is meaningful
+when slot 0 can issue; prefix acceptance masks all other cases. Generic wider
+fallback retained. No changes to accepted prefix, RAW, serial rules or lane policy.
+
+Issuer: parallel first-set-bit encoders for available and preferred lane masks,
+then select their one-hot outputs. Same lowest-lane preference and scarce-lane
+lookahead, without the late preference mux feeding an integer priority encoder.
+Unaccepted packet payload is now unconstrained by acceptance: packet muxes use
+index_array directly, with valid/capture guards authoritative. This removes an
+unnecessary accept dependence from wide payload muxes; unaccepted payload must
+not be observed as valid. next_pc remains don't-care.
+
+Backend: BranchUnit selects PC versus JALR source before one target adder instead
+of forming two target additions and selecting their results; JALR bit-zero
+clearing is preserved. ArithmaticUnit shares a 33-bit signed right shifter, using
+a zero or sign extension bit for logical/arithmetic shift. Disabled MUL/DIV
+completion payloads are don't-care, with completion-valid held false. No unit
+latency, register, arithmetic result, or scheduling behavior intentionally changed.
+
+Review also covered register files, prediction, MUL/DIV interfaces and integer
+operand/control consumers; avoided speculative changes to tuned MUL/DIV datapaths
+and architecturally defined zeros. Plain case defaults only; no default inserted
+into unique case. Updated README. Static RTL/diff inspection only; no tests,
+lint compiler or synthesis run. Benefits remain unmeasured and resource sharing
+may already have been inferred by Vivado; placement can regress despite simpler RTL.
+
+
+### 2026-11-14 - contract-driven producer write enable
+
+Issuer now computes one op_write qualifier per slot from issue_good, reset/stall/
+redirect masking, integer rd-valid/bank and nonzero rd. Removed separate op_accept
+and op_wb ports from table/decode wiring. ProducerTable only combines op_write
+with destination match; Decode uses the same qualifier for fresh-write overrides.
+Lane payload still comes from allocation, but capability/countdown write-enable
+no longer waits for that allocation. Correctness relies on exact agreement of
+IssueContract and allocator at supported widths 1/2, already required by direct
+issue_consumed. No buffers, pipeline changes or acceptance-policy changes.
+
+Preceding cleanup user result regressed from 7.152/-2.461 ns to 7.359/-2.740 ns,
+9 LUT levels, 83.504% routing; launch changed to rs2 producer index and endpoint
+remained actual capability CE. This enable change is unmeasured. Static diff
+review only; no tests, lint or synthesis run. README updated.

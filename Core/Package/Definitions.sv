@@ -120,6 +120,10 @@ package Definitions;
         last_position = execution_unroll + 1;
         div_position = (32 + divider_auto_pipe - 1) / divider_auto_pipe + 3;
         case (capability)
+            // Consumer reads operands next cycle: countdown reaches one at
+            // the last pipeline slot, when the next read can use the RF.
+            Enumerations::CAP_SYSTEM, Enumerations::CAP_CSR:
+                producer_countdown = DerivedParameters::UNROLLED_W'(execution_unroll + 2);
             Enumerations::CAP_ALU: producer_countdown = DerivedParameters::UNROLLED_W'(1);
             Enumerations::CAP_BRU, Enumerations::CAP_MEMORY:
                 producer_countdown = DerivedParameters::UNROLLED_W'(2);

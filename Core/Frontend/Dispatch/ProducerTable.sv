@@ -30,10 +30,9 @@ module ProducerTable
     // Register Destination Writes
     input logic [4:0] op_rd [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0],
-    input logic op_accept [ISSUE_WIDTH-1:0],
+    input logic op_write [ISSUE_WIDTH-1:0],
     input logic [AGE_WIDTH-1:0] op_age [ISSUE_WIDTH-1:0],
-    input DecodeCapability_ op_type [ISSUE_WIDTH-1:0],
-    input logic op_wb [ISSUE_WIDTH-1:0]
+    input DecodeCapability_ op_type [ISSUE_WIDTH-1:0]
 
 );
     
@@ -49,50 +48,68 @@ module ProducerTable
     // A consumer may issue at <= 1; execution checks variable-latency readiness.
     logic [UNROLLED_W-1:0] countdown_table [31:0];
 
-    // Select the youngest accepted writer to each register. Equal ages retain
-    // the previous priority rule: the higher issue slot wins. x0 never allocates.
-    int selected_writer [31:0];
-    logic [UNROLLED_W-1:0] issue_countdown [ISSUE_WIDTH-1:0];
-    always_comb begin
-        for (int k = 0; k < ISSUE_WIDTH; k++)
-            issue_countdown[k] = producer_countdown(op_type[k], EXECUTION_UNROLL, Parameters::DIVIDER_AUTO_PIPE);
-        foreach (selected_writer[i]) begin
-            selected_writer[i] = -1;
-            for (int k = 0; k < ISSUE_WIDTH; k++) begin
-                if (i != 0 && op_accept[k] && op_wb[k] && op_rd[k] == 5'(i)) begin
-                    if (selected_writer[i] == -1) selected_writer[i] = k;
-                    else if (op_age[k] >= op_age[selected_writer[i]]) selected_writer[i] = k;
+    // Slots are in program order; the highest matching slot is youngest.
+    // op_age remains an interface tag, not a dynamic arbitration input.
+    logic [UNROLLED_W-1:0] issue_countdown [ISSUE_WIDTH];
+    for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : write_payload
+        assign issue_countdown[slot] = producer_countdown(
+            op_type[slot], EXECUTION_UNROLL, Parameters::DIVIDER_AUTO_PIPE);
+    end
+
+    for (genvar regno = 0; regno < 32; regno++) begin : entries
+        logic candidate [ISSUE_WIDTH];
+        logic hit [ISSUE_WIDTH];
+        logic write_valid;
+        logic [LANE_WIDTH-1:0] write_lane;
+        logic [UNROLLED_W-1:0] write_countdown;
+        DecodeCapability_ write_capability;
+
+        for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : writers
+            if (regno == 0) begin : zero_register
+                assign candidate[slot] = 1'b0;
+            end else begin : destination_match
+                // Destination/writeback decode can settle before late acceptance.
+                assign candidate[slot] = op_rd[slot] == 5'(regno);
+            end
+            assign hit[slot] = candidate[slot] && op_write[slot];
+        end
+        always_comb begin
+            write_valid = 1'b0;
+            write_lane = 'x;
+            write_countdown = 'x;
+            write_capability = DecodeCapability_'('x);
+            // Constant-index selection; later slots override earlier matches.
+            for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
+                if (hit[slot]) begin
+                    write_valid = 1'b1;
+                    write_lane = op_lane[slot];
+                    write_countdown = issue_countdown[slot];
+                    write_capability = op_type[slot];
+                end
+            end
+        end
+
+        // Redirect recovery remains backend-owned; mappings hold on redirect.
+        always_ff @(posedge clk) begin
+            if (reset) begin
+                index_table[regno] <= RF_INDEX;
+                countdown_table[regno] <= '0;
+            end else if (!stall && !redirect_taken) begin
+                if (write_valid) begin
+                    index_table[regno] <= '0;
+                    lane_table[regno] <= write_lane;
+                    capability_table[regno] <= write_capability;
+                    countdown_table[regno] <= write_countdown;
+                end else begin
+                    if (index_table[regno] < RF_INDEX)
+                        index_table[regno] <= index_table[regno] + UNROLLED_W'(1);
+                    if (countdown_table[regno] != 0)
+                        countdown_table[regno] <= countdown_table[regno] - UNROLLED_W'(1);
                 end
             end
         end
     end
 
-    // New writers replace old mappings; otherwise progress saturates at the RF.
-    // Both position and countdown freeze during iteration/global stalls.
-    // TODO: Redirect currently holds state; restore surviving producers before issue resumes.
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            foreach (index_table[i]) begin
-                index_table[i] <= UNROLLED_W'(RF_INDEX);
-                countdown_table[i] <= '0;
-            end
-        end else if (!stall && !redirect_taken) begin
-            foreach (index_table[i]) begin
-                if (selected_writer[i] != -1) begin
-                    index_table[i] <= '0;
-                    lane_table[i] <= op_lane[selected_writer[i]];
-                    capability_table[i] <= op_type[selected_writer[i]];
-                    countdown_table[i] <= issue_countdown[selected_writer[i]];
-                end else begin
-                    if (index_table[i] < RF_INDEX)
-                        index_table[i] <= index_table[i] + UNROLLED_W'(1);
-                    if (countdown_table[i] != 0)
-                        countdown_table[i] <= countdown_table[i] - UNROLLED_W'(1);
-                end
-            end
-        end
-    end
-    
     // Operand Serving
     always_comb begin
         for (int unsigned s = 0; s < ISSUE_WIDTH; s++) begin

@@ -40,10 +40,9 @@ module Issuer
     // Prospective Producer Table Writes (committed by the table only when !stall)
     output logic [4:0] op_rd [ISSUE_WIDTH-1:0],
     output logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0],
-    output logic op_accept [ISSUE_WIDTH-1:0], // gate on if wb or not
+    output logic op_write [ISSUE_WIDTH-1:0], // Accepted nonzero integer destination write.
     output logic [AGE_WIDTH-1:0] op_age [ISSUE_WIDTH-1:0],
     output DecodeCapability_ op_type [ISSUE_WIDTH-1:0],
-    output logic op_wb [ISSUE_WIDTH-1:0],
 
     // Serial Lane Status Bit
     input logic serial_active
@@ -112,6 +111,16 @@ module Issuer
         end
     end
 
+    function automatic logic [TOTAL_LANE_COUNT-1:0] first_lane(
+        input logic [TOTAL_LANE_COUNT-1:0] mask);
+        logic seen;
+        seen = 1'b0;
+        for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
+            first_lane[lane] = mask[lane] && !seen;
+            seen |= mask[lane];
+        end
+    endfunction
+
     // Lane Selection
     logic [AGE_WIDTH-1:0] index_array [TOTAL_LANE_COUNT-1:0];
     localparam int unsigned INT_LANE_MAX = 1 + Parameters::INTEGER_LANE_COUNT;
@@ -125,7 +134,6 @@ module Issuer
         stop_issue = reset;
         index_array = '{default: 'x};
         accept_vector = '{default: 1'b0};
-        op_accept = '{default: 1'b0};
         op_lane = '{default: 'x};
 
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
@@ -160,8 +168,7 @@ module Issuer
         end
 
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
-            logic [TOTAL_LANE_COUNT-1:0] available, younger_lanes, preferred;
-            int selected_lane;
+            logic [TOTAL_LANE_COUNT-1:0] available, younger_lanes, preferred, chosen;
 
             available = compatible[slot] & ~used_lanes;
             younger_lanes = '0;
@@ -170,21 +177,18 @@ module Issuer
                     younger_lanes |= compatible[younger];
             end
             preferred = available & ~younger_lanes;
-            if (preferred == '0) preferred = available;
-
-            selected_lane = -1;
-            for (int lane = 0; lane < int'(TOTAL_LANE_COUNT); lane++) begin
-                if (selected_lane == -1 && preferred[lane]) selected_lane = lane;
-            end
-
-            if (!stop_issue && issue_good[slot] && selected_lane != -1) begin
-                index_array[selected_lane] = AGE_WIDTH'(slot);
-                accept_vector[selected_lane] = 1'b1;
-                op_accept[slot] = 1'b1;
-                op_lane[slot] = LANE_WIDTH'(selected_lane);
-                used_lanes[selected_lane] = 1'b1;
-                if (packets_out[slot].common.capability inside {CAP_SYSTEM, CAP_CSR})
-                    stop_issue = 1'b1;
+            // Priority encode both choices in parallel; late preference selects
+            // one-hot results rather than feeding another priority encoder.
+            chosen = (|preferred) ? first_lane(preferred) : first_lane(available);
+            if (!stop_issue && issue_good[slot] && (|chosen)) begin
+                for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
+                    if (chosen[lane]) begin
+                        index_array[lane] = AGE_WIDTH'(slot);
+                        accept_vector[lane] = 1'b1;
+                        op_lane[slot] = LANE_WIDTH'(lane);
+                    end
+                end
+                used_lanes |= chosen;
             end else begin
                 stop_issue = 1'b1;
             end
@@ -192,12 +196,19 @@ module Issuer
         // Stall/redirect suppress acceptance directly, after normal lane selection.
         if (stall || redirect_taken) begin
             accept_vector = '{default: 1'b0};
-            op_accept = '{default: 1'b0};
-        end
+            end
     end
     for (genvar i = 0; i < TOTAL_LANE_COUNT; i++) begin : gen_lane_mux
-        assign decoder_packet[i] = accept_vector[i] ? packets_out[index_array[i]] : 'x;
-        assign issuer_packet[i] = accept_vector[i] ? issuer_packet_internal[index_array[i]] : 'x;
+        // Remove the reserved field before lane selection so it has no mux.
+        DecoderPacket_ candidates [ISSUE_WIDTH];
+        for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : packet_candidates
+            always_comb begin
+                candidates[slot] = packets_out[slot];
+                candidates[slot].common.next_pc = 'x;
+            end
+        end
+        assign decoder_packet[i] = candidates[index_array[i]];
+        assign issuer_packet[i] = issuer_packet_internal[index_array[i]];
     end
 
     // Describe each accepted instruction's producer.
@@ -208,7 +219,11 @@ module Issuer
             op_age[slot] = AGE_WIDTH'(slot);
             op_type[slot] = packets_out[slot].common.capability;
             // This table tracks integer registers; FP writes must not alias x registers.
-            op_wb[slot] = packets_out[slot].common.rd_valid && !packets_out[slot].common.rd_float;
+            // Contract success guarantees allocation for supported widths.
+            // Only lane payload waits for allocation; write enable does not.
+            op_write[slot] = issue_good[slot] && !reset && !stall && !redirect_taken &&
+                packets_out[slot].common.rd_valid && !packets_out[slot].common.rd_float &&
+                packets_out[slot].common.rd != 0;
         end
 
     end

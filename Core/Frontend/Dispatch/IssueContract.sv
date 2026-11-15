@@ -128,10 +128,8 @@ module IssueContract
     localparam int unsigned MEMORY_LANE_BASE = 1 + Parameters::INTEGER_LANE_COUNT;
     localparam int unsigned FLOATING_LANE_BASE = MEMORY_LANE_BASE + Parameters::MEMORY_LANE_COUNT;
     localparam logic [ISSUE_WIDTH:0] SUBSET_LIMIT = {1'b1, {ISSUE_WIDTH{1'b0}}};
+    logic [TOTAL_LANE_COUNT-1:0] compatible_lanes [ISSUE_WIDTH-1:0];
     always_comb begin
-        logic [TOTAL_LANE_COUNT-1:0] compatible_lanes [ISSUE_WIDTH-1:0];
-        logic [ISSUE_WIDTH-1:0] accepted_slots;
-        accepted_slots = '0;
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
             compatible_lanes[i] = '0;
             unique case (packets[i].common.capability)
@@ -177,28 +175,54 @@ module IssueContract
                 compatible_lanes[i] = 'x;
             end
         end
-        for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            logic [ISSUE_WIDTH-1:0] candidate_slots;
-            candidate_slots = accepted_slots;
-            candidate_slots[i] |= 1'b1;
-            bad_execution_unit[i] = 1'b0;
+    end
 
-            if (packets_valid[i]) begin
-                // Older accepted slots already fit. Only subsets containing
-                // this candidate can introduce a new lane conflict.
-                for (logic [ISSUE_WIDTH:0] subset = 1; subset < SUBSET_LIMIT; subset++) begin
-                    logic [TOTAL_LANE_COUNT-1:0] lane_union;
-                    lane_union = '0;
-                    if (subset[i] && (subset[ISSUE_WIDTH-1:0] & ~candidate_slots) == '0) begin
-                        for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
-                            if (subset[slot]) lane_union |= compatible_lanes[slot];
-                        end
-                        if ($countones(lane_union) < $countones(subset)) begin
-                            bad_execution_unit[i] |= 1'b1;
+    if (ISSUE_WIDTH <= 2) begin : narrow_resource_check
+        // A pair fits iff both masks are nonempty and their union has >=2 bits.
+        assign bad_execution_unit[0] = !(|compatible_lanes[0]);
+        if (ISSUE_WIDTH == 2) begin : pair
+            logic [TOTAL_LANE_COUNT-1:0] lane_union;
+            logic multiple_lanes;
+            assign lane_union = compatible_lanes[0] | compatible_lanes[1];
+            // Prefix OR avoids a full-width population counter/subtractor.
+            always_comb begin
+                logic seen;
+                seen = 1'b0;
+                multiple_lanes = 1'b0;
+                for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
+                    multiple_lanes |= seen && lane_union[lane];
+                    seen |= lane_union[lane];
+                end
+            end
+            assign bad_execution_unit[1] = !(|compatible_lanes[1]) || !multiple_lanes;
+        end
+    end else begin : general_resource_check
+        always_comb begin
+            logic [ISSUE_WIDTH-1:0] accepted_slots;
+            accepted_slots = '0;
+            for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
+                logic [ISSUE_WIDTH-1:0] candidate_slots;
+                candidate_slots = accepted_slots;
+                candidate_slots[i] |= 1'b1;
+                bad_execution_unit[i] = 1'b0;
+
+                if (packets_valid[i]) begin
+                    // Older accepted slots already fit. Only subsets containing
+                    // this candidate can introduce a new lane conflict.
+                    for (logic [ISSUE_WIDTH:0] subset = 1; subset < SUBSET_LIMIT; subset++) begin
+                        logic [TOTAL_LANE_COUNT-1:0] lane_union;
+                        lane_union = '0;
+                        if (subset[i] && (subset[ISSUE_WIDTH-1:0] & ~candidate_slots) == '0) begin
+                            for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
+                                if (subset[slot]) lane_union |= compatible_lanes[slot];
+                            end
+                            if ($countones(lane_union) < $countones(subset)) begin
+                                bad_execution_unit[i] |= 1'b1;
+                            end
                         end
                     end
+                    accepted_slots[i] = !bad_execution_unit[i];
                 end
-                accepted_slots[i] = !bad_execution_unit[i];
             end
         end
     end
@@ -209,11 +233,9 @@ module IssueContract
         serial_detected = 1'b0;
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
             bad_serial[i] = 1'b0;
-            if (serial_detected) begin
-                bad_serial[i] |= 1'b1;
-            end
-            if (packets[i].common.capability == CAP_SYSTEM || packets[i].common.capability == CAP_CSR) begin
-                serial_detected |= 1'b1;
+            if (packets[i].common.capability inside {CAP_SYSTEM, CAP_CSR}) begin
+                bad_serial[i] = serial_active || serial_detected;
+                serial_detected |= packets_valid[i];
             end
         end // bitmask already applied due to structural reasons. 
     end
@@ -223,7 +245,7 @@ module IssueContract
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
             issue_good_internal[i] = !(bad_bypass[i] || bad_raw[i] ||
                 bad_valid[i] || bad_execution_unit[i] || bad_operand[i] ||
-                bad_serial[i] || serial_active);
+                bad_serial[i]);
         end
     end 
 

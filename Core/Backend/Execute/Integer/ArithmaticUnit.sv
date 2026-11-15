@@ -14,6 +14,10 @@ module ArithmaticUnit
     logic [31:0] rhs;
     logic subtract;
     logic [31:0] sum;
+    logic signed [32:0] right_operand;
+    logic [32:0] right_result;
+    assign right_operand = {(operation == ALU_SRA) && lhs[31], lhs};
+    assign right_result = right_operand >>> rhs[4:0];
 
     // ADD/SUB share one adder.
     assign subtract = operation == ALU_SUB;
@@ -37,8 +41,7 @@ module ArithmaticUnit
             ALU_SLT: result = {31'b0, $signed(lhs) < $signed(rhs)};
             ALU_SLTU: result = {31'b0, lhs < rhs};
             ALU_XOR: result = lhs ^ rhs;
-            ALU_SRL: result = lhs >> rhs[4:0];
-            ALU_SRA: result = $signed(lhs) >>> rhs[4:0];
+            ALU_SRL, ALU_SRA: result = right_result[31:0];
             ALU_OR: result = lhs | rhs;
             ALU_AND: result = lhs & rhs;
         endcase

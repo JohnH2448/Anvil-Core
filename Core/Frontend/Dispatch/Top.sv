@@ -66,10 +66,9 @@ module DispatchTop
     // ProducerTable updates from accepted issue slots
     logic [4:0] op_rd [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0];
-    logic op_accept [ISSUE_WIDTH-1:0];
+    logic op_write [ISSUE_WIDTH-1:0];
     logic [AGE_WIDTH-1:0] op_age [ISSUE_WIDTH-1:0];
     DecodeCapability_ op_type [ISSUE_WIDTH-1:0];
-    logic op_wb [ISSUE_WIDTH-1:0];
 
     DecodeStage #(
         .ISSUE_WIDTH(ISSUE_WIDTH),
@@ -104,8 +103,7 @@ module DispatchTop
         .serve_consumed(serve_consumed),
         .op_rd(op_rd),
         .op_lane(op_lane),
-        .op_accept(op_accept),
-        .op_wb(op_wb),
+        .op_write(op_write),
         .op_type(op_type),
         .rs1(rs1),
         .rs2(rs2),
@@ -154,10 +152,9 @@ module DispatchTop
         .rs2_capability_in(rs2_capability_out),
         .op_rd(op_rd),
         .op_lane(op_lane),
-        .op_accept(op_accept),
+        .op_write(op_write),
         .op_age(op_age),
-        .op_type(op_type),
-        .op_wb(op_wb)
+        .op_type(op_type)
     );
 
     ProducerTable #(
@@ -180,10 +177,9 @@ module DispatchTop
         .rs2_capability(rs2_capability),
         .op_rd(op_rd),
         .op_lane(op_lane),
-        .op_accept(op_accept),
+        .op_write(op_write),
         .op_age(op_age),
-        .op_type(op_type),
-        .op_wb(op_wb)
+        .op_type(op_type)
     );
 
 endmodule

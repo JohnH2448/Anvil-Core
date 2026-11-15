@@ -44,8 +44,7 @@ module DecodeStage
     // Accepted producer writes from issue
     input logic [4:0] op_rd [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0],
-    input logic op_accept [ISSUE_WIDTH-1:0],
-    input logic op_wb [ISSUE_WIDTH-1:0],
+    input logic op_write [ISSUE_WIDTH-1:0],
     input DecodeCapability_ op_type [ISSUE_WIDTH-1:0],
 
     // Acceptance Signals to Fetch
@@ -173,7 +172,7 @@ module DecodeStage
         if (current.index < RF_INDEX) updated.index = current.index + 1'b1;
         if (current.countdown != 0) updated.countdown = current.countdown - 1'b1;
         for (int j = 0; j < ISSUE_WIDTH; j++) begin
-            if (j < older_slots && op_accept[j] && op_wb[j] && op_rd[j] != 0 &&
+            if (j < older_slots && op_write[j] &&
                 source_is_integer && op_rd[j] == source_register) begin
                 updated.index = '0;
                 updated.countdown = write_countdown[j];
@@ -299,3 +298,7 @@ endmodule
 
 // not sure if this is presently being done but you dont need
 // to zero serve_consumed on stall, only issue_consumed
+
+// if 200-250MHz still evades, make decode a mini FIFO.
+// Keep 4ish entries to keep it always ahead of issue.
+// this entirely removes issue accept chained dependency

@@ -29,975 +29,631 @@ module DecoderSlice
 
 );
 
-    // Compressed Register Mapping And Encoding Legality
-    // Only Register Fields Are Consumed; Opcode/Function Bits Are Discarded
-    /* verilator lint_off UNUSEDSIGNAL */
-    logic [31:0] expanded_instruction;
-    /* verilator lint_on UNUSEDSIGNAL */
-    logic compressed_illegal;
+    // Legality is independent of payload field selection.
     logic [15:0] c;
-    logic [4:0] c_rd;
-    logic [4:0] c_rs1;
-    logic [4:0] c_rs2;
-    logic [11:0] c_immediate;
     logic [20:1] c_jump;
     logic [12:1] c_branch;
+    logic compressed_illegal;
     assign c = instruction[15:0];
-    assign c_rd = c[11:7];
-    assign c_rs1 = {2'b01, c[9:7]};
-    assign c_rs2 = {2'b01, c[4:2]};
     assign c_jump = {{9{c[12]}}, c[12], c[8], c[10:9], c[6], c[7],
         c[2], c[11], c[5:3]};
     assign c_branch = {{4{c[12]}}, c[12], c[6:5], c[2], c[11:10], c[4:3]};
-
-    // Reserved Compressed Encodings Never Reach Execution
     always_comb begin
-        expanded_instruction = 32'h00000013;
         compressed_illegal = 1'b0;
-        c_immediate = '0;
-        begin
-            case (c[1:0])
-                2'b00: begin
-                    case (c[15:13])
-                        3'b000: begin // C.ADDI4SPN
-                            c_immediate = {2'b00, c[10:7], c[12:11], c[5], c[6], 2'b00};
-                            expanded_instruction = {c_immediate, 5'd2, 3'b000, c_rs2, 7'b0010011};
-                            compressed_illegal = (c_immediate == 0);
-                        end
-                        3'b001, 3'b010, 3'b011: begin // C.FLD / C.LW / C.FLW
-                            if (c[15:13] == 3'b001)
-                                c_immediate = {4'b0000, c[6:5], c[12:10], 3'b000};
-                            else
-                                c_immediate = {5'b00000, c[5], c[12:10], c[6], 2'b00};
-                            expanded_instruction = {c_immediate, c_rs1,
-                                (c[15:13] == 3'b001 ? 3'b011 : 3'b010), c_rs2,
-                                (c[15:13] == 3'b010 ? 7'b0000011 : 7'b0000111)};
-                        end
-                        3'b101, 3'b110, 3'b111: begin // C.FSD / C.SW / C.FSW
-                            if (c[15:13] == 3'b101)
-                                c_immediate = {4'b0000, c[6:5], c[12:10], 3'b000};
-                            else
-                                c_immediate = {5'b00000, c[5], c[12:10], c[6], 2'b00};
-                            expanded_instruction = {c_immediate[11:5], c_rs2, c_rs1,
-                                (c[15:13] == 3'b101 ? 3'b011 : 3'b010), c_immediate[4:0],
-                                (c[15:13] == 3'b110 ? 7'b0100011 : 7'b0100111)};
-                        end
-                        default: compressed_illegal = 1'b1;
-                    endcase
-                end
-                2'b01: begin
-                    c_immediate = {{6{c[12]}}, c[12], c[6:2]};
-                    case (c[15:13])
-                        3'b000: expanded_instruction = {c_immediate, c_rd, 3'b000, c_rd, 7'b0010011};
-                        3'b001, 3'b101: begin // C.JAL / C.J
-                            expanded_instruction = {c_jump[20], c_jump[10:1], c_jump[11],
-                                c_jump[19:12], (c[15:13] == 3'b001 ? 5'd1 : 5'd0), 7'b1101111};
-                        end
-                        3'b010: expanded_instruction = {c_immediate, 5'd0, 3'b000, c_rd, 7'b0010011};
-                        3'b011: begin
-                            if (c_rd == 5'd2) begin // C.ADDI16SP
-                                c_immediate = {{2{c[12]}}, c[12], c[4:3], c[5], c[2], c[6], 4'b0000};
-                                expanded_instruction = {c_immediate, 5'd2, 3'b000, 5'd2, 7'b0010011};
-                            end else begin // C.LUI (rd = 0 is a hint)
-                                expanded_instruction = {{14{c[12]}}, c[12], c[6:2], c_rd, 7'b0110111};
-                            end
-                            compressed_illegal = (c_immediate == 0);
-                        end
-                        3'b100: begin
-                            case (c[11:10])
-                                2'b00, 2'b01: begin // C.SRLI / C.SRAI
-                                    expanded_instruction = {1'b0, c[10], 5'b00000, c[6:2],
-                                        c_rs1, 3'b101, c_rs1, 7'b0010011};
-                                    compressed_illegal = c[12];
-                                end
-                                2'b10: expanded_instruction = {c_immediate, c_rs1, 3'b111, c_rs1, 7'b0010011};
-                                2'b11: begin
-                                    case (c[6:5])
-                                        2'b00: expanded_instruction = {7'b0100000, c_rs2, c_rs1, 3'b000, c_rs1, 7'b0110011};
-                                        2'b01: expanded_instruction = {7'b0000000, c_rs2, c_rs1, 3'b100, c_rs1, 7'b0110011};
-                                        2'b10: expanded_instruction = {7'b0000000, c_rs2, c_rs1, 3'b110, c_rs1, 7'b0110011};
-                                        2'b11: expanded_instruction = {7'b0000000, c_rs2, c_rs1, 3'b111, c_rs1, 7'b0110011};
-                                    endcase
-                                    compressed_illegal = c[12]; // RV64 arithmetic
-                                end
-                            endcase
-                        end
-                        3'b110, 3'b111: begin // C.BEQZ / C.BNEZ
-                            expanded_instruction = {c_branch[12], c_branch[10:5], 5'd0, c_rs1,
-                                2'b00, c[13], c_branch[4:1], c_branch[11], 7'b1100011};
-                        end
-                    endcase
-                end
-                2'b10: begin
-                    case (c[15:13])
-                        3'b000: begin // C.SLLI
-                            expanded_instruction = {7'b0000000, c[6:2], c_rd, 3'b001, c_rd, 7'b0010011};
-                            compressed_illegal = c[12];
-                        end
-                        3'b001, 3'b010, 3'b011: begin // C.FLDSP / C.LWSP / C.FLWSP
-                            if (c[15:13] == 3'b001)
-                                c_immediate = {3'b000, c[4:2], c[12], c[6:5], 3'b000};
-                            else
-                                c_immediate = {4'b0000, c[3:2], c[12], c[6:4], 2'b00};
-                            expanded_instruction = {c_immediate, 5'd2,
-                                (c[15:13] == 3'b001 ? 3'b011 : 3'b010), c_rd,
-                                (c[15:13] == 3'b010 ? 7'b0000011 : 7'b0000111)};
-                            compressed_illegal = (c[15:13] == 3'b010) && (c_rd == 0);
-                        end
-                        3'b100: begin
-                            if (c[6:2] == 0) begin
-                                if (c[12] && c_rd == 0)
-                                    expanded_instruction = 32'h00100073; // C.EBREAK
-                                else begin
-                                    expanded_instruction = {12'd0, c_rd, 3'b000,
-                                        (c[12] ? 5'd1 : 5'd0), 7'b1100111};
-                                    compressed_illegal = (c_rd == 0);
-                                end
-                            end else begin // C.MV / C.ADD
-                                expanded_instruction = {7'b0000000, c[6:2],
-                                    (c[12] ? c_rd : 5'd0), 3'b000, c_rd, 7'b0110011};
-                            end
-                        end
-                        3'b101, 3'b110, 3'b111: begin // C.FSDSP / C.SWSP / C.FSWSP
-                            if (c[15:13] == 3'b101)
-                                c_immediate = {3'b000, c[9:7], c[12:10], 3'b000};
-                            else
-                                c_immediate = {4'b0000, c[8:7], c[12:9], 2'b00};
-                            expanded_instruction = {c_immediate[11:5], c[6:2], 5'd2,
-                                (c[15:13] == 3'b101 ? 3'b011 : 3'b010), c_immediate[4:0],
-                                (c[15:13] == 3'b110 ? 7'b0100011 : 7'b0100111)};
-                        end
-                        default: compressed_illegal = 1'b1;
-                    endcase
-                end
-                default: compressed_illegal = 1'b1;
-            endcase
-        end
-    end
-
-    // Independent Cones Avoid A Shared Expansion Mux Before Opcode Decode
-    function automatic Definitions::DecoderPacket_ decode_packet(
-        input logic [31:0] decode_instruction,
-        input logic decode_illegal,
-        output LaneType_ decoded_lane_type
-    );
-        logic [6:0] opcode;
-        logic [2:0] funct3;
-        logic [6:0] funct7;
-        logic [4:0] rs1;
-        logic [4:0] rs2;
-        logic [4:0] rd;
-        logic [31:0] immediate_i;
-        logic [31:0] immediate_s;
-        logic [31:0] immediate_b;
-        logic [31:0] immediate_u;
-        logic [31:0] immediate_j;
-        logic [11:0] csr_address;
-        CSR_R csr_index;
-        logic csr_legal;
-        logic csr_read_only;
-        logic uses_rounding;
-        // Shared Instruction Fields And Immediate Wiring
-        opcode = decode_instruction[6:0];
-        funct3 = decode_instruction[14:12];
-        funct7 = decode_instruction[31:25];
-        // Raw fields also encode CSR immediates and FP/atomic legality.
-        // Keep these independent of predecoded unused-source don't-cares.
-        rs1 = decode_instruction[19:15];
-        rs2 = decode_instruction[24:20];
-        rd = decode_instruction[11:7];
-        immediate_i = {{20{decode_instruction[31]}}, decode_instruction[31:20]};
-        immediate_s = {{20{decode_instruction[31]}}, decode_instruction[31:25], decode_instruction[11:7]};
-        immediate_b = {{19{decode_instruction[31]}}, decode_instruction[31], decode_instruction[7],
-            decode_instruction[30:25], decode_instruction[11:8], 1'b0};
-        immediate_u = {decode_instruction[31:12], 12'd0};
-        immediate_j = {{11{decode_instruction[31]}}, decode_instruction[31], decode_instruction[19:12],
-            decode_instruction[20], decode_instruction[30:21], 1'b0};
-
-        // CSR Address Mapping Runs In Parallel With Operation Decode
-        csr_address = decode_instruction[31:20];
-        csr_index = ROZ_R;
-        csr_legal = 1'b1;
-        csr_read_only = 1'b0;
-        case (csr_address)
-            MSTATUS: csr_index = MSTATUS_R; 
-            MTVEC: csr_index = MTVEC_R;
-            MIP: csr_index = MIP_R;
-            MIE: csr_index = MIE_R;
-            MCYCLE: csr_index = MCYCLE_R;
-            MCYCLEH: csr_index = MCYCLEH_R;
-            MINSTRET: csr_index = MINSTRET_R;
-            MINSTRETH: csr_index = MINSTRETH_R;
-            MSCRATCH: csr_index = MSCRATCH_R;
-            MEPC: csr_index = MEPC_R;
-            MCAUSE: csr_index = MCAUSE_R;
-            MISA: csr_index = MISA_R;
-            12'h001: begin csr_index = FFLAGS_R; csr_legal = (SUPPORT_FLOAT != 0); end
-            12'h002: begin csr_index = FRM_R; csr_legal = (SUPPORT_FLOAT != 0); end
-            12'h003: begin csr_index = FCSR_R; csr_legal = (SUPPORT_FLOAT != 0); end
-            MVENDORID, MARCHID, MIMPID, MHARTID, MCONFIGPTR,
-            MEDELEG, MIDELEG, MCOUNTEREN, MSTATUSH, MTVAL: csr_read_only = 1'b1;
-            default: begin
-                // Preserve The Project's Read-Only-Zero CSR Policy
-                csr_read_only = 1'b1;
-                csr_legal = ((csr_address >= 12'hB03) && (csr_address <= 12'hB1F)) ||
-                    ((csr_address >= 12'hB83) && (csr_address <= 12'hB9F)) ||
-                    ((csr_address >= 12'h323) && (csr_address <= 12'h33F));
-            end
-        endcase
-
-        // Full Decode
-        decode_packet = 'x;
-        decode_packet.common = '0;
-        decode_packet.common.immediate = 'x;
-        decode_packet.alu.operation = ALU_ADD;
-        decode_packet.alu.source = ALU_RS1_RS2;
-        decode_packet.bru.operation = BR_NONE;
-        decode_packet.fp.operation = FP_NONE;
-        decode_packet.fp.rs3_valid = 1'b0;
-        decode_packet.fp_convert.operation = FPC_NONE;
-        decode_packet.memory.operation = MEM_NONE;
-        decode_packet.atomic.operation = ATOM_NONE;
-        decode_packet.system.operation = SYS_NONE;
-        decode_packet.csr.operation = CSR_NONE;
-        decoded_lane_type = INTEGER;
-        decode_packet.common.pc = pc;
-        decode_packet.bru.is_branch = is_branch;
-        decode_packet.bru.is_compressed = is_compressed;
-        decode_packet.bru.predicted_taken = predicted_taken;
-        decode_packet.csr.index = ROZ_R;
-        decode_packet.common.rs1 = rs1_in;
-        decode_packet.common.rs2 = rs2_in;
-        decode_packet.fp.rs3 = rs3_in;
-        decode_packet.common.rd = rd_in;
-        uses_rounding = 1'b0;
-
-        case (opcode)
-            7'b0110011: begin // Integer Register Operations
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.common.rs2_valid = 1'b1;
-                decode_packet.common.rd_valid = 1'b1;
-                case ({funct7, funct3})
-                    10'b0000000000: decode_packet.alu.operation = ALU_ADD;
-                    10'b0100000000: decode_packet.alu.operation = ALU_SUB;
-                    10'b0000000001: decode_packet.alu.operation = ALU_SLL;
-                    10'b0000000010: decode_packet.alu.operation = ALU_SLT;
-                    10'b0000000011: decode_packet.alu.operation = ALU_SLTU;
-                    10'b0000000100: decode_packet.alu.operation = ALU_XOR;
-                    10'b0000000101: decode_packet.alu.operation = ALU_SRL;
-                    10'b0100000101: decode_packet.alu.operation = ALU_SRA;
-                    10'b0000000110: decode_packet.alu.operation = ALU_OR;
-                    10'b0000000111: decode_packet.alu.operation = ALU_AND;
-                    10'b0000001000: begin decode_packet.mul.operation = MUL_LOW; decode_packet.common.capability = CAP_MUL; if (!SUPPORT_MUL) operation_trap = ILLEGAL; end
-                    10'b0000001001: begin decode_packet.mul.operation = MUL_HIGH_SS; decode_packet.common.capability = CAP_MUL; if (!SUPPORT_MUL) operation_trap = ILLEGAL; end
-                    10'b0000001010: begin decode_packet.mul.operation = MUL_HIGH_SU; decode_packet.common.capability = CAP_MUL; if (!SUPPORT_MUL) operation_trap = ILLEGAL; end
-                    10'b0000001011: begin decode_packet.mul.operation = MUL_HIGH_UU; decode_packet.common.capability = CAP_MUL; if (!SUPPORT_MUL) operation_trap = ILLEGAL; end
-                    10'b0000001100: begin decode_packet.div.operation = DIV_SIGNED; decode_packet.common.capability = CAP_DIV; if (!SUPPORT_DIV) operation_trap = ILLEGAL; end
-                    10'b0000001101: begin decode_packet.div.operation = DIV_UNSIGNED; decode_packet.common.capability = CAP_DIV; if (!SUPPORT_DIV) operation_trap = ILLEGAL; end
-                    10'b0000001110: begin decode_packet.div.operation = REM_SIGNED; decode_packet.common.capability = CAP_DIV; if (!SUPPORT_DIV) operation_trap = ILLEGAL; end
-                    10'b0000001111: begin decode_packet.div.operation = REM_UNSIGNED; decode_packet.common.capability = CAP_DIV; if (!SUPPORT_DIV) operation_trap = ILLEGAL; end
-                    default: operation_trap = ILLEGAL;
-                endcase
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rs2_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decoded_lane_type = SERIAL;
-                end
-            end
-            7'b0010011: begin // Integer Immediate Operations
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.common.rd_valid = 1'b1;
-                decode_packet.alu.source = ALU_RS1_IMM;
-                case (funct3)
-                    3'b000: decode_packet.alu.operation = ALU_ADD;
-                    3'b010: decode_packet.alu.operation = ALU_SLT;
-                    3'b011: decode_packet.alu.operation = ALU_SLTU;
-                    3'b100: decode_packet.alu.operation = ALU_XOR;
-                    3'b110: decode_packet.alu.operation = ALU_OR;
-                    3'b111: decode_packet.alu.operation = ALU_AND;
-                    3'b001: begin
-                        decode_packet.alu.operation = ALU_SLL;
-                        if (funct7 != 7'b0000000) operation_trap = ILLEGAL;
-                    end
-                    3'b101: begin
-                        decode_packet.alu.operation = decode_instruction[30] ? ALU_SRA : ALU_SRL;
-                        if (funct7 != 7'b0000000 && funct7 != 7'b0100000) operation_trap = ILLEGAL;
-                    end
-                endcase
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decoded_lane_type = SERIAL;
-                end else decode_packet.common.immediate = immediate_i;
-            end
-            7'b0110111, 7'b0010111: begin // LUI / AUIPC
-                decode_packet.common.rd_valid = 1'b1;
-                decode_packet.common.immediate = immediate_u;
-                decode_packet.alu.source = opcode[5] ? ALU_ZERO_IMM : ALU_PC_IMM;
-            end
-            7'b1100011: begin // Conditional Branches
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.common.rs2_valid = 1'b1;
-                case (funct3)
-                    3'b000: decode_packet.bru.operation = BR_EQ;
-                    3'b001: decode_packet.bru.operation = BR_NE;
-                    3'b100: decode_packet.bru.operation = BR_LT;
-                    3'b101: decode_packet.bru.operation = BR_GE;
-                    3'b110: decode_packet.bru.operation = BR_LTU;
-                    3'b111: decode_packet.bru.operation = BR_GEU;
-                    default: operation_trap = ILLEGAL;
-                endcase
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rs2_valid = 1'b0;
-                    decode_packet.bru.operation = BR_NONE;
-                    decoded_lane_type = SERIAL;
-                end else decode_packet.common.immediate = immediate_b;
-            end
-            7'b1101111: begin // JAL
-                decode_packet.common.rd_valid = 1'b1;
-                decode_packet.alu.source = ALU_PC_IMM;
-                decode_packet.bru.operation = BR_JAL;
-                decode_packet.common.immediate = immediate_j;
-            end
-            7'b1100111: begin // JALR
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.common.rd_valid = 1'b1;
-                decode_packet.alu.source = ALU_RS1_IMM;
-                decode_packet.bru.operation = BR_JALR;
-                if (funct3 != 0) operation_trap = ILLEGAL;
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decode_packet.bru.operation = BR_NONE;
-                    decoded_lane_type = SERIAL;
-                end else decode_packet.common.immediate = immediate_i;
-            end
-            7'b0000011, 7'b0100011, 7'b0000111, 7'b0100111: begin
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                // Integer And Floating Memory Operations
-                decoded_lane_type = MEMORY;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.alu.source = ALU_RS1_IMM;
-                decode_packet.memory.size = MemorySize_'(funct3[1:0]);
-                if (opcode[5]) begin
-                    decode_packet.common.rs2_valid = 1'b1;
-                    decode_packet.common.rs2_float = opcode[2];
-                    decode_packet.memory.operation = MEM_STORE;
-                end else begin
-                    decode_packet.common.rd_valid = 1'b1;
-                    decode_packet.common.rd_float = opcode[2];
-                    decode_packet.memory.operation = MEM_LOAD;
-                    decode_packet.memory.sign_extend = !funct3[2] && !opcode[2];
-                end
-                if (opcode[2]) begin
-                    if (!SUPPORT_FLOAT || (funct3 != 3'b010)) operation_trap = ILLEGAL;
-                end else if (opcode[5]) begin
-                    if (funct3 > 3'b010) operation_trap = ILLEGAL;
-                end else begin
-                    case (funct3)
-                        3'b000, 3'b001, 3'b010, 3'b100, 3'b101: ;
-                        default: operation_trap = ILLEGAL;
-                    endcase
-                end
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rs2_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decode_packet.memory.operation = MEM_NONE;
-                    decode_packet.atomic.operation = ATOM_NONE;
-                    decoded_lane_type = SERIAL;
-                end else decode_packet.common.immediate = opcode[5] ? immediate_s : immediate_i;
-            end
-            7'b0101111: begin // RV32 Word Atomics
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decoded_lane_type = MEMORY;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.common.rs2_valid = 1'b1;
-                decode_packet.common.rd_valid = 1'b1;
-                decode_packet.alu.source = ALU_RS1_IMM;
-                decode_packet.memory.size = MEM_WORD;
-                decode_packet.atomic.acquire = decode_instruction[26];
-                decode_packet.atomic.release_order = decode_instruction[25];
-                case (decode_instruction[31:27])
-                    5'b00010: begin
-                        decode_packet.atomic.operation = ATOM_LR;
-                        decode_packet.common.rs2_valid = 1'b0;
-                        if (rs2 != 0) operation_trap = ILLEGAL;
-                    end
-                    5'b00011: decode_packet.atomic.operation = ATOM_SC;
-                    5'b00001: decode_packet.atomic.operation = ATOM_SWAP;
-                    5'b00000: decode_packet.atomic.operation = ATOM_ADD;
-                    5'b00100: decode_packet.atomic.operation = ATOM_XOR;
-                    5'b01100: decode_packet.atomic.operation = ATOM_AND;
-                    5'b01000: decode_packet.atomic.operation = ATOM_OR;
-                    5'b10000: decode_packet.atomic.operation = ATOM_MIN;
-                    5'b10100: decode_packet.atomic.operation = ATOM_MAX;
-                    5'b11000: decode_packet.atomic.operation = ATOM_MINU;
-                    5'b11100: decode_packet.atomic.operation = ATOM_MAXU;
-                    default: operation_trap = ILLEGAL;
-                endcase
-                if (!SUPPORT_ATOMIC || funct3 != 3'b010) operation_trap = ILLEGAL;
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rs2_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decode_packet.memory.operation = MEM_NONE;
-                    decode_packet.atomic.operation = ATOM_NONE;
-                    decoded_lane_type = SERIAL;
-                end
-            end
-            7'b1000011, 7'b1000111, 7'b1001011, 7'b1001111: begin
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                // Fused Floating Operations
-                decoded_lane_type = FLOATING;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.common.rs2_valid = 1'b1;
-                decode_packet.fp.rs3_valid = 1'b1;
-                decode_packet.common.rd_valid = 1'b1;
-                decode_packet.common.rs1_float = 1'b1;
-                decode_packet.common.rs2_float = 1'b1;
-                decode_packet.fp.rs3_float = 1'b1;
-                decode_packet.common.rd_float = 1'b1;
-                decode_packet.fp.rounding_mode = funct3;
-                uses_rounding = 1'b1;
-                case (opcode[3:2])
-                    2'b00: decode_packet.fp.operation = FP_MADD;
-                    2'b01: decode_packet.fp.operation = FP_MSUB;
-                    2'b10: decode_packet.fp.operation = FP_NMSUB;
-                    2'b11: decode_packet.fp.operation = FP_NMADD;
-                endcase
-                if (!SUPPORT_FLOAT || decode_instruction[26] ||
-                    decode_instruction[25]) operation_trap = ILLEGAL;
-                if (uses_rounding && (funct3 == 3'b101 || funct3 == 3'b110)) operation_trap = ILLEGAL;
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rs2_valid = 1'b0;
-                    decode_packet.fp.rs3_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decode_packet.fp.operation = FP_NONE;
-                    decoded_lane_type = SERIAL;
-                end
-            end
-            7'b1010011: begin // Floating Operations
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decoded_lane_type = FLOATING;
-                decode_packet.common.rs1_valid = 1'b1;
-                decode_packet.common.rs2_valid = 1'b1;
-                decode_packet.common.rd_valid = 1'b1;
-                decode_packet.common.rs1_float = 1'b1;
-                decode_packet.common.rs2_float = 1'b1;
-                decode_packet.common.rd_float = 1'b1;
-                decode_packet.fp.rounding_mode = funct3;
-                case (funct7[6:2])
-                    5'b00000: begin decode_packet.fp.operation = FP_ADD; uses_rounding = 1'b1; end
-                    5'b00001: begin decode_packet.fp.operation = FP_SUB; uses_rounding = 1'b1; end
-                    5'b00010: begin decode_packet.fp.operation = FP_MUL; uses_rounding = 1'b1; end
-                    5'b00011: begin decode_packet.fp.operation = FP_DIV; uses_rounding = 1'b1; end
-                    5'b01011: begin
-                        decode_packet.fp.operation = FP_SQRT;
-                        decode_packet.common.rs2_valid = 1'b0;
-                        uses_rounding = 1'b1;
-                        if (rs2 != 0) operation_trap = ILLEGAL;
-                    end
-                    5'b00100: begin
-                        case (funct3)
-                            3'b000: decode_packet.fp.operation = FP_SGNJ;
-                            3'b001: decode_packet.fp.operation = FP_SGNJN;
-                            3'b010: decode_packet.fp.operation = FP_SGNJX;
-                            default: operation_trap = ILLEGAL;
-                        endcase
-                    end
-                    5'b00101: begin
-                        case (funct3)
-                            3'b000: decode_packet.fp.operation = FP_MIN;
-                            3'b001: decode_packet.fp.operation = FP_MAX;
-                            default: operation_trap = ILLEGAL;
-                        endcase
-                    end
-                    5'b10100: begin
-                        decode_packet.common.rd_float = 1'b0;
-                        case (funct3)
-                            3'b000: decode_packet.fp.operation = FP_LE;
-                            3'b001: decode_packet.fp.operation = FP_LT;
-                            3'b010: decode_packet.fp.operation = FP_EQ;
-                            default: operation_trap = ILLEGAL;
-                        endcase
-                    end
-                    5'b11000, 5'b11010: begin // Word Conversions Only On RV32
-                        decode_packet.fp.operation = funct7[3] ? FP_FROM_INT : FP_TO_INT;
-                        decode_packet.common.rs1_float = !funct7[3];
-                        decode_packet.common.rd_float = funct7[3];
-                        decode_packet.common.rs2_valid = 1'b0;
-                        decode_packet.fp_convert.is_unsigned = rs2[0];
-                        uses_rounding = 1'b1;
-                        if (rs2[4:1] != 0) operation_trap = ILLEGAL;
-                    end
-                    5'b11100: begin
-                        decode_packet.common.rd_float = 1'b0;
-                        decode_packet.common.rs2_valid = 1'b0;
-                        if (funct3 == 3'b001) decode_packet.fp.operation = FP_CLASS;
-                        else if (funct3 == 0 && !funct7[0]) decode_packet.fp.operation = FP_TO_BITS;
-                        else operation_trap = ILLEGAL;
-                        if (rs2 != 0) operation_trap = ILLEGAL;
-                    end
-                    5'b11110: begin
-                        decode_packet.fp.operation = FP_FROM_BITS;
-                        decode_packet.common.rs1_float = 1'b0;
-                        decode_packet.common.rs2_valid = 1'b0;
-                        if (rs2 != 0 || funct3 != 0 || funct7[0]) operation_trap = ILLEGAL;
-                    end
-                    default: operation_trap = ILLEGAL;
-                endcase
-                if (!SUPPORT_FLOAT || funct7[1] || funct7[0]) operation_trap = ILLEGAL;
-                if (uses_rounding && (funct3 == 3'b101 || funct3 == 3'b110)) operation_trap = ILLEGAL;
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rs2_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decode_packet.fp.operation = FP_NONE;
-                    decoded_lane_type = SERIAL;
-                end
-            end
-            7'b0001111: begin // Fences Must Reach The Serial Lane
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decoded_lane_type = SERIAL;
-                case (funct3)
-                    3'b000: begin
-                        decode_packet.system.operation = SYS_FENCE;
-                        decode_packet.system.fence_predecessor = decode_instruction[27:24];
-                        decode_packet.system.fence_successor = decode_instruction[23:20];
-                    end
-                    3'b001: decode_packet.system.operation = SYS_FENCE_I;
-                    default: operation_trap = ILLEGAL;
-                endcase
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.system.operation = SYS_NONE;
-                    decode_packet.csr.operation = CSR_NONE;
-                    decoded_lane_type = SERIAL;
-                end
-            end
-            7'b1110011: begin
-                TrapType_ operation_trap;
-                operation_trap = NONE;
-                decoded_lane_type = SERIAL;
-                if (funct3 == 0) begin
-                    case (decode_instruction)
-                        32'h00000073: operation_trap = ECALL;
-                        32'h00100073: operation_trap = EBREAK;
-                        32'h30200073: decode_packet.system.operation = SYS_MRET; // Implicit MEPC read
-                        32'h10500073: decode_packet.system.operation = SYS_WFI;
-                        default: operation_trap = ILLEGAL;
-                    endcase
-                end else begin
-                    decode_packet.csr.index = csr_index;
-                    decode_packet.common.rd_valid = 1'b1;
-                    decode_packet.common.rs1_valid = !funct3[2];
-                    decode_packet.csr.use_immediate = funct3[2];
-                    decode_packet.csr.read_enable = 1'b1;
-                    decode_packet.csr.write_enable = (rs1 != 0);
-                    case (funct3)
-                        3'b001, 3'b101: begin
-                            decode_packet.csr.operation = CSR_RW;
-                            decode_packet.csr.read_enable = (rd != 0);
-                            decode_packet.csr.write_enable = 1'b1;
-                        end
-                        3'b010, 3'b110: decode_packet.csr.operation = CSR_RS;
-                        3'b011, 3'b111: decode_packet.csr.operation = CSR_RC;
-                        default: operation_trap = ILLEGAL;
-                    endcase
-                    if (!csr_legal || (csr_read_only && decode_packet.csr.write_enable)) operation_trap = ILLEGAL;
-                end
-                // Suppress Only This Instruction Class On A Local Trap
-                decode_packet.common.trap_type = operation_trap;
-                if (operation_trap != NONE) begin
-                    decode_packet.common.rs1_valid = 1'b0;
-                    decode_packet.common.rd_valid = 1'b0;
-                    decode_packet.system.operation = SYS_NONE;
-                    decode_packet.csr.operation = CSR_NONE;
-                    decode_packet.csr.read_enable = 1'b0;
-                    decode_packet.csr.write_enable = 1'b0;
-                    decoded_lane_type = SERIAL;
-                end else if (funct3 != 0) decode_packet.common.immediate = {27'd0, rs1};
-            end
-            default: begin
-                decode_packet.common.trap_type = ILLEGAL;
-                decoded_lane_type = SERIAL;
-            end
-        endcase
-
-        if (decode_illegal) decode_packet.common.trap_type = ILLEGAL;
-
-        // Integer Zero Has No Dependency; Floating Register Zero Is Ordinary
-        decode_packet.common.rs1_valid = decode_packet.common.rs1_valid && (decode_packet.common.rs1_float || rs1 != 0);
-        decode_packet.common.rs2_valid = decode_packet.common.rs2_valid && (decode_packet.common.rs2_float || rs2 != 0);
-        decode_packet.common.rd_valid = decode_packet.common.rd_valid && (decode_packet.common.rd_float || rd != 0);
-
-        // Trap packets bypass ordinary lane and capability matching.
-        if (decode_packet.common.trap_type != NONE) begin
-            decode_packet.common.rs1_valid = 1'b0;
-            decode_packet.common.rs2_valid = 1'b0;
-            decode_packet.fp.rs3_valid = 1'b0;
-            decode_packet.common.rd_valid = 1'b0;
-            decode_packet.memory.operation = MEM_NONE;
-            decode_packet.atomic.operation = ATOM_NONE;
-            decode_packet.bru.operation = BR_NONE;
-            decode_packet.fp.operation = FP_NONE;
-            decode_packet.system.operation = SYS_NONE;
-            decode_packet.csr.operation = CSR_NONE;
-            decode_packet.csr.read_enable = 1'b0;
-            decode_packet.csr.write_enable = 1'b0;
-            decode_packet.common.capability = CAP_ALU;
-            decoded_lane_type = INTEGER;
-        end else case (decoded_lane_type)
-            INTEGER: if (decode_packet.bru.operation != BR_NONE) decode_packet.common.capability = CAP_BRU;
-            FLOATING: begin
-                // All conversions remain on floating lanes, independently of F/D arithmetic.
-                case (decode_packet.fp.operation)
-                    FP_FROM_INT:  decode_packet.fp_convert.operation = FPC_FROM_INT;
-                    FP_TO_INT:    decode_packet.fp_convert.operation = FPC_TO_INT;
-                    FP_FROM_BITS: decode_packet.fp_convert.operation = FPC_FROM_BITS;
-                    FP_TO_BITS:   decode_packet.fp_convert.operation = FPC_TO_BITS;
-                    FP_CLASS:     decode_packet.fp_convert.operation = FPC_CLASS;
-                    default: ;
-                endcase
-                if (decode_packet.fp_convert.operation != FPC_NONE) begin
-                    decode_packet.common.capability = CAP_FP_CONVERT;
-                    decode_packet.fp_convert.rounding_mode = decode_packet.fp.rounding_mode;
-                    decode_packet.fp = 'x;
-                    decode_packet.fp.rs3_valid = 1'b0;
-                end else decode_packet.common.capability = CAP_FP_F;
-            end
-            MEMORY: decode_packet.common.capability = decode_packet.atomic.operation != ATOM_NONE ? CAP_ATOMIC : CAP_MEMORY;
-            SERIAL: decode_packet.common.capability = decode_packet.csr.operation != CSR_NONE ? CAP_CSR : CAP_SYSTEM;
-            default: ;
-        endcase
-    endfunction
-
-    // Compressed Controls Are Decoded Directly From The 16-Bit Encoding
-    logic [31:0] compressed_immediate;
-    DecoderPacket_ packet_full;
-    DecoderPacket_ packet_compressed;
-    LaneType_ lane_type_full;
-    LaneType_ lane_type_compressed;
-    always_comb begin
-        packet_compressed = 'x;
-        packet_compressed.common = '0;
-        packet_compressed.common.immediate = 'x;
-        packet_compressed.alu.operation = ALU_ADD;
-        packet_compressed.bru.operation = BR_NONE;
-        packet_compressed.fp.rs3_valid = 1'b0;
-        packet_compressed.atomic.operation = ATOM_NONE;
-        lane_type_compressed = INTEGER;
-        compressed_immediate = '0;
-        packet_compressed.common.pc = pc;
-        packet_compressed.bru.is_branch = is_branch;
-        packet_compressed.bru.is_compressed = is_compressed;
-        packet_compressed.bru.predicted_taken = predicted_taken;
-        packet_compressed.csr.index = ROZ_R;
-        // Source addresses arrive from Fetch; expansion still supplies rd/rs3.
-        packet_compressed.common.rs1 = rs1_in;
-        packet_compressed.common.rs2 = rs2_in;
-        packet_compressed.fp.rs3 = rs3_in;
-        packet_compressed.common.rd = rd_in;
-        packet_compressed.alu.source = ALU_RS1_IMM;
-
         case (c[1:0])
             2'b00: begin
                 case (c[15:13])
-                    3'b000: begin // C.ADDI4SPN
-                        packet_compressed.common.rs1_valid = 1'b1;
-                        packet_compressed.common.rd_valid = 1'b1;
-                        compressed_immediate = {22'd0, c[10:7], c[12:11], c[5], c[6], 2'd0};
-                    end
-                    3'b001, 3'b010, 3'b011, 3'b101, 3'b110, 3'b111: begin
-                        lane_type_compressed = MEMORY;
-                        packet_compressed.common.rs1_valid = 1'b1;
-                        compressed_immediate = c[14:13] == 2'b01 ?
-                            {24'd0, c[6:5], c[12:10], 3'd0} :
-                            {25'd0, c[5], c[12:10], c[6], 2'd0};
-                        packet_compressed.memory.size = MemorySize_'(c[14:13] == 2'b01 ? 2'b11 : 2'b10);
-                        if (c[15]) begin
-                            packet_compressed.memory.operation = MEM_STORE;
-                            packet_compressed.common.rs2_valid = 1'b1;
-                            packet_compressed.common.rs2_float = c[13];
-                        end else begin
-                            packet_compressed.memory.operation = MEM_LOAD;
-                            packet_compressed.memory.sign_extend = !c[13];
-                            packet_compressed.common.rd_valid = 1'b1;
-                            packet_compressed.common.rd_float = c[13];
-                        end
-                        if (c[13] && (!SUPPORT_FLOAT || !c[14]))
-                            packet_compressed.common.trap_type = ILLEGAL;
-                    end
-                    default: ;
+                    3'b000: compressed_illegal = c[12:5] == 0;
+                    3'b001, 3'b010, 3'b011, 3'b101, 3'b110, 3'b111: ;
+                    default: compressed_illegal = 1'b1;
                 endcase
             end
             2'b01: begin
                 case (c[15:13])
-                    3'b000, 3'b010: begin // C.ADDI / C.LI
-                        packet_compressed.common.rs1_valid = !c[14] && (c_rd != 0);
-                        packet_compressed.common.rd_valid = (c_rd != 0);
-                        compressed_immediate = {{26{c[12]}}, c[12], c[6:2]};
-                    end
-                    3'b001, 3'b101: begin // C.JAL / C.J
-                        packet_compressed.common.rd_valid = !c[15];
-                        packet_compressed.alu.source = ALU_PC_IMM;
-                        packet_compressed.bru.operation = BR_JAL;
-                        compressed_immediate = {{11{c_jump[20]}}, c_jump, 1'b0};
-                    end
-                    3'b011: begin // C.ADDI16SP / C.LUI
-                        packet_compressed.common.rd_valid = (c_rd != 0);
-                        if (c_rd == 5'd2) begin
-                            packet_compressed.common.rs1_valid = 1'b1;
-                            compressed_immediate = {{22{c[12]}}, c[12], c[4:3], c[5], c[2], c[6], 4'd0};
-                        end else begin
-                            packet_compressed.alu.source = ALU_ZERO_IMM;
-                            compressed_immediate = {{14{c[12]}}, c[12], c[6:2], 12'd0};
-                        end
-                    end
-                    3'b100: begin
-                        packet_compressed.common.rs1_valid = 1'b1;
-                        packet_compressed.common.rd_valid = 1'b1;
-                        case (c[11:10])
-                            2'b00, 2'b01: begin // C.SRLI / C.SRAI
-                                packet_compressed.alu.operation = c[10] ? ALU_SRA : ALU_SRL;
-                                compressed_immediate = {21'd0, c[10], 5'd0, c[6:2]};
-                            end
-                            2'b10: begin // C.ANDI
-                                packet_compressed.alu.operation = ALU_AND;
-                                compressed_immediate = {{26{c[12]}}, c[12], c[6:2]};
-                            end
-                            2'b11: begin
-                                packet_compressed.alu.source = ALU_RS1_RS2;
-                                packet_compressed.common.rs2_valid = 1'b1;
-                                case (c[6:5])
-                                    2'b00: packet_compressed.alu.operation = ALU_SUB;
-                                    2'b01: packet_compressed.alu.operation = ALU_XOR;
-                                    2'b10: packet_compressed.alu.operation = ALU_OR;
-                                    2'b11: packet_compressed.alu.operation = ALU_AND;
-                                endcase
-                            end
-                        endcase
-                    end
-                    3'b110, 3'b111: begin // C.BEQZ / C.BNEZ
-                        packet_compressed.common.rs1_valid = 1'b1;
-                        packet_compressed.alu.source = ALU_RS1_RS2;
-                        packet_compressed.bru.operation = c[13] ? BR_NE : BR_EQ;
-                        compressed_immediate = {{19{c_branch[12]}}, c_branch, 1'b0};
-                    end
+                    3'b011: compressed_illegal = {c[12], c[6:2]} == 0;
+                    3'b100: compressed_illegal = c[11:10] != 2'b10 && c[12];
+                    default: ;
                 endcase
             end
             2'b10: begin
                 case (c[15:13])
-                    3'b000: begin // C.SLLI
-                        packet_compressed.common.rs1_valid = (c_rd != 0);
-                        packet_compressed.common.rd_valid = (c_rd != 0);
-                        packet_compressed.alu.operation = ALU_SLL;
-                        compressed_immediate = {27'd0, c[6:2]};
-                    end
-                    3'b001, 3'b010, 3'b011, 3'b101, 3'b110, 3'b111: begin
-                        lane_type_compressed = MEMORY;
-                        packet_compressed.common.rs1_valid = 1'b1;
-                        packet_compressed.memory.size = MemorySize_'(c[14:13] == 2'b01 ? 2'b11 : 2'b10);
-                        if (c[15]) begin
-                            compressed_immediate = c[14:13] == 2'b01 ?
-                                {23'd0, c[9:7], c[12:10], 3'd0} :
-                                {24'd0, c[8:7], c[12:9], 2'd0};
-                            packet_compressed.memory.operation = MEM_STORE;
-                            packet_compressed.common.rs2_valid = c[13] || (c[6:2] != 0);
-                            packet_compressed.common.rs2_float = c[13];
-                        end else begin
-                            compressed_immediate = c[14:13] == 2'b01 ?
-                                {23'd0, c[4:2], c[12], c[6:5], 3'd0} :
-                                {24'd0, c[3:2], c[12], c[6:4], 2'd0};
-                            packet_compressed.memory.operation = MEM_LOAD;
-                            packet_compressed.memory.sign_extend = !c[13];
-                            packet_compressed.common.rd_valid = c[13] || (c_rd != 0);
-                            packet_compressed.common.rd_float = c[13];
-                        end
-                        if (c[13] && (!SUPPORT_FLOAT || !c[14]))
-                            packet_compressed.common.trap_type = ILLEGAL;
-                    end
-                    3'b100: begin
-                        if (c[6:2] != 0) begin // C.MV / C.ADD
-                            packet_compressed.alu.source = ALU_RS1_RS2;
-                            packet_compressed.common.rs1_valid = c[12] && (c_rd != 0);
-                            packet_compressed.common.rs2_valid = 1'b1;
-                            packet_compressed.common.rd_valid = (c_rd != 0);
-                        end else if (c[12] && c_rd == 0) begin
-                            packet_compressed.alu.source = ALU_RS1_RS2;
-                            packet_compressed.common.trap_type = EBREAK;
-                        end else begin // C.JR / C.JALR
-                            packet_compressed.common.rs1_valid = (c_rd != 0);
-                            packet_compressed.common.rd_valid = c[12];
-                            packet_compressed.bru.operation = BR_JALR;
-                        end
-                    end
-                    default: ;
+                    3'b000: compressed_illegal = c[12];
+                    3'b010: compressed_illegal = c[11:7] == 0;
+                    3'b100: compressed_illegal = c[6:2] == 0 && c[11:7] == 0 && !c[12];
+                    3'b001, 3'b011, 3'b101, 3'b110, 3'b111: ;
+                    default: compressed_illegal = 1'b1;
                 endcase
             end
-            default: ;
-        endcase
-
-        if (compressed_illegal) packet_compressed.common.trap_type = ILLEGAL;
-        if (packet_compressed.common.trap_type != NONE) begin
-            packet_compressed.common.rs1_valid = 1'b0;
-            packet_compressed.common.rs2_valid = 1'b0;
-            packet_compressed.common.rd_valid = 1'b0;
-            packet_compressed.memory.operation = MEM_NONE;
-            packet_compressed.atomic.operation = ATOM_NONE;
-            packet_compressed.bru.operation = BR_NONE;
-            packet_compressed.common.capability = CAP_ALU;
-            lane_type_compressed = INTEGER;
-        end else case (lane_type_compressed)
-            INTEGER: if (packet_compressed.bru.operation != BR_NONE) packet_compressed.common.capability = CAP_BRU;
-            FLOATING: packet_compressed.common.capability = CAP_FP_F;
-            MEMORY: packet_compressed.common.capability = packet_compressed.atomic.operation != ATOM_NONE ? CAP_ATOMIC : CAP_MEMORY;
-            SERIAL: packet_compressed.common.capability = packet_compressed.csr.operation != CSR_NONE ? CAP_CSR : CAP_SYSTEM;
-            default: ;
-        endcase
-        case (packet_compressed.common.capability)
-            CAP_ALU, CAP_BRU, CAP_MEMORY: packet_compressed.common.immediate = compressed_immediate;
-            CAP_CSR: packet_compressed.common.immediate = {27'd0, compressed_immediate[4:0]};
-            default: ;
+            default: compressed_illegal = 1'b1;
         endcase
     end
 
-    // Only fields consumed by this capability survive into the decode register.
-    // Keep decode's internal NONE sentinels defined until capability selection
-    // finishes; they are selectors there, even when the output payload is unused.
-    function automatic DecoderPacket_ relevant_fields(input DecoderPacket_ decoded);
-        DecoderPacket_ result;
-        result = 'x;
-        result.common = decoded.common;
-        result.common.immediate = 'x;
-        result.common.next_pc = 'x;
-        // Execution supplies zero for invalid integer sources (including x0).
-        if (!decoded.common.rs1_valid) begin
-            result.common.rs1 = 'x;
-            result.common.rs1_float = 'x;
-        end
-        if (!decoded.common.rs2_valid) begin
-            result.common.rs2 = 'x;
-            result.common.rs2_float = 'x;
-        end
-        if (!decoded.common.rd_valid) begin
-            result.common.rd = 'x;
-            result.common.rd_float = 'x;
-        end
-        // Third-source validity is a control, including on non-FP packets.
-        result.fp.rs3_valid = 1'b0;
-        // The integer lane evaluates the BRU alongside every integer capability.
-        // BR_NONE must remain defined to suppress redirects and misalignment.
-        if (decoded.common.capability inside {CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV})
-            result.bru.operation = BR_NONE;
-        if (decoded.common.trap_type == NONE) begin
-            unique case (decoded.common.capability)
-                CAP_ALU: begin
-                    result.alu = decoded.alu;
-                    if (decoded.alu.source != ALU_RS1_RS2)
-                        result.common.immediate = decoded.common.immediate;
-                end
-                CAP_BRU: begin
-                    result.bru = decoded.bru;
-                    result.common.immediate = decoded.common.immediate;
-                    result.common.next_pc = decoded.common.next_pc;
-                end
-                CAP_MUL: result.mul = decoded.mul;
-                CAP_DIV: result.div = decoded.div;
-                CAP_MEMORY: begin
-                    result.memory = decoded.memory;
-                    result.atomic.operation = ATOM_NONE;
-                    result.common.immediate = decoded.common.immediate;
-                    if (decoded.memory.operation == MEM_STORE)
-                        result.memory.sign_extend = 'x;
-                end
-                CAP_ATOMIC: begin
-                    result.atomic = decoded.atomic;
-                    result.memory.operation = MEM_NONE;
-                    result.memory.size = decoded.memory.size;
-                end
-                CAP_FP_F: begin
-                    result.fp = decoded.fp;
-                    if (!decoded.fp.rs3_valid) begin
-                        result.fp.rs3 = 'x;
-                        result.fp.rs3_float = 'x;
+    // Preserve the project's CSR address/read-only-zero policy.
+    function automatic TrapType_ full_trap(input logic [31:0] insn);
+        logic [6:0] opcode, funct7;
+        logic [2:0] funct3;
+        logic [4:0] rs2;
+        logic [11:0] address;
+        logic csr_legal, csr_read_only, writes_csr, rounding;
+        opcode = insn[6:0];
+        funct3 = insn[14:12];
+        funct7 = insn[31:25];
+        rs2 = insn[24:20];
+        address = insn[31:20];
+        csr_legal = 1'b1;
+        csr_read_only = 1'b0;
+        writes_csr = funct3[1:0] == 1 || insn[19:15] != 0;
+        rounding = 1'b0;
+        case (address)
+            MSTATUS, MTVEC, MIP, MIE, MCYCLE, MCYCLEH, MINSTRET,
+            MINSTRETH, MSCRATCH, MEPC, MCAUSE, MISA: ;
+            12'h001, 12'h002, 12'h003: csr_legal = SUPPORT_FLOAT != 0;
+            MVENDORID, MARCHID, MIMPID, MHARTID, MCONFIGPTR,
+            MEDELEG, MIDELEG, MCOUNTEREN, MSTATUSH, MTVAL: csr_read_only = 1'b1;
+            default: begin
+                csr_read_only = 1'b1;
+                csr_legal = (address >= 12'hB03 && address <= 12'hB1F) ||
+                    (address >= 12'hB83 && address <= 12'hB9F) ||
+                    (address >= 12'h323 && address <= 12'h33F);
+            end
+        endcase
+        full_trap = NONE;
+        case (opcode)
+            7'b0110011: begin
+                case ({funct7, funct3})
+                    10'b0000000000, 10'b0100000000, 10'b0000000001,
+                    10'b0000000010, 10'b0000000011, 10'b0000000100,
+                    10'b0000000101, 10'b0100000101, 10'b0000000110,
+                    10'b0000000111: ;
+                    10'b0000001000, 10'b0000001001, 10'b0000001010,
+                    10'b0000001011: if (!SUPPORT_MUL) full_trap = ILLEGAL;
+                    10'b0000001100, 10'b0000001101, 10'b0000001110,
+                    10'b0000001111: if (!SUPPORT_DIV) full_trap = ILLEGAL;
+                    default: full_trap = ILLEGAL;
+                endcase
+            end
+            7'b0010011: begin
+                if (funct3 == 1 && funct7 != 0) full_trap = ILLEGAL;
+                if (funct3 == 5 && funct7 != 0 && funct7 != 7'b0100000) full_trap = ILLEGAL;
+            end
+            7'b0110111, 7'b0010111, 7'b1101111: ;
+            7'b1100011: if (funct3 == 2 || funct3 == 3) full_trap = ILLEGAL;
+            7'b1100111: if (funct3 != 0) full_trap = ILLEGAL;
+            7'b0000011, 7'b0100011, 7'b0000111, 7'b0100111: begin
+                if (opcode[2]) begin
+                    if (!SUPPORT_FLOAT || funct3 != 2) full_trap = ILLEGAL;
+                end else if (opcode[5]) begin
+                    if (funct3 > 2) full_trap = ILLEGAL;
+                end else if (!(funct3 inside {3'd0,3'd1,3'd2,3'd4,3'd5})) full_trap = ILLEGAL;
+            end
+            7'b0101111: begin
+                if (!SUPPORT_ATOMIC || funct3 != 2) full_trap = ILLEGAL;
+                case (insn[31:27])
+                    5'd2: if (rs2 != 0) full_trap = ILLEGAL;
+                    5'd3,5'd1,5'd0,5'd4,5'd12,5'd8,5'd16,5'd20,5'd24,5'd28: ;
+                    default: full_trap = ILLEGAL;
+                endcase
+            end
+            7'b1000011,7'b1000111,7'b1001011,7'b1001111: begin
+                if (!SUPPORT_FLOAT || insn[26:25] != 0 || funct3 == 5 || funct3 == 6)
+                    full_trap = ILLEGAL;
+            end
+            7'b1010011: begin
+                case (insn[31:27])
+                    5'd0,5'd1,5'd2,5'd3: rounding = 1'b1;
+                    5'd11: begin
+                        rounding = 1'b1;
+                        if (rs2 != 0) full_trap = ILLEGAL;
                     end
-                    if (!(decoded.fp.operation inside {FP_ADD, FP_SUB, FP_MUL,
-                        FP_DIV, FP_SQRT, FP_MADD, FP_MSUB, FP_NMSUB, FP_NMADD}))
-                        result.fp.rounding_mode = 'x;
-                end
-                CAP_FP_CONVERT: begin
-                    result.fp_convert = decoded.fp_convert;
-                    if (!(decoded.fp_convert.operation inside {FPC_FROM_INT, FPC_TO_INT})) begin
-                        result.fp_convert.is_unsigned = 'x;
-                        result.fp_convert.rounding_mode = 'x;
+                    5'd4,5'd20: if (funct3 > 2) full_trap = ILLEGAL;
+                    5'd5: if (funct3 > 1) full_trap = ILLEGAL;
+                    5'd24,5'd26: begin
+                        rounding = 1'b1;
+                        if (rs2[4:1] != 0) full_trap = ILLEGAL;
                     end
+                    5'd28: if (rs2 != 0 || funct3 > 1) full_trap = ILLEGAL;
+                    5'd30: if (rs2 != 0 || funct3 != 0) full_trap = ILLEGAL;
+                    default: full_trap = ILLEGAL;
+                endcase
+                if (!SUPPORT_FLOAT || funct7[1:0] != 0) full_trap = ILLEGAL;
+                if (rounding && (funct3 == 5 || funct3 == 6)) full_trap = ILLEGAL;
+            end
+            7'b0001111: if (funct3 > 1) full_trap = ILLEGAL;
+            7'b1110011: begin
+                if (funct3 == 0) begin
+                    case (insn)
+                        32'h00000073: full_trap = ECALL;
+                        32'h00100073: full_trap = EBREAK;
+                        32'h30200073,32'h10500073: ;
+                        default: full_trap = ILLEGAL;
+                    endcase
+                end else begin
+                    if (funct3 == 4 || !csr_legal || (csr_read_only && writes_csr)) full_trap = ILLEGAL;
                 end
-                CAP_SYSTEM: begin
-                    result.system.operation = decoded.system.operation;
-                    result.csr.operation = CSR_NONE;
-                    if (decoded.system.operation == SYS_FENCE) begin
-                        result.system.fence_predecessor = decoded.system.fence_predecessor;
-                        result.system.fence_successor = decoded.system.fence_successor;
-                    end
-                end
-                CAP_CSR: begin
-                    result.csr = decoded.csr;
-                    result.system.operation = SYS_NONE;
-                    if (decoded.csr.use_immediate)
-                        result.common.immediate[4:0] = decoded.common.immediate[4:0];
-                end
-            endcase
-        end
-        return result;
+            end
+            default: full_trap = ILLEGAL;
+        endcase
     endfunction
 
-    // Select Completed Packets Instead Of High-Fanout Instruction Fields
+    // Immediate payload depends only on encoding format. Legality/capability
+    // are evaluated independently; trapped/unused payload is not consumed.
+    logic [31:0] immediate_direct;
     always_comb begin
-        packet_full = decode_packet(instruction, 1'b0, lane_type_full);
-        packet = is_compressed ? packet_compressed : packet_full;
-        packet.common.rs1_float = rs1_float_in;
-        packet.common.rs2_float = rs2_float_in;
-        packet.common.rd_float = rd_float_in;
-        packet.fp.rs3_float = rs3_float_in;
-        // Shared fall-through address for link results and branch recovery.
-        packet.common.next_pc = pc + (is_compressed ? 32'd2 : 32'd4);
-        packet = relevant_fields(packet);
-        lane_type = is_compressed ? lane_type_compressed : lane_type_full;
+        immediate_direct = 'x;
+        if (is_compressed) begin
+            case (c[1:0])
+                2'b00: begin
+                    case (c[15:13])
+                        3'b000: immediate_direct = {22'd0, c[10:7], c[12:11], c[5], c[6], 2'd0};
+                        3'b010, 3'b110: immediate_direct = {25'd0, c[5], c[12:10], c[6], 2'd0};
+                        3'b011, 3'b111: if (SUPPORT_FLOAT)
+                            immediate_direct = {25'd0, c[5], c[12:10], c[6], 2'd0};
+                        default: ;
+                    endcase
+                end
+                2'b01: begin
+                    case (c[15:13])
+                        3'b000, 3'b010: immediate_direct = {{26{c[12]}}, c[12], c[6:2]};
+                        3'b001, 3'b101: immediate_direct = {{11{c_jump[20]}}, c_jump, 1'b0};
+                        3'b011: begin
+                            if (c[11:7] == 5'd2)
+                                immediate_direct = {{22{c[12]}}, c[12], c[4:3], c[5], c[2], c[6], 4'd0};
+                            else immediate_direct = {{14{c[12]}}, c[12], c[6:2], 12'd0};
+                        end
+                        3'b100: begin
+                            case (c[11:10])
+                                2'b00, 2'b01: immediate_direct = {21'd0, c[10], 5'd0, c[6:2]};
+                                2'b10: immediate_direct = {{26{c[12]}}, c[12], c[6:2]};
+                                default: ;
+                            endcase
+                        end
+                        3'b110, 3'b111: immediate_direct = {{19{c_branch[12]}}, c_branch, 1'b0};
+                    endcase
+                end
+                2'b10: begin
+                    case (c[15:13])
+                        3'b000: immediate_direct = {27'd0, c[6:2]};
+                        3'b010: immediate_direct = {24'd0, c[3:2], c[12], c[6:4], 2'd0};
+                        3'b011: if (SUPPORT_FLOAT)
+                            immediate_direct = {24'd0, c[3:2], c[12], c[6:4], 2'd0};
+                        3'b100: if (c[6:2] == 0) immediate_direct = '0; // JR/JALR offset
+                        3'b110: immediate_direct = {24'd0, c[8:7], c[12:9], 2'd0};
+                        3'b111: if (SUPPORT_FLOAT)
+                            immediate_direct = {24'd0, c[8:7], c[12:9], 2'd0};
+                        default: ;
+                    endcase
+                end
+                default: ;
+            endcase
+        end else begin
+            case (instruction[6:0])
+                7'b0010011, 7'b0000011, 7'b1100111:
+                    immediate_direct = {{20{instruction[31]}}, instruction[31:20]};
+                7'b0000111: if (SUPPORT_FLOAT)
+                    immediate_direct = {{20{instruction[31]}}, instruction[31:20]};
+                7'b0100011:
+                    immediate_direct = {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
+                7'b0100111: if (SUPPORT_FLOAT)
+                    immediate_direct = {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
+                7'b1100011:
+                    immediate_direct = {{19{instruction[31]}}, instruction[31], instruction[7],
+                        instruction[30:25], instruction[11:8], 1'b0};
+                7'b0110111, 7'b0010111: immediate_direct = {instruction[31:12], 12'b0};
+                7'b1101111:
+                    immediate_direct = {{11{instruction[31]}}, instruction[31], instruction[19:12],
+                        instruction[20], instruction[30:21], 1'b0};
+                7'b1110011: if (instruction[14])
+                    immediate_direct[4:0] = instruction[19:15]; // CSR zimm
+                default: ;
+            endcase
+        end
     end
 
+    logic [6:0] op;
+    logic [2:0] f3;
+    logic [6:0] f7;
+    logic [4:0] f5;
+    TrapType_ trap;
+    logic ok;
+    assign op = instruction[6:0];
+    assign f3 = instruction[14:12];
+    assign f7 = instruction[31:25];
+    assign f5 = instruction[31:27];
+    always_comb begin
+        trap = full_trap(instruction);
+        if (is_compressed) begin
+            trap = NONE;
+            if (compressed_illegal) trap = ILLEGAL;
+            if ((c[1:0] == 2'b00 || c[1:0] == 2'b10) &&
+                (c[15:13] inside {3'b001, 3'b011, 3'b101, 3'b111}) &&
+                (!SUPPORT_FLOAT || !c[14])) trap = ILLEGAL;
+            if (c[1:0] == 2'b10 && c[15:13] == 3'b100 && c[12] &&
+                c[11:7] == 0 && c[6:2] == 0) trap = EBREAK;
+        end
+    end
+    assign ok = trap == NONE;
+
+    // Encoding predicates contain no decoded packet/output dependencies.
+    wire r_alu = !is_compressed && op == 7'b0110011 && f7 != 7'b0000001;
+    wire i_alu = !is_compressed && op == 7'b0010011;
+    wire upper = !is_compressed && (op inside {7'b0110111, 7'b0010111});
+    wire mul_op = !is_compressed && SUPPORT_MUL && op == 7'b0110011 && f7 == 1 && !f3[2];
+    wire div_op = !is_compressed && SUPPORT_DIV && op == 7'b0110011 && f7 == 1 && f3[2];
+    wire branch_op = !is_compressed && op == 7'b1100011;
+    wire jal = !is_compressed && op == 7'b1101111;
+    wire jalr = !is_compressed && op == 7'b1100111;
+    wire load_op = !is_compressed && (op == 7'b0000011 || (SUPPORT_FLOAT && op == 7'b0000111));
+    wire store_op = !is_compressed && (op == 7'b0100011 || (SUPPORT_FLOAT && op == 7'b0100111));
+    wire atomic_op = !is_compressed && SUPPORT_ATOMIC && op == 7'b0101111;
+    wire fused = !is_compressed && SUPPORT_FLOAT && (op inside {7'b1000011,7'b1000111,7'b1001011,7'b1001111});
+    wire float_op = !is_compressed && SUPPORT_FLOAT && op == 7'b1010011;
+    wire convert_op = float_op && (f5 inside {5'b11000,5'b11010,5'b11100,5'b11110});
+    wire csr_op = !is_compressed && op == 7'b1110011 && f3 != 0;
+    wire system_op = !is_compressed && (op == 7'b0001111 || (op == 7'b1110011 && f3 == 0));
+    wire c_addi4 = is_compressed && c[1:0] == 0 && c[15:13] == 0;
+    wire c_ci = is_compressed && c[1:0] == 1 && (c[15:13] inside {3'b000,3'b010,3'b011});
+    wire c_math = is_compressed && c[1:0] == 1 && c[15:13] == 4;
+    wire c_branch = is_compressed && c[1:0] == 1 && (c[15:13] inside {3'b110,3'b111});
+    wire c_jump = is_compressed && c[1:0] == 1 && (c[15:13] inside {3'b001,3'b101});
+    wire c_shift = is_compressed && c[1:0] == 2 && c[15:13] == 0;
+    wire c_cr = is_compressed && c[1:0] == 2 && c[15:13] == 4;
+    wire c_load = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 2 || (SUPPORT_FLOAT && c[15:13] == 3));
+    wire c_store = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 6 || (SUPPORT_FLOAT && c[15:13] == 7));
+    assign packet.common.pc = pc;
+    assign packet.common.trap_type = trap;
+    assign packet.common.immediate = immediate_direct;
+    // Reserved packet field; execution derives fall-through locally.
+    assign packet.common.next_pc = 'x;
+    assign packet.common.rs1 = rs1_in;
+    assign packet.common.rs1_float = rs1_float_in;
+    assign packet.common.rs2 = rs2_in;
+    assign packet.common.rs2_float = rs2_float_in;
+    assign packet.common.rd = rd_in;
+    assign packet.common.rd_float = rd_float_in;
+    assign packet.fp.rs3 = rs3_in;
+    assign packet.fp.rs3_float = rs3_float_in;
+    assign packet.fp.rs3_valid = ok && fused;
+    // Source presence is independent of operation payload selection. The bank
+    // flags preserve f0 as an ordinary operand while suppressing integer x0.
+    assign packet.common.rs1_valid = ok && (rs1_float_in || rs1_in != 0) &&
+        (r_alu || i_alu || mul_op || div_op || branch_op || jalr ||
+         load_op || store_op || atomic_op || fused || float_op ||
+         (csr_op && !f3[2]) || c_addi4 || c_load || c_store || c_math ||
+         c_branch || c_shift ||
+         (c_ci && (c[15:13] == 0 || (c[15:13] == 3 && c[11:7] == 2))) ||
+         (c_cr && (c[6:2] == 0 || c[12])));
+    assign packet.common.rs2_valid = ok && (rs2_float_in || rs2_in != 0) &&
+        (r_alu || mul_op || div_op || branch_op || store_op ||
+         (atomic_op && f5 != 2) || fused ||
+         (float_op && (f5 inside {5'd0,5'd1,5'd2,5'd3,5'd4,5'd5,5'd20})) ||
+         c_store || (c_math && c[11:10] == 3) || (c_cr && c[6:2] != 0));
+    assign packet.common.rd_valid = ok && (rd_float_in || rd_in != 0) &&
+        (r_alu || i_alu || upper || mul_op || div_op || jal || jalr ||
+         load_op || atomic_op || fused || float_op || csr_op || c_addi4 ||
+         c_ci || c_math || c_shift || c_load || (c_jump && !c[15]) ||
+         (c_cr && (c[6:2] != 0 || c[12])));
+
+    // common.capability
+    always_comb begin
+        packet.common.capability = CAP_ALU;
+        if (ok) begin
+            case (1'b1)
+                mul_op: packet.common.capability = CAP_MUL;
+                div_op: packet.common.capability = CAP_DIV;
+                branch_op || jal || jalr || c_branch || c_jump || (c_cr && c[6:2] == 0): packet.common.capability = CAP_BRU;
+                load_op || store_op || c_load || c_store: packet.common.capability = CAP_MEMORY;
+                atomic_op: packet.common.capability = CAP_ATOMIC;
+                convert_op: packet.common.capability = CAP_FP_CONVERT;
+                fused || float_op: packet.common.capability = CAP_FP_F;
+                csr_op: packet.common.capability = CAP_CSR;
+                system_op: packet.common.capability = CAP_SYSTEM;
+                default: ;
+            endcase
+        end
+    end
+    always_comb begin
+        lane_type = INTEGER;
+        if (ok) begin
+            case (1'b1)
+                load_op || store_op || atomic_op || c_load || c_store: lane_type = MEMORY;
+                fused || float_op: lane_type = FLOATING;
+                csr_op || system_op: lane_type = SERIAL;
+                default: ;
+            endcase
+        end
+    end
+
+    // alu.operation
+    always_comb begin
+        packet.alu.operation = AluOperation_'('x);
+        case (1'b1)
+            (r_alu || i_alu) && f3 == 3'd0: packet.alu.operation = (r_alu && instruction[30]) ? ALU_SUB : ALU_ADD;
+            (r_alu || i_alu) && f3 == 3'd1: packet.alu.operation = ALU_SLL;
+            (r_alu || i_alu) && f3 == 3'd2: packet.alu.operation = ALU_SLT;
+            (r_alu || i_alu) && f3 == 3'd3: packet.alu.operation = ALU_SLTU;
+            (r_alu || i_alu) && f3 == 3'd4: packet.alu.operation = ALU_XOR;
+            (r_alu || i_alu) && f3 == 3'd5: packet.alu.operation = instruction[30] ? ALU_SRA : ALU_SRL;
+            (r_alu || i_alu) && f3 == 3'd6: packet.alu.operation = ALU_OR;
+            (r_alu || i_alu) && f3 == 3'd7: packet.alu.operation = ALU_AND;
+            upper || jal || jalr || load_op || store_op || c_addi4 || c_ci || c_load || c_store || c_jump || c_cr: packet.alu.operation = ALU_ADD;
+            c_shift: packet.alu.operation = ALU_SLL;
+            c_math && c[11:10] == 0: packet.alu.operation = ALU_SRL;
+            c_math && c[11:10] == 1: packet.alu.operation = ALU_SRA;
+            c_math && c[11:10] == 2: packet.alu.operation = ALU_AND;
+            c_math && c[11:10] == 3 && c[6:5] == 2'd0: packet.alu.operation = ALU_SUB;
+            c_math && c[11:10] == 3 && c[6:5] == 2'd1: packet.alu.operation = ALU_XOR;
+            c_math && c[11:10] == 3 && c[6:5] == 2'd2: packet.alu.operation = ALU_OR;
+            c_math && c[11:10] == 3 && c[6:5] == 2'd3: packet.alu.operation = ALU_AND;
+            default: ;
+        endcase
+    end
+
+    // alu.source
+    always_comb begin
+        packet.alu.source = AluSource_'('x);
+        case (1'b1)
+            r_alu || (c_math && c[11:10] == 3) || (c_cr && c[6:2] != 0): packet.alu.source = ALU_RS1_RS2;
+            (upper && op[5]) || (c_ci && c[15:13] == 3 && c[11:7] != 2): packet.alu.source = ALU_ZERO_IMM;
+            upper || jal || c_jump: packet.alu.source = ALU_PC_IMM;
+            i_alu || jalr || load_op || store_op || c_addi4 || c_ci || c_math || c_shift || c_load || c_store || c_cr: packet.alu.source = ALU_RS1_IMM;
+            default: ;
+        endcase
+    end
+
+    // bru.operation
+    always_comb begin
+        packet.bru.operation = BR_NONE;
+        if (ok) begin
+            case (1'b1)
+                jal || c_jump: packet.bru.operation = BR_JAL;
+                jalr || (c_cr && c[6:2] == 0): packet.bru.operation = BR_JALR;
+                c_branch: packet.bru.operation = c[13] ? BR_NE : BR_EQ;
+                branch_op && f3 == 3'd0: packet.bru.operation = BR_EQ;
+                branch_op && f3 == 3'd1: packet.bru.operation = BR_NE;
+                branch_op && f3 == 3'd4: packet.bru.operation = BR_LT;
+                branch_op && f3 == 3'd5: packet.bru.operation = BR_GE;
+                branch_op && f3 == 3'd6: packet.bru.operation = BR_LTU;
+                branch_op && f3 == 3'd7: packet.bru.operation = BR_GEU;
+                default: ;
+            endcase
+        end
+    end
+    assign packet.bru.is_branch = is_branch;
+    assign packet.bru.is_compressed = is_compressed;
+    assign packet.bru.predicted_taken = predicted_taken;
+
+    // mul.operation
+    always_comb begin
+        packet.mul.operation = MulOperation_'('x);
+        case (1'b1)
+            mul_op: packet.mul.operation = MulOperation_'(f3[1:0]);
+            default: ;
+        endcase
+    end
+
+    // div.operation
+    always_comb begin
+        packet.div.operation = DivOperation_'('x);
+        case (1'b1)
+            div_op: packet.div.operation = DivOperation_'(f3[1:0]);
+            default: ;
+        endcase
+    end
+
+    // memory.operation
+    always_comb begin
+        packet.memory.operation = MEM_NONE;
+        if (ok) begin
+            case (1'b1)
+                load_op || c_load: packet.memory.operation = MEM_LOAD;
+                store_op || c_store: packet.memory.operation = MEM_STORE;
+                default: ;
+            endcase
+        end
+    end
+
+    // memory.size
+    always_comb begin
+        packet.memory.size = MemorySize_'('x);
+        case (1'b1)
+            atomic_op || c_load || c_store: packet.memory.size = MEM_WORD;
+            load_op || store_op: packet.memory.size = MemorySize_'(f3[1:0]);
+            default: ;
+        endcase
+    end
+
+    // memory.sign_extend
+    always_comb begin
+        packet.memory.sign_extend = 1'bx;
+        case (1'b1)
+            load_op: packet.memory.sign_extend = !f3[2] && !op[2];
+            c_load: packet.memory.sign_extend = !c[13];
+            default: ;
+        endcase
+    end
+
+    // atomic.operation
+    always_comb begin
+        packet.atomic.operation = ATOM_NONE;
+        if (ok) begin
+            case (1'b1)
+                atomic_op && f5 == 5'd2: packet.atomic.operation = ATOM_LR;
+                atomic_op && f5 == 5'd3: packet.atomic.operation = ATOM_SC;
+                atomic_op && f5 == 5'd1: packet.atomic.operation = ATOM_SWAP;
+                atomic_op && f5 == 5'd0: packet.atomic.operation = ATOM_ADD;
+                atomic_op && f5 == 5'd4: packet.atomic.operation = ATOM_XOR;
+                atomic_op && f5 == 5'd12: packet.atomic.operation = ATOM_AND;
+                atomic_op && f5 == 5'd8: packet.atomic.operation = ATOM_OR;
+                atomic_op && f5 == 5'd16: packet.atomic.operation = ATOM_MIN;
+                atomic_op && f5 == 5'd20: packet.atomic.operation = ATOM_MAX;
+                atomic_op && f5 == 5'd24: packet.atomic.operation = ATOM_MINU;
+                atomic_op && f5 == 5'd28: packet.atomic.operation = ATOM_MAXU;
+                default: ;
+            endcase
+        end
+    end
+
+    // atomic.acquire
+    always_comb begin
+        packet.atomic.acquire = 1'bx;
+        case (1'b1)
+            atomic_op: packet.atomic.acquire = instruction[26];
+            default: ;
+        endcase
+    end
+
+    // atomic.release_order
+    always_comb begin
+        packet.atomic.release_order = 1'bx;
+        case (1'b1)
+            atomic_op: packet.atomic.release_order = instruction[25];
+            default: ;
+        endcase
+    end
+
+    // fp.operation
+    always_comb begin
+        packet.fp.operation = FloatOperation_'('x);
+        case (1'b1)
+            fused && op[3:2] == 2'd0: packet.fp.operation = FP_MADD;
+            fused && op[3:2] == 2'd1: packet.fp.operation = FP_MSUB;
+            fused && op[3:2] == 2'd2: packet.fp.operation = FP_NMSUB;
+            fused && op[3:2] == 2'd3: packet.fp.operation = FP_NMADD;
+            float_op && f5 == 5'd0: packet.fp.operation = FP_ADD;
+            float_op && f5 == 5'd1: packet.fp.operation = FP_SUB;
+            float_op && f5 == 5'd2: packet.fp.operation = FP_MUL;
+            float_op && f5 == 5'd3: packet.fp.operation = FP_DIV;
+            float_op && f5 == 5'd11: packet.fp.operation = FP_SQRT;
+            float_op && f5 == 5'd4 && f3 == 3'd0: packet.fp.operation = FP_SGNJ;
+            float_op && f5 == 5'd4 && f3 == 3'd1: packet.fp.operation = FP_SGNJN;
+            float_op && f5 == 5'd4 && f3 == 3'd2: packet.fp.operation = FP_SGNJX;
+            float_op && f5 == 5'd5 && f3 == 3'd0: packet.fp.operation = FP_MIN;
+            float_op && f5 == 5'd5 && f3 == 3'd1: packet.fp.operation = FP_MAX;
+            float_op && f5 == 5'd20 && f3 == 3'd0: packet.fp.operation = FP_LE;
+            float_op && f5 == 5'd20 && f3 == 3'd1: packet.fp.operation = FP_LT;
+            float_op && f5 == 5'd20 && f3 == 3'd2: packet.fp.operation = FP_EQ;
+            default: ;
+        endcase
+    end
+
+    // fp.rounding_mode
+    always_comb begin
+        packet.fp.rounding_mode = 3'bxxx;
+        case (1'b1)
+            fused || (float_op && (f5 inside {5'd0,5'd1,5'd2,5'd3,5'd11})): packet.fp.rounding_mode = f3;
+            default: ;
+        endcase
+    end
+
+    // fp_convert.operation
+    always_comb begin
+        packet.fp_convert.operation = FloatConvertOperation_'('x);
+        case (1'b1)
+            float_op && f5 == 24: packet.fp_convert.operation = FPC_TO_INT;
+            float_op && f5 == 26: packet.fp_convert.operation = FPC_FROM_INT;
+            float_op && f5 == 30: packet.fp_convert.operation = FPC_FROM_BITS;
+            float_op && f5 == 28 && f3 == 0: packet.fp_convert.operation = FPC_TO_BITS;
+            float_op && f5 == 28 && f3 == 1: packet.fp_convert.operation = FPC_CLASS;
+            default: ;
+        endcase
+    end
+
+    // fp_convert.is_unsigned
+    always_comb begin
+        packet.fp_convert.is_unsigned = 1'bx;
+        case (1'b1)
+            float_op && (f5 == 24 || f5 == 26): packet.fp_convert.is_unsigned = instruction[20];
+            default: ;
+        endcase
+    end
+
+    // fp_convert.rounding_mode
+    always_comb begin
+        packet.fp_convert.rounding_mode = 3'bxxx;
+        case (1'b1)
+            float_op && (f5 == 24 || f5 == 26): packet.fp_convert.rounding_mode = f3;
+            default: ;
+        endcase
+    end
+
+    // system.operation
+    always_comb begin
+        packet.system.operation = SYS_NONE;
+        if (ok) begin
+            case (1'b1)
+                !is_compressed && op == 7'b0001111 && f3 == 0: packet.system.operation = SYS_FENCE;
+                !is_compressed && op == 7'b0001111 && f3 == 1: packet.system.operation = SYS_FENCE_I;
+                !is_compressed && instruction == 32'h30200073: packet.system.operation = SYS_MRET;
+                !is_compressed && instruction == 32'h10500073: packet.system.operation = SYS_WFI;
+                default: ;
+            endcase
+        end
+    end
+
+    // system.fence_predecessor
+    always_comb begin
+        packet.system.fence_predecessor = 4'bxxxx;
+        case (1'b1)
+            !is_compressed && op == 7'b0001111 && f3 == 0: packet.system.fence_predecessor = instruction[27:24];
+            default: ;
+        endcase
+    end
+
+    // system.fence_successor
+    always_comb begin
+        packet.system.fence_successor = 4'bxxxx;
+        case (1'b1)
+            !is_compressed && op == 7'b0001111 && f3 == 0: packet.system.fence_successor = instruction[23:20];
+            default: ;
+        endcase
+    end
+
+    // csr.operation
+    always_comb begin
+        packet.csr.operation = CSR_NONE;
+        if (ok) begin
+            case (1'b1)
+                csr_op && f3[1:0] == 1: packet.csr.operation = CSR_RW;
+                csr_op && f3[1:0] == 2: packet.csr.operation = CSR_RS;
+                csr_op && f3[1:0] == 3: packet.csr.operation = CSR_RC;
+                default: ;
+            endcase
+        end
+    end
+    assign packet.csr.read_enable = ok && csr_op && (f3[1:0] != 1 || instruction[11:7] != 0);
+    assign packet.csr.write_enable = ok && csr_op && (f3[1:0] == 1 || instruction[19:15] != 0);
+
+    // csr.use_immediate
+    always_comb begin
+        packet.csr.use_immediate = 1'bx;
+        case (1'b1)
+            csr_op: packet.csr.use_immediate = f3[2];
+            default: ;
+        endcase
+    end
+
+    always_comb begin
+        packet.csr.index = CSR_R'('x);
+        if (csr_op) begin
+            packet.csr.index = ROZ_R;
+            case (instruction[31:20])
+                MSTATUS: packet.csr.index = MSTATUS_R;
+                MTVEC: packet.csr.index = MTVEC_R;
+                MIP: packet.csr.index = MIP_R;
+                MIE: packet.csr.index = MIE_R;
+                MCYCLE: packet.csr.index = MCYCLE_R;
+                MCYCLEH: packet.csr.index = MCYCLEH_R;
+                MINSTRET: packet.csr.index = MINSTRET_R;
+                MINSTRETH: packet.csr.index = MINSTRETH_R;
+                MSCRATCH: packet.csr.index = MSCRATCH_R;
+                MEPC: packet.csr.index = MEPC_R;
+                MCAUSE: packet.csr.index = MCAUSE_R;
+                MISA: packet.csr.index = MISA_R;
+                12'd1: if (SUPPORT_FLOAT) packet.csr.index = FFLAGS_R;
+                12'd2: if (SUPPORT_FLOAT) packet.csr.index = FRM_R;
+                12'd3: if (SUPPORT_FLOAT) packet.csr.index = FCSR_R;
+                default: ;
+            endcase
+        end
+    end
 endmodule
