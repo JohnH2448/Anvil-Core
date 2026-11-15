@@ -54,6 +54,14 @@ only by global stall. Effective issue_consumed/acceptance still suppress reset a
 redirect. Decode uses the internal count for candidate selection; its validity,
 occupancy reset and outward serve_consumed independently enforce flush.
 
+Decode producer snapshots now resolve retained/refill metadata separately for each
+constant consumption outcome, using registered occupancy. issue_select_count directly
+selects the complete snapshot into its register, without post-mux validity/flush gates.
+
+DecoderSlice also consumes carried operand-use bits: actual rs1/rs2/rd validity is
+ok AND the corresponding predecoded bit. MUL/DIV/atomic/CSR class predicates use
+carried capability; detailed operation and legality decoding remain local.
+
 ## Invariants introduced by timing work
 
 History-specific invariants below describe the reverted experiment, not current RTL.
@@ -993,3 +1001,65 @@ qualification. No added state or stage. Updated current flow and Dispatch README
 Static interface/diff review only, no tests/lint/synthesis. Intended removal of the
 reported redirect-through-selection cone is unmeasured; redirect can still time
 to legitimate flush endpoints and synthesis may refactor don't-care logic.
+
+
+### 2026-11-15 - direct consumption mux into producer snapshot registers
+
+Latest user excerpt launches buffered op_rd_reg[0][4] and ends at Decode
+rs1_index_out_reg[0][1]/D: data delay 8.048 - 1.244 = 6.804 ns, eight LUTs.
+Capture required time/WNS not supplied. Path follows producer match/correction,
+readiness/consumption, 180-load keep control and producer snapshot selection.
+Approximate final keep generation/distribution plus metadata tail is 2.446 ns.
+
+Decode.sv now constructs producer_outcomes for every constant consumption count.
+Generate-time occupancy choices select aged/refreshed retained sources or fresh
+sources, then registered empty_slots chooses the complete candidate independently
+of live consumption. A direct issue_select_count mux feeds the concatenated rs1/rs2
+index/lane/capability registers. Removed producer metadata from keep/refill masked
+OR logic and from the packet valid/flush-conditioned assignment block.
+
+Invariant: d < retained_count selects old[d+consumed], otherwise fresh[d-retained].
+Generated branches keep all source indices in bounds. Existing per-source aging,
+write refresh, fresh-table capture aging, stall masking and buffered-write ordering
+are unchanged. Invalid/flushed metadata can capture arbitrary source data; packet
+validity still clears, and the first refill replaces that metadata before use.
+Stall still selects consume zero and disables aging while allowing corrections
+and refills. Payload/validity/structural hazard behavior is otherwise unchanged.
+No added pipeline state/stage. Tradeoff: independent occupancy candidate muxes and
+possibly greater consumption fanout; synthesis may refactor them. Timing unmeasured.
+Updated current flow and Dispatch README. Static mapping, packed-field order,
+bounds/interface and diff review only; no tests, lint or synthesis performed.
+
+
+### 2026-11-15 - reuse served scheduling metadata inside DecoderSlice
+
+Decode.sv now passes served rs1_used/rs2_used/rd_written into DecoderSlice.sv.
+Replaced repeated use/zero-register/bank equations with ok AND the carried bit.
+MUL, DIV, atomic and CSR predicates now compare carried capability, retaining
+SUPPORT_* gates for optional payload hardware. Removed unused conversion/system
+class predicates. Detailed suboperation, compressed-format, immediate and legality
+checks stay local; broad capabilities cannot distinguish load/store or branch forms.
+
+Invariant: RegisterSlice's legal-op use equations match the removed expressions
+without ok and preserve integer x0/floating f0 semantics. capability is aligned with
+the same instruction and produced by the existing priority classification; chosen
+class substitutions are exact for that interface. Actual destination validity and
+producer writes remain legality-qualified. RAW prechecks still independently permit
+false dependencies for illegal encodings. No state, stage or issue-policy change.
+Goal is less repeated post-serve decode logic; increased capability fanout may alter
+placement, so timing benefit is unmeasured. Current flow/README updated. Static
+predicate/interface/diff review only; no tests, lint, simulation or synthesis.
+
+### 2026-11-15 - identify 16:37 routed regression report
+
+User-pasted path matches local routed_worst_setup.rpt (16:37:53) and the later
+16:44:47 extraction from frontend_routed.dcp: WNS -2.082 ns, data 7.080 ns,
+logic 1.478 ns, route 5.602 ns, eight LUTs. Source Decode slot-one rs2[4],
+endpoint Decode slot-zero CSR operation[0]/D. The path follows correction/readiness,
+consumption and packet FIFO selection; CSR naming here denotes the selected payload,
+not evidence of CSR decoding on the path. Final shared selection has 162 loads.
+Data delay is 0.276 ns above the preceding supplied 6.804 ns path, with a different
+endpoint. Timing summary synthesis timestamp is 16:32:29; DecoderSlice/Decode last
+write is 16:35:34, so this run predates the latest served-metadata DecoderSlice
+cleanup. Exact inclusion of the producer-outcome change is not established by
+these timestamps alone, without an RTL snapshot. No RTL edits or runs performed.

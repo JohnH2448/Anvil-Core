@@ -461,3 +461,19 @@ Decode independently clears packet validity, resets occupancy and suppresses
 outward serve_consumed. Flushed payload selection is unobservable. This removes
 redirect from the normal consumption-to-keep/refill selection cone without changing
 stall retention or refilling semantics.
+
+
+Producer snapshots use a separate direct consumption mux: fixed aged/refreshed
+sources are assembled into one complete metadata outcome per possible pop count,
+with occupancy resolved before issue_select_count selects the register input.
+The snapshot registers capture unconditionally, with no post-mux validity/flush
+qualification; their contents are unobservable when the corresponding packet is
+invalid. Existing stall-aware aging, buffered corrections and FIFO alignment remain.
+
+
+DecoderSlice consumes the carried operand-use bits directly, qualifying each with
+ok for actual rs1/rs2/rd validity. It reuses capability for exact MUL/DIV/atomic/CSR
+class predicates; optional payload logic retains SUPPORT_* guards. Detailed
+suboperation/format/immediate decoding and legality checks remain local. This
+removes duplicated operand-use and zero-register checks after serve selection
+without changing producer write qualification.

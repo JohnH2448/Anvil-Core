@@ -106,6 +106,9 @@ module DecodeStage
             .rs3_float_in(serve_rs3_float[i]),
             .rd_float_in(serve_rd_float[i]),
             .capability_in(DecodeCapability_'(serve_capability[i])),
+            .rs1_used_in(serve_rs1_used[i]),
+            .rs2_used_in(serve_rs2_used[i]),
+            .rd_written_in(serve_rd_written[i]),
             .pc(serve_pc_reg[i]),
             .is_branch(serve_branch_reg[i]),
             .is_compressed(serve_c_reg[i]),
@@ -344,7 +347,7 @@ module DecodeStage
         logic refill [ISSUE_WIDTH];
         DecoderPacket_ packet_next;
         LaneType_ lane_next;
-        OperandProducers_ producers_next;
+        OperandProducers_ producer_outcomes [ISSUE_WIDTH+1];
         logic valid_next;
         logic [2:0] usage_next;
         logic [ISSUE_WIDTH:0] raw_candidates, serial_candidates, resource_candidates;
@@ -374,6 +377,34 @@ module DecodeStage
             end else begin : no_refill_choice
                 assign refill[source_slot] = 1'b0;
             end
+        end
+
+        // Resolve occupancy for each fixed pop count before the late selector.
+        // The fixed sources already include capture-edge aging and write refresh.
+        for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : producer_selection
+            OperandProducers_ occupancy_outcomes [ISSUE_WIDTH-consumed+1];
+            for (genvar empty = 0; empty <= ISSUE_WIDTH - consumed; empty++) begin : occupancy
+                localparam int RETAINED = ISSUE_WIDTH - empty - consumed;
+                if (destination < RETAINED) begin : keep_source
+                    assign occupancy_outcomes[empty] = retained_producers[destination + consumed];
+                end else begin : refill_source
+                    assign occupancy_outcomes[empty] = refill_producers[destination - RETAINED];
+                end
+            end
+            always_comb begin
+                producer_outcomes[consumed] = 'x;
+                for (int empty = 0; empty <= ISSUE_WIDTH - consumed; empty++) begin
+                    if (empty_slots == COUNT_W'(empty))
+                        producer_outcomes[consumed] = occupancy_outcomes[empty];
+                end
+            end
+        end
+        // Metadata is unobservable for invalid/flushed slots. No validity or
+        // flush qualification follows this mux, and no new hold enable is needed.
+        always_ff @(posedge clk) begin
+            {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination],
+             rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]}
+                <= producer_outcomes[issue_select_count];
         end
 
         // Each outcome is independent of live issue_select_count. Occupancy,
@@ -431,7 +462,6 @@ module DecodeStage
             packet_next = '0;
             usage_next = '0;
             lane_next = LaneType_'('0);
-            producers_next = '0;
             valid_next = 1'b0;
             for (int source_slot = 0; source_slot < ISSUE_WIDTH; source_slot++) begin
                 usage_next |= {3{keep[source_slot]}} & structural_usage[source_slot];
@@ -441,8 +471,6 @@ module DecodeStage
                 lane_next = LaneType_'(lane_next |
                     ({$bits(LaneType_){keep[source_slot]}} & lane_types_out[source_slot]) |
                     ({$bits(LaneType_){refill[source_slot]}} & lane_types[source_slot]));
-                producers_next |= {$bits(OperandProducers_){keep[source_slot]}} & retained_producers[source_slot];
-                producers_next |= {$bits(OperandProducers_){refill[source_slot]}} & refill_producers[source_slot];
                 valid_next |= keep[source_slot] || refill[source_slot];
             end
         end
@@ -455,14 +483,10 @@ module DecodeStage
                 packets_out[destination] <= 'x;
                 retained_usage[destination] <= 'x;
                 lane_types_out[destination] <= LaneType_'('x);
-                {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination]} <= 'x;
-                {rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]} <= 'x;
             end else begin
                 packets_out[destination] <= packet_next;
                 retained_usage[destination] <= usage_next;
                 lane_types_out[destination] <= lane_next;
-                {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination]} <= producers_next.rs1;
-                {rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]} <= producers_next.rs2;
             end
         end
     end
