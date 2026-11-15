@@ -125,9 +125,10 @@ module IntegerLane
         end
     end
 
-    // Decode Payload Latch (validity has one owner below).
+    // Payload advances through bubbles; validity has one owner below.
+    // Global stall must still preserve the packet waiting for operands.
     always_ff @(posedge clk) begin
-        if (accept && !stall) begin
+        if (!stall) begin
             decoder_payload[0] <= decoder_packet;
             issuer_payload[0] <= issuer_packet;
         end

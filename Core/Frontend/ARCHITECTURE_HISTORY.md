@@ -14,9 +14,9 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
-1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd and their register-bank flags alongside branch prediction, using the same extension support parameters as decoding.
+1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd, their register-bank flags, encoding-only operand-use bits and capability alongside branch prediction, using the same extension support parameters as decoding.
 2. Source addresses are latched with prediction results, compacted into the instruction FIFO, and carried through speculative serve windows with instruction, PC, validity, and prediction flags.
-3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects payload/state combinationally. Each served position has dedicated preserved one-hot selector registers for rs1 and rs2 (including bank flags); these select the same outcome. Dual issue has three outcomes: 0, 1, 2.
+3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects all payload fields and FIFO state combinationally, including rs1/rs2 and their bank flags. Dual issue has three outcomes: 0, 1, 2.
 4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled. Table read outputs precompute capture-edge progress per entry before source-address selection; retained snapshots and buffered corrections age independently before their correction mux.
 5. Issuer registers accepted integer writes in a one-advancing-cycle buffer, suppressing older duplicate destinations before capture. Buffered rd/source matches correct both readiness and forwarding; all buffered writers precede all current Decode packets.
 6. Decode absorbs buffered corrections into retained and refill metadata. Candidates are independently aged before correction selection, equivalent to aging the selected producer; the producer table commits the same buffer at index one. Stall holds buffer/table progress, while Decode may absorb unaged corrections into empty-slot refills. Reset/redirect clears buffer validity. No live Issue write reaches Decode refresh or table inputs combinationally.
@@ -24,6 +24,35 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 Source extraction's module file remains under Dispatch even though Fetch instantiates it. The old instruction-counted history remains removed; the current write buffer is replaced every advancing cycle, including idle cycles.
 
 Current producer metadata contains only index, lane, and capability. IssueContract derives readiness directly from index/capability and configured execution/divider bounds; no countdown state or wiring remains. RF-position entries are ready independently of capability.
+
+FrontendTop's representative lane input payload registers capture every unstalled
+cycle; acceptance controls only validity. IntegerLane's actual input payload latch
+uses the same rule. Invalid payload is unspecified and must not be observed as
+an instruction; global stall still preserves in-flight payload.
+
+Lane allocation preselects distinct compatible lanes from packet capabilities and
+validity, independently of issue_good. Packet muxes follow those assignments;
+IssueContract only authorizes their acceptance/consumption/write validity. A valid
+but blocked younger packet can affect the older packet's lane preference.
+
+Decode precomputes lane-resource feasibility, same-group rs1/rs2 RAW and serial/serial conflicts between
+fixed retained/refill packet candidates. Independent constant-consumption outcomes incorporate occupancy, validity and
+flush before a direct issue_consumed mux selects bits for registration alongside
+the next packet group. IssueContract consumes
+those registered flags; producer readiness and live serial occupancy remain local.
+
+Decoder capability/lane type follow encoding independently of trap legality.
+Capability is predecoded in Fetch and carried through prediction, FIFO and serve
+banks into DecoderSlice. RAW precomputation uses carried encoding-only operand-use
+bits, allowing false hazards on illegal instructions. Trapping packets keep their
+classified route; trap_type and legality-qualified
+operand/write/side-effect controls remain authoritative. All implemented lane
+classes must deliver traps; noninteger lane execution remains unfinished.
+
+Issuer supplies Decode with issue_select_count: the normal contract count masked
+only by global stall. Effective issue_consumed/acceptance still suppress reset and
+redirect. Decode uses the internal count for candidate selection; its validity,
+occupancy reset and outward serve_consumed independently enforce flush.
 
 ## Invariants introduced by timing work
 
@@ -631,3 +660,336 @@ write buffer, and one-hot source serve selectors remain intact. No new measureme
 was supplied for the ready-index experiment; do not label it a measured failure.
 Updated README/current description, preserved experiment history. Static reference
 and diff review only; no synthesis or tests run.
+
+
+### 2026-11-15 - parallel source eligibility before correction selection
+
+Issue.sv computes each Decode snapshot's eligibility directly from its uncorrected
+index/capability, combining readiness thresholds and the index-zero bypass rule.
+Each buffered writer's eligibility simplifies to BYPASS_ENABLED && CAP_ALU because
+buffer entries represent index zero. These writer bits are shared by all sources.
+Explicit per-source destination matches drive both a parallel one-bit eligibility
+selector and the independent forwarding index/lane selector. Issuer no longer muxes
+producer capability into corrected metadata because there is no downstream consumer.
+The table, Decode snapshots, and write buffer still retain producer capability.
+
+IssueContract.sv now takes rs1_eligible/rs2_eligible instead of producer metadata.
+It applies operand-valid masking and retains one copy of RAW, resource, serial,
+prefix and validity checks. Removed its now-unused producer timing/bypass parameters.
+No state or pipeline latency added, and no allocator/contract duplication. Reset/RF
+snapshots remain eligible without depending on unspecified capability. Index-zero
+non-ALU producers remain blocked, including unroll zero; disabling bypass makes
+all buffer candidates ineligible. Unused operands remain ignored. Integer/FP bank
+qualification, nonzero write qualification, unique buffered destinations, stall,
+redirect, and correction absorption are unchanged.
+
+Goal: replace match -> metadata mux -> readiness decode with parallel candidate
+checks -> match-controlled one-bit selection. Comparisons and a late eligibility
+selection remain necessary; the prior 1.023 ns segment is not guaranteed to vanish.
+Tradeoff: eligibility checks are duplicated only per snapshot and shared buffered
+writer, with possible match fanout effects. Latest supplied baseline is 6.266 ns
+data / -1.687 ns slack. No new timing measurement. Static interface/reference,
+Boolean eligibility, and diff review only; no synthesis, simulation or tests run.
+Updated current flow and Dispatch README.
+
+
+### 2026-11-15 - fix synthesis identifier errors and compressed decode collision
+
+User synthesis failed because the parallel-eligibility edit used reserved SV
+keyword matches as a function argument and generate label in Issue.sv. Renamed
+them match_mask and source_matches; the remaining Issue errors in the supplied
+log follow those parse failures. No intended logic change to eligibility.
+
+The same log exposed existing duplicate c_jump/c_branch declarations in
+DecoderSlice.sv: immediate vectors collided with scalar instruction predicates.
+Renamed only the vectors and their immediate-construction uses to c_jump_imm /
+c_branch_imm. Scalar classification predicates retain their names. This restores
+separate immediate and control nets; Vivado previously ignored the second
+declarations, so earlier compressed behavior must not be treated as verified.
+No stage/interface change; compressed immediate bit layouts are unchanged.
+Static references and diff formatting checked. No synthesis or simulation rerun;
+the supplied failing run does not establish validation of these fixes.
+
+
+### 2026-11-15 - restore Prototype 1.9 RTL
+
+At user request, restored all modified RTL to a0382b8 (Prototype 1.9): Issue.sv,
+IssueContract.sv, and DecoderSlice.sv. Other RTL already matched that commit.
+Restored Dispatch README; preserved this experiment history and the unrelated
+user edit in Package/README.md. Saved the pre-reversion working diff under
+build/frontend_ooc/snapshots/20261115_before_restore_prototype_1_9/working_changes.patch.
+
+This commit records the post-countdown-removal design associated with the supplied
+6.266 ns / -1.687 ns result. Parallel eligibility is removed: corrected metadata
+again feeds the single IssueContract readiness/bypass checks. Countdown removal,
+one-hot source selectors, index aging, and producer write buffer remain.
+Latest supplied regressed path was 6.843 ns data, eight LUTs, 5.674 ns routing;
+0.577 ns slower than the recorded best, entirely in routing. The comparisons
+also include the compressed-decoder correction and may include configuration
+changes, so do not attribute the entire regression to parallel eligibility.
+
+Exact RTL restoration also reintroduces Prototype 1.9's known c_jump/c_branch
+immediate-vector versus predicate naming collisions. The prior corrective change
+is preserved in the saved patch/history. This baseline is not a correctness-
+validated design. No new timing run; reported best timing has not been reproduced
+in this task. Verified RTL diff against a0382b8 is empty and diff formatting passes.
+
+
+### 2026-11-15 - remove acceptance from lane input payload enables
+
+Frontend/Top.sv modeled lane inputs now capture decoder/issuer payload on every
+unstalled, non-flush edge, including bubbles. dispatch_accept updates validity only.
+Backend/Execute/Integer/IntegerLane.sv similarly removes accept from its stage-zero
+payload enable, retaining !stall. No changes to valid pipelines, issue decisions,
+producer writes, or FIFO consumption. Frontend sink reset/redirect invalidation
+is unchanged; actual IntegerLane retains its existing reset/redirect valid rules.
+
+Reviewed integer operand stall (masked by stage-zero valid), branch redirect
+(stage-one valid), MUL/DIV starts (stage-one valid), result/trap qualification,
+and the existing unconditional-on-advance later payload stages. Bubble payload
+may toggle or be unknown but cannot represent a valid instruction. Stalls preserve
+both operands/metadata and valid state; an older instruction advances using old
+register values on the edge that a new bubble payload is captured. Non-integer
+lanes remain stubs; frontend sinks model their required valid-qualified interface,
+not verified execution behavior. No arithmetic or completion state was changed.
+
+Goal: remove late acceptance from wide payload CE distribution (prior worst final
+net had 117 loads / 1.125 ns). It still controls validity and influences selected
+payload, so the worst path can move to a data pin. Tradeoff: bubble-cycle switching
+increases, and consumers cannot rely on stale payload when invalid. No extra stage.
+Static consumer/diff review only; no synthesis, simulation, or tests run. Timing
+benefit unmeasured. Updated Dispatch README; baseline remains Prototype 1.9 plus
+this change, including its documented compressed-decoder naming collision caveat.
+
+
+### 2026-11-15 - remove dedicated one-hot source selectors
+
+At user request, removed rs1_select/rs2_select registers, their DONT_TOUCH attributes,
+source-specific masked-OR muxes, and consumption equality decoding in Fetch/Queue.sv.
+All serve fields again select serve_bank[prev_serve_consumed][lane], sharing the
+registered binary consumption choice with FIFO state. Speculative candidate banks
+remain; this does not restore late consumption into their payload capture logic.
+
+Reason: after removing payload acceptance enables, the supplied worst path moved
+from buffered op_write through readiness/issue_consumed/available_slots to a
+one-hot source-selector D pin. Data delay inferred from the excerpt is 6.698 ns;
+full slack was not supplied. Removing one-hot encoding should reduce backward-path
+work and selector-register loads, but can worsen forward source selection. The
+new tradeoff is unmeasured. All payload/state fields stay aligned to one selector;
+reset/redirect and FIFO/stall behavior remain unchanged. Payloads still capture
+through bubbles; countdown removal, producer buffering and index-aging remain.
+Updated current flow and README. Static diff/reference review only; no synthesis,
+simulation or tests run. Earlier experiment records retained.
+
+
+### 2026-11-15 - preselect lanes independently of issue eligibility
+
+Issue.sv now computes assigned_lanes, index_array and issue_lane without issue_good,
+reset, stall or redirect in the allocation cone. Invalid packet masks are zeroed
+so unspecified invalid capabilities cannot affect older lane choices. Every valid
+younger packet participates in scarce-lane preference, even if it is not ready.
+Fixed assignments drive decoder/issuer payload muxes continuously. Separate final
+logic combines assignments with issue_good and reset/stall/redirect masking for
+accept_vector. Contract-based consumption and integer write qualification retain
+their existing rules; buffered lane identity uses the exact preselected lane.
+
+For supported widths one/two, the allocator still finds a distinct pairing whenever
+both masks are nonempty and their union has at least two lanes. The older packet
+uses a lane outside the younger mask when possible; otherwise either older choice
+leaves a younger option whenever the pair fits. If a pair cannot fit, oldest still
+gets its preferred compatible lane and contract suppresses the younger instruction.
+A blocked younger packet can change which lane the older uses, but not the number
+issued under the existing static compatible-lane model. Serial and RAW/prefix rules
+remain contract-owned. Future dynamically busy lanes must enter compatibility.
+
+Goal: remove late readiness from lane preference, priority selection, used-lane
+masking and payload mux control. Acceptance and consumption necessarily still
+await readiness. No additional contract copy, state, or pipeline latency. Possible
+cost is different lane utilization/placement and a new validity fanout dependency.
+Static dual-mask reasoning, interface and diff review only; no synthesis or tests.
+Updated README/current flow. Timing benefit remains unmeasured. Countdown removal,
+binary serve selection and payload capture through bubbles remain unchanged.
+
+
+### 2026-11-15 - precompute structural pair hazards before Decode capture
+
+Decode.sv compares ordered pairs of fixed retained and newly decoded packets for
+same-group rs1/rs2 RAW (including register-bank and operand/destination-valid
+qualification) and serial/serial conflicts. Existing keep/refill masks select the
+pair results for the next group; the selected bits register alongside packets.
+Dispatch/Top.sv and Issue.sv carry group_raw/group_serial to IssueContract.sv,
+which no longer compares same-group register addresses or scans older serial ops.
+Live serial_active and all producer-dependent readiness/bypass checks stay in Issue.
+Updated current flow and Dispatch README.
+
+Correctness: masks already include packet validity and preserve program order;
+retained sources precede refill sources. Every shift/refill rebuilds group hazards,
+so a consumed producer no longer blocks its former younger consumer. Slot zero has
+no same-group predecessor. Empty/partial groups, no-pop refills, and stall refills
+use the identical packet selection; flags flush on reset, delayed reset, or redirect.
+No new stall enable is added because Decode may refill during global stall.
+Integer x0 suppression remains rd_valid/rs_valid-owned; floating bank matching and
+f0 behavior are preserved. This moves only existing rs1/rs2 checks; rs3 tracking
+and floating producer-table support remain outstanding.
+
+Reason: move payload-only hazard work ahead of Decode capture, leaving late
+issue_consumed to select already calculated bits. No extra stage or replicated
+producer readiness logic. Cost is extra candidate-pair comparisons and registered
+flags (slot-zero constants should prune). Fresh decode-to-hazard and consumption-
+to-selection paths may grow; timing benefit is unmeasured. Static interface,
+selection/alignment and diff review only; no tests, lint, simulation or synthesis.
+
+### 2026-11-15 - user-reported preemptive lane selection timing
+
+User reports WNS of -1.699 ns for the preemptive lane-selection run, before
+structural RAW/serial pair precomputation. Use this as the immediate comparison
+baseline for the structural-precomputation run, which the user reports is now
+running. No full timing report, path breakdown, or run configuration was supplied
+with this result; no attribution of individual path improvements is established.
+This records the user's measurement only. No RTL changes or tool runs performed.
+
+### 2026-11-15 - structural precomputation first timing result
+
+User reports regression versus the -1.699 ns WNS preemptive-allocation baseline.
+Supplied excerpt launches Decode slot-zero rs1[2] and ends at group_raw_reg[1]/D.
+Arrival 8.697 ns minus launch clock 1.389 ns gives 7.308 ns data delay, with ten
+LUT levels. Clock-to-Q plus LUT delay is approximately 1.521 ns and routing
+approximately 5.787 ns. Capture clock/required time were omitted, so new WNS
+cannot be calculated from this excerpt.
+
+The path traverses buffered correction/readiness, acceptance/consumption and FIFO
+selection, then three LUTs into the newly registered RAW flag. Final segment from
+the empty_slots_reg[1]_0-named net's arrival at 7.418 ns to D takes 1.279 ns;
+intermediate synthesized names do not establish exact RTL field dependencies.
+This identifies next-group hazard selection as the new endpoint, not proof that
+pair comparisons themselves are late. Current implementation combines two packet
+selection masks with pair results. A possible follow-up is explicit per-consumption
+hazard outcomes followed by final consumption selection, especially for width two.
+No further RTL change, synthesis, or simulation performed; outcome-selection
+simplification is a proposal, not a measured improvement.
+
+
+### 2026-11-15 - direct consumption mux into structural flag registers
+
+Decode.sv now builds complete RAW/serial outcomes for each constant consumption
+count. Each outcome resolves retained/refill source identities from occupancy,
+qualifies source validity, reduces pair hazards, and applies flush independently
+of live issue_consumed. The register assignments directly index these outcome
+vectors with issue_consumed; no pair-selection mask or reduction follows that mux.
+Dispatch README/current flow updated. Packet/producer FIFO selection is unchanged.
+
+For each legal occupancy/pop combination, next slot d names old[d+pop] while
+within the retained suffix, otherwise fresh[d-retained_count]. Ordered pair
+checks use these same identities; slot zero remains clear. No-pop stall refills
+and partial groups retain alignment. Reset/delayed-reset/redirect clear candidate
+bits before selection; legal issue consumption remains a required invariant.
+No extra stage, producer logic, or issue policy change. This targets the measured
+three-LUT tail into group_raw; synthesis may refactor the RTL and a single physical
+mux level is not guaranteed. Static mapping/interface/diff review only; no tests,
+lint or synthesis. Timing remains unmeasured.
+
+
+### 2026-11-15 - direct-mux result and Decode lane feasibility
+
+User's direct-mux timing excerpt launches Fetch prev_serve_consumed_reg[0] and
+ends at Decode group_raw_reg[1]/D. Data delay is 7.857 - 1.230 = 6.627 ns,
+0.681 ns below the previous 7.308 ns excerpt. New WNS was not provided. The worst
+path now traverses serve selection, decode and the fresh/fresh RAW candidate;
+this does not independently measure issuer payload timing.
+
+Moved static execution-lane feasibility from IssueContract.sv into Decode.sv.
+Fixed retained/refill sources get compatible masks from the configured lane
+counts/capability arrays, with existing SUPPORT_* disabled-capability don't-cares.
+Oldest needs a nonempty mask; the younger slot needs a nonempty mask and at least
+two bits in the pair union. Oldest feasibility remains enforced by the final issue
+prefix. Each constant-consumption outcome resolves occupancy/validity/flush and
+selects its resource result independently of live consumption. Direct indexed
+capture into group_resource_bad mirrors RAW/serial flags. Dispatch/Top.sv and
+Issue.sv wire the registered result directly to IssueContract's execution-unit
+check. Actual lane assignment and payload muxes remain in Issuer.
+
+Retained/refill mapping, prefix validity, shifts, stall refills and flush alignment
+follow the existing structural candidates. Supports widths one/two, matching the
+existing Issuer limit; Decode now explicitly rejects wider widths rather than
+pretending pair checks establish wider feasibility. No new stage or dynamic
+readiness prediction. Tradeoff: more fixed-source capability/pair hardware before
+Decode capture, potentially worsening the now-critical forward decode path;
+expected Issue simplification is unmeasured. Updated current flow/Dispatch README.
+Static mask-equivalence, source mapping, interface and diff review only; no tests,
+lint, simulation or synthesis performed.
+
+
+### 2026-11-15 - separate capability routing from legality
+
+At user request, DecoderSlice.sv no longer wraps capability and lane-type
+classification in ok. Illegal and other trapping instructions retain the normal
+encoding-class route; unknown or disabled classes fall through to ALU/integer.
+Existing SUPPORT_* predicates still gate optional classes. trap_type generation,
+operand/destination validity and side-effect suppression are unchanged. This also
+routes ECALL/EBREAK according to their encoding rather than forcing ALU; compressed
+EBREAK follows the existing compressed control-transfer classification.
+
+Reason: remove full legality decoding from serial/resource precomputation inputs.
+This does not remove legality from RAW precomputation, whose valid bits still use
+ok. No stage change. Invariant: configured classified capabilities need compatible
+lanes and every selected lane must propagate trap_type without ordinary effects.
+Memory/floating/serial lanes remain stubs, so end-to-end trap delivery there is
+not verified or implemented by this change. A class with no compatible lane can
+block a trapped encoding; removing the fallback does not solve that configuration.
+Updated current description and Dispatch README. Static code/diff inspection only;
+no tests, lint or synthesis. Timing benefit unmeasured.
+
+
+### 2026-11-15 - carry encoding-only scheduling metadata from RegisterSlice
+
+RegisterSlice now produces rs1_used/rs2_used/rd_written and capability from the
+existing encoding predicates, bank flags, register identities and SUPPORT_* gates.
+No CSR/FP/compressed legality or trap decoding is included. Integer x0 is suppressed;
+floating f0 remains a register. Queue carries these fields through prediction,
+FIFO writes and every speculative serve candidate, widening packed serve entries
+from 92 to 99 bits (3 use bits plus the current 4-bit capability). Empty/reset
+candidate construction uses the derived width with validity zero and other bits X.
+FetchTop, FrontendTop, DispatchTop and Decode ports carry the same metadata.
+DecoderSlice takes capability directly; lane type derives from this carried class.
+
+Decode retains the three use bits alongside packets with identical keep/refill
+selection. All old/old, old/fresh and fresh/fresh RAW checks use those bits instead
+of legality-qualified packet valid fields. False same-group dependencies on illegal
+instructions are explicitly accepted: oldest has no pair RAW blocker, and hazards
+are rebuilt after consumption. Live producer readiness, actual rd_valid/write
+qualification, trap_type and side-effect controls remain legality-qualified and
+unchanged. Early rd_written never authorizes a producer write. Capability remains
+encoding-based for traps, with the previously documented lane-support obligations.
+No rs3 dependency tracking is added.
+
+This removes full decode legality from structural RAW candidates and moves
+capability classification before serve selection. Cost: seven more bits per stored
+Fetch entry/candidate, three retained-use bits per Decode slot and early combinational
+classification. No additional stage. Legal-op use equations were copied from Decode
+without ok; capability classification retains predicate order and extension guards.
+Static packing, interface, mapping and diff review only; no tests, lint or synthesis.
+Timing improvement is unmeasured. Current description and Dispatch README updated.
+
+
+### 2026-11-15 - remove flush from internal Decode consumption selection
+
+After early scheduling predecode, user reports worst WNS -2.218 ns on external
+redirect_taken to Decode rs2_index_out_reg[0][1]/D. Input delay is 3.750 ns;
+internal delay 4.585 ns, six LUTs, arrival 8.335 ns. The excerpt follows redirect
+masking through consumption/keep selection (180-load keep net) into producer
+metadata. It does not measure the new forward predecode paths. This pre-existing
+control dependency can become worst through other-path improvements or placement
+changes; exact relative contributions cannot be established from this excerpt.
+
+Issue.sv now exposes issue_select_count, normal issue_good population count masked
+only by stall. Effective issue_consumed remains reset/redirect/stall suppressed.
+Dispatch/Top.sv passes the internal count to Decode.sv, whose FIFO payload/count
+and structural-candidate selects no longer take flush-masked consumption. Decode
+still clears validity, resets occupancy and zeroes outward serve_consumed on reset,
+delayed reset or redirect; flushed payload is don't-care. Backend acceptance and
+producer writes/buffer flush are unchanged. Stall still prevents packet removal,
+while permitting existing refill behavior. Structural flags retain their flush
+qualification. No added state or stage. Updated current flow and Dispatch README.
+Static interface/diff review only, no tests/lint/synthesis. Intended removal of the
+reported redirect-through-selection cone is unmeasured; redirect can still time
+to legitimate flush endpoints and synthesis may refactor don't-care logic.

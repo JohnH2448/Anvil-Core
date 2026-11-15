@@ -47,3 +47,10 @@ zero placeholders until the topology is implemented.
 `DecoderPacket_` is the canonical packet name; `DecodedPacket_` is retained as
 an alias for existing tests. IntegerOperands_ is the shared integer execution
 payload used by the lane, multiplier, and divider.
+
+There is room to rethink the backend here, since the frontend largely supports it. Backend models with memory + integer capability per lane etc.
+
+Also note RAW isnt blocked when the first instruction is illegal. this means flush is neccisarry, which should already happen. the instruction
+will be computed wrong but its purely false specultive.
+
+also remember next_pc must be calculated dynamically

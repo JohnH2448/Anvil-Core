@@ -19,6 +19,9 @@ module IssueContract
     input DecoderPacket_ packets [ISSUE_WIDTH-1:0],
     input LaneType_ lane_types [ISSUE_WIDTH-1:0],
     input logic packets_valid [ISSUE_WIDTH-1:0],
+    input logic group_raw [ISSUE_WIDTH-1:0],
+    input logic group_serial [ISSUE_WIDTH-1:0],
+    input logic group_resource_bad [ISSUE_WIDTH-1:0],
     input logic serial_active,
 
     // Producer Table Recipient Data
@@ -80,26 +83,8 @@ module IssueContract
         end
     end
 
-    // RAW Check
-    always_comb begin
-        bad_raw = '{default: 1'b0};
-        for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            logic [4:0] destination;
-            destination = packets[i].common.rd;
-            for (int unsigned k = 0; k < ISSUE_WIDTH; k++) begin
-                if (k > i && packets_valid[i] && packets_valid[k] &&
-                    packets[i].common.rd_valid) begin
-                    if ((packets[k].common.rs1_valid && destination == packets[k].common.rs1 &&
-                         packets[i].common.rd_float == packets[k].common.rs1_float) ||
-                        (packets[k].common.rs2_valid && destination == packets[k].common.rs2 &&
-                         packets[i].common.rd_float == packets[k].common.rs2_float)) begin
-                        bad_raw[k] |= '1;
-                    end
-                end
-            end
-        end
-    end // future consideration to conditionally allow
-    // careful with state on younger instuctions with rd same as older rs. not a dependency but careful
+    // Decode latches same-group hazards alongside the selected FIFO packets.
+    assign bad_raw = group_raw;
 
     // Valid Check
     always_comb begin
@@ -141,120 +126,16 @@ module IssueContract
         end
     end
 
-    // Execution Unit Check
-    localparam int unsigned MEMORY_LANE_BASE = 1 + Parameters::INTEGER_LANE_COUNT;
-    localparam int unsigned FLOATING_LANE_BASE = MEMORY_LANE_BASE + Parameters::MEMORY_LANE_COUNT;
-    localparam logic [ISSUE_WIDTH:0] SUBSET_LIMIT = {1'b1, {ISSUE_WIDTH{1'b0}}};
-    logic [TOTAL_LANE_COUNT-1:0] compatible_lanes [ISSUE_WIDTH-1:0];
+    // Static resource feasibility is registered with the Decode group.
+    assign bad_execution_unit = group_resource_bad;
+
+    // Only live serial occupancy remains in this stage; pair conflicts were
+    // computed before Decode's FIFO latch.
     always_comb begin
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            compatible_lanes[i] = '0;
-            unique case (packets[i].common.capability)
-                CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV: begin
-                    for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
-                        if (lane < INTEGER_LANE_COUNT) begin
-                            unique case (packets[i].common.capability)
-                                CAP_ALU: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][0];
-                                CAP_BRU: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][1];
-                                CAP_MUL: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][2];
-                                CAP_DIV: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][3];
-                            endcase
-                        end
-                    end
-                end
-                CAP_MEMORY, CAP_ATOMIC: begin
-                    for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
-                        if (lane < MEMORY_LANE_COUNT) begin
-                            compatible_lanes[i][MEMORY_LANE_BASE + lane] =
-                                Parameters::MEMORY_LANE_CAPABILITIES[lane][2'(packets[i].common.capability == CAP_ATOMIC)];
-                        end
-                    end
-                end
-                CAP_FP_F, CAP_FP_CONVERT: begin
-                    for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
-                        if (lane < FLOATING_LANE_COUNT) begin
-                            compatible_lanes[i][FLOATING_LANE_BASE + lane] =
-                                Parameters::FLOATING_LANE_CAPABILITIES[lane][packets[i].common.capability == CAP_FP_CONVERT];
-                        end
-                    end
-                end
-                CAP_SYSTEM, CAP_CSR: begin
-                    compatible_lanes[i][SERIAL_LANE_ID] = 1'b1;
-                end
-            endcase
-
-            // Decode never emits a disabled capability. Leave its mask
-            // unspecified so synthesis can eliminate that decode path.
-            if ((SUPPORT_MUL == 0 && packets[i].common.capability == CAP_MUL) ||
-                (SUPPORT_DIV == 0 && packets[i].common.capability == CAP_DIV) ||
-                (SUPPORT_FLOAT == 0 && packets[i].common.capability inside {CAP_FP_F, CAP_FP_CONVERT}) ||
-                (SUPPORT_ATOMIC == 0 && packets[i].common.capability == CAP_ATOMIC)) begin
-                compatible_lanes[i] = 'x;
-            end
+            bad_serial[i] = group_serial[i] ||
+                (serial_active && (packets[i].common.capability inside {CAP_SYSTEM, CAP_CSR}));
         end
-    end
-
-    if (ISSUE_WIDTH <= 2) begin : narrow_resource_check
-        // A pair fits iff both masks are nonempty and their union has >=2 bits.
-        assign bad_execution_unit[0] = !(|compatible_lanes[0]);
-        if (ISSUE_WIDTH == 2) begin : pair
-            logic [TOTAL_LANE_COUNT-1:0] lane_union;
-            logic multiple_lanes;
-            assign lane_union = compatible_lanes[0] | compatible_lanes[1];
-            // Prefix OR avoids a full-width population counter/subtractor.
-            always_comb begin
-                logic seen;
-                seen = 1'b0;
-                multiple_lanes = 1'b0;
-                for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
-                    multiple_lanes |= seen && lane_union[lane];
-                    seen |= lane_union[lane];
-                end
-            end
-            assign bad_execution_unit[1] = !(|compatible_lanes[1]) || !multiple_lanes;
-        end
-    end else begin : general_resource_check
-        always_comb begin
-            logic [ISSUE_WIDTH-1:0] accepted_slots;
-            accepted_slots = '0;
-            for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-                logic [ISSUE_WIDTH-1:0] candidate_slots;
-                candidate_slots = accepted_slots;
-                candidate_slots[i] |= 1'b1;
-                bad_execution_unit[i] = 1'b0;
-
-                if (packets_valid[i]) begin
-                    // Older accepted slots already fit. Only subsets containing
-                    // this candidate can introduce a new lane conflict.
-                    for (logic [ISSUE_WIDTH:0] subset = 1; subset < SUBSET_LIMIT; subset++) begin
-                        logic [TOTAL_LANE_COUNT-1:0] lane_union;
-                        lane_union = '0;
-                        if (subset[i] && (subset[ISSUE_WIDTH-1:0] & ~candidate_slots) == '0) begin
-                            for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
-                                if (subset[slot]) lane_union |= compatible_lanes[slot];
-                            end
-                            if ($countones(lane_union) < $countones(subset)) begin
-                                bad_execution_unit[i] |= 1'b1;
-                            end
-                        end
-                    end
-                    accepted_slots[i] = !bad_execution_unit[i];
-                end
-            end
-        end
-    end
-
-    // Bad Serial
-    always_comb begin
-        logic serial_detected;
-        serial_detected = 1'b0;
-        for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            bad_serial[i] = 1'b0;
-            if (packets[i].common.capability inside {CAP_SYSTEM, CAP_CSR}) begin
-                bad_serial[i] = serial_active || serial_detected;
-                serial_detected |= packets_valid[i];
-            end
-        end // bitmask already applied due to structural reasons. 
     end
 
     // Final Acceptance Mask Build

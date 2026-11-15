@@ -1,4 +1,6 @@
-module RegisterSlice #(
+module RegisterSlice
+    import Enumerations::*;
+#(
     parameter unsigned SUPPORT_MUL = 1,
     parameter unsigned SUPPORT_DIV = 1,
     parameter unsigned SUPPORT_FLOAT = 1,
@@ -13,7 +15,11 @@ module RegisterSlice #(
     output logic rs1_float,
     output logic rs2_float,
     output logic rs3_float,
-    output logic rd_float
+    output logic rd_float,
+    output logic rs1_used,
+    output logic rs2_used,
+    output logic rd_written,
+    output DecodeCapability_ capability
 );
 
     logic [15:0] c;
@@ -211,6 +217,73 @@ module RegisterSlice #(
                 default: ;
             endcase
         end
+    end
+
+    // Encoding-only scheduling metadata. Deliberately ignores legality: false
+    // same-group RAW hazards are allowed, but these bits never authorize writes.
+    wire [6:0] op = instruction[6:0];
+    wire [2:0] f3 = instruction[14:12];
+    wire [6:0] f7 = instruction[31:25];
+    wire [4:0] f5 = instruction[31:27];
+    // Encoding predicates contain no decoded packet/output dependencies.
+    wire r_alu = !is_compressed && op == 7'b0110011 && f7 != 7'b0000001;
+    wire i_alu = !is_compressed && op == 7'b0010011;
+    wire upper = !is_compressed && (op inside {7'b0110111, 7'b0010111});
+    wire mul_op = !is_compressed && SUPPORT_MUL && op == 7'b0110011 && f7 == 1 && !f3[2];
+    wire div_op = !is_compressed && SUPPORT_DIV && op == 7'b0110011 && f7 == 1 && f3[2];
+    wire branch_op = !is_compressed && op == 7'b1100011;
+    wire jal = !is_compressed && op == 7'b1101111;
+    wire jalr = !is_compressed && op == 7'b1100111;
+    wire load_op = !is_compressed && (op == 7'b0000011 || (SUPPORT_FLOAT && op == 7'b0000111));
+    wire store_op = !is_compressed && (op == 7'b0100011 || (SUPPORT_FLOAT && op == 7'b0100111));
+    wire atomic_op = !is_compressed && SUPPORT_ATOMIC && op == 7'b0101111;
+    wire fused = !is_compressed && SUPPORT_FLOAT && (op inside {7'b1000011,7'b1000111,7'b1001011,7'b1001111});
+    wire float_op = !is_compressed && SUPPORT_FLOAT && op == 7'b1010011;
+    wire convert_op = float_op && (f5 inside {5'b11000,5'b11010,5'b11100,5'b11110});
+    wire csr_op = !is_compressed && op == 7'b1110011 && f3 != 0;
+    wire system_op = !is_compressed && (op == 7'b0001111 || (op == 7'b1110011 && f3 == 0));
+    wire c_addi4 = is_compressed && c[1:0] == 0 && c[15:13] == 0;
+    wire c_ci = is_compressed && c[1:0] == 1 && (c[15:13] inside {3'b000,3'b010,3'b011});
+    wire c_math = is_compressed && c[1:0] == 1 && c[15:13] == 4;
+    wire c_branch = is_compressed && c[1:0] == 1 && (c[15:13] inside {3'b110,3'b111});
+    wire c_jump = is_compressed && c[1:0] == 1 && (c[15:13] inside {3'b001,3'b101});
+    wire c_shift = is_compressed && c[1:0] == 2 && c[15:13] == 0;
+    wire c_cr = is_compressed && c[1:0] == 2 && c[15:13] == 4;
+    wire c_load = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 2 || (SUPPORT_FLOAT && c[15:13] == 3));
+    wire c_store = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 6 || (SUPPORT_FLOAT && c[15:13] == 7));
+    assign rs1_used = (rs1_float || rs1 != 0) &&
+        (r_alu || i_alu || mul_op || div_op || branch_op || jalr ||
+         load_op || store_op || atomic_op || fused || float_op ||
+         (csr_op && !f3[2]) || c_addi4 || c_load || c_store || c_math ||
+         c_branch || c_shift ||
+         (c_ci && (c[15:13] == 0 || (c[15:13] == 3 && c[11:7] == 2))) ||
+         (c_cr && (c[6:2] == 0 || c[12])));
+    assign rs2_used = (rs2_float || rs2 != 0) &&
+        (r_alu || mul_op || div_op || branch_op || store_op ||
+         (atomic_op && f5 != 2) || fused ||
+         (float_op && (f5 inside {5'd0,5'd1,5'd2,5'd3,5'd4,5'd5,5'd20})) ||
+         c_store || (c_math && c[11:10] == 3) || (c_cr && c[6:2] != 0));
+    assign rd_written = (rd_float || rd != 0) &&
+        (r_alu || i_alu || upper || mul_op || div_op || jal || jalr ||
+         load_op || atomic_op || fused || float_op || csr_op || c_addi4 ||
+         c_ci || c_math || c_shift || c_load || (c_jump && !c[15]) ||
+         (c_cr && (c[6:2] != 0 || c[12])));
+
+    // common.capability
+    always_comb begin
+        capability = CAP_ALU;
+        case (1'b1)
+            mul_op: capability = CAP_MUL;
+            div_op: capability = CAP_DIV;
+            branch_op || jal || jalr || c_branch || c_jump || (c_cr && c[6:2] == 0): capability = CAP_BRU;
+            load_op || store_op || c_load || c_store: capability = CAP_MEMORY;
+            atomic_op: capability = CAP_ATOMIC;
+            convert_op: capability = CAP_FP_CONVERT;
+            fused || float_op: capability = CAP_FP_F;
+            csr_op: capability = CAP_CSR;
+            system_op: capability = CAP_SYSTEM;
+            default: ;
+        endcase
     end
 
 endmodule

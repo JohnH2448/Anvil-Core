@@ -38,6 +38,10 @@ module FrontendTop
     logic serve_rs2_float [ISSUE_WIDTH-1:0];
     logic serve_rs3_float [ISSUE_WIDTH-1:0];
     logic serve_rd_float [ISSUE_WIDTH-1:0];
+    logic serve_rs1_used [ISSUE_WIDTH-1:0];
+    logic serve_rs2_used [ISSUE_WIDTH-1:0];
+    logic serve_rd_written [ISSUE_WIDTH-1:0];
+    logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0];
     logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0];
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
     logic serve_c_reg [ISSUE_WIDTH-1:0];
@@ -66,6 +70,10 @@ module FrontendTop
         .serve_rs2_float(serve_rs2_float),
         .serve_rs3_float(serve_rs3_float),
         .serve_rd_float(serve_rd_float),
+        .serve_rs1_used(serve_rs1_used),
+        .serve_rs2_used(serve_rs2_used),
+        .serve_rd_written(serve_rd_written),
+        .serve_capability(serve_capability),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
@@ -93,6 +101,10 @@ module FrontendTop
         .serve_rs2_float(serve_rs2_float),
         .serve_rs3_float(serve_rs3_float),
         .serve_rd_float(serve_rd_float),
+        .serve_rs1_used(serve_rs1_used),
+        .serve_rs2_used(serve_rs2_used),
+        .serve_rd_written(serve_rd_written),
+        .serve_capability(serve_capability),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
@@ -186,10 +198,9 @@ module FrontendTop
                 issuer_packet[lane] <= 'x;
             end else if (!stall) begin
                 accept_vector[lane] <= dispatch_accept[lane];
-                if (dispatch_accept[lane]) begin
-                    decoder_packet[lane] <= consumed_packet;
-                    issuer_packet[lane] <= consumed_issuer;
-                end
+                // Bubble payload is unobservable; late acceptance only sets valid.
+                decoder_packet[lane] <= consumed_packet;
+                issuer_packet[lane] <= consumed_issuer;
             end
         end
     end

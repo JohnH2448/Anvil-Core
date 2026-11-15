@@ -1,5 +1,6 @@
 module Queue
     import Definitions::*;
+    import Enumerations::*;
 #(
     parameter unsigned FETCH_WORDS = 2,
     parameter unsigned SUPPORT_MUL = Parameters::SUPPORT_MUL,
@@ -40,6 +41,10 @@ module Queue
     output logic serve_rs2_float [SERVE_WORDS-1:0],
     output logic serve_rs3_float [SERVE_WORDS-1:0],
     output logic serve_rd_float [SERVE_WORDS-1:0],
+    output logic serve_rs1_used [SERVE_WORDS-1:0],
+    output logic serve_rs2_used [SERVE_WORDS-1:0],
+    output logic serve_rd_written [SERVE_WORDS-1:0],
+    output logic [$bits(DecodeCapability_)-1:0] serve_capability [SERVE_WORDS-1:0],
     output logic [31:0] serve_pc_reg [SERVE_WORDS-1:0],
     output logic serve_valid_reg [SERVE_WORDS-1:0],
     output logic serve_c_reg [SERVE_WORDS-1:0],
@@ -148,6 +153,10 @@ module Queue
     logic packet_rs2_float [FETCH_SLOTS-1:0];
     logic packet_rs3_float [FETCH_SLOTS-1:0];
     logic packet_rd_float [FETCH_SLOTS-1:0];
+    logic packet_rs1_used [FETCH_SLOTS-1:0];
+    logic packet_rs2_used [FETCH_SLOTS-1:0];
+    logic packet_rd_written [FETCH_SLOTS-1:0];
+    DecodeCapability_ packet_capability [FETCH_SLOTS-1:0];
     logic [4:0] prediction_rs1 [FETCH_SLOTS-1:0];
     logic [4:0] prediction_rs2 [FETCH_SLOTS-1:0];
     logic [4:0] prediction_rd [FETCH_SLOTS-1:0];
@@ -156,6 +165,10 @@ module Queue
     logic prediction_rs2_float [FETCH_SLOTS-1:0];
     logic prediction_rs3_float [FETCH_SLOTS-1:0];
     logic prediction_rd_float [FETCH_SLOTS-1:0];
+    logic prediction_rs1_used [FETCH_SLOTS-1:0];
+    logic prediction_rs2_used [FETCH_SLOTS-1:0];
+    logic prediction_rd_written [FETCH_SLOTS-1:0];
+    logic [$bits(DecodeCapability_)-1:0] prediction_capability [FETCH_SLOTS-1:0];
     logic [4:0] fifo_rs1 [FIFO_WORDS-1:0];
     logic [4:0] fifo_rs2 [FIFO_WORDS-1:0];
     logic [4:0] fifo_rd [FIFO_WORDS-1:0];
@@ -164,6 +177,10 @@ module Queue
     logic fifo_rs2_float [FIFO_WORDS-1:0];
     logic fifo_rs3_float [FIFO_WORDS-1:0];
     logic fifo_rd_float [FIFO_WORDS-1:0];
+    logic fifo_rs1_used [FIFO_WORDS-1:0];
+    logic fifo_rs2_used [FIFO_WORDS-1:0];
+    logic fifo_rd_written [FIFO_WORDS-1:0];
+    logic [$bits(DecodeCapability_)-1:0] fifo_capability [FIFO_WORDS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : predecode_sources
         RegisterSlice #(
             .SUPPORT_MUL(SUPPORT_MUL),
@@ -180,7 +197,11 @@ module Queue
             .rs1_float(packet_rs1_float[lane]),
             .rs2_float(packet_rs2_float[lane]),
             .rs3_float(packet_rs3_float[lane]),
-            .rd_float(packet_rd_float[lane])
+            .rd_float(packet_rd_float[lane]),
+            .rs1_used(packet_rs1_used[lane]),
+            .rs2_used(packet_rs2_used[lane]),
+            .rd_written(packet_rd_written[lane]),
+            .capability(packet_capability[lane])
         );
     end
 
@@ -224,7 +245,8 @@ module Queue
     // Each bank is the next state for one possible binary consumption count.
     // The actual count is registered alongside all banks, not used to build them.
     logic [SERVE_COUNT_W-1:0] prev_serve_consumed;
-    logic [91:0] serve_bank [SERVE_WORDS+1][SERVE_WORDS];
+    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + $bits(DecodeCapability_);
+    logic [SERVE_ENTRY_W-1:0] serve_bank [SERVE_WORDS+1][SERVE_WORDS];
     logic [FIFO_INDEX_W:0] head_bank [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] occupied_bank [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] free_bank [SERVE_WORDS+1];
@@ -426,6 +448,10 @@ module Queue
                 prediction_rs2_float[i] <= 'x;
                 prediction_rs3_float[i] <= 'x;
                 prediction_rd_float[i] <= 'x;
+                prediction_rs1_used[i] <= 'x;
+                prediction_rs2_used[i] <= 'x;
+                prediction_rd_written[i] <= 'x;
+                prediction_capability[i] <= 'x;
                 prediction_rs2[i] <= 'x;
                 prediction_payload[i] <= 'x;
                 prediction_result[i] <= 'x;
@@ -449,6 +475,10 @@ module Queue
                     prediction_rs2_float[i] <= packet_rs2_float[i];
                     prediction_rs3_float[i] <= packet_rs3_float[i];
                     prediction_rd_float[i] <= packet_rd_float[i];
+                    prediction_rs1_used[i] <= packet_rs1_used[i];
+                    prediction_rs2_used[i] <= packet_rs2_used[i];
+                    prediction_rd_written[i] <= packet_rd_written[i];
+                    prediction_capability[i] <= packet_capability[i];
                     prediction_rs2[i] <= packet_rs2[i];
                     prediction_payload[i] <= branch_input[i];
                     prediction_result[i] <= branch_output[i];
@@ -485,6 +515,10 @@ module Queue
                     fifo_rs2_float[index] <= prediction_rs2_float[i];
                     fifo_rs3_float[index] <= prediction_rs3_float[i];
                     fifo_rd_float[index] <= prediction_rd_float[i];
+                    fifo_rs1_used[index] <= prediction_rs1_used[i];
+                    fifo_rs2_used[index] <= prediction_rs2_used[i];
+                    fifo_rd_written[index] <= prediction_rd_written[i];
+                    fifo_capability[index] <= prediction_capability[i];
                     fifo_rs2[index] <= prediction_rs2[i];
                     fifo_data[index] <= prediction_payload[i].bp_instruction;
                     fifo_pc[index] <= prediction_payload[i].bp_pc;
@@ -499,8 +533,8 @@ module Queue
     end
 
     // Read the current FIFO head offsets once for all speculative windows.
-    logic [91:0] fifo_candidate [SERVE_WORDS];
-    logic [91:0] retained_candidate [SERVE_WORDS];
+    logic [SERVE_ENTRY_W-1:0] fifo_candidate [SERVE_WORDS];
+    logic [SERVE_ENTRY_W-1:0] retained_candidate [SERVE_WORDS];
     logic [FIFO_INDEX_W:0] push_count;
     logic [FIFO_INDEX_W:0] admission_free;
     assign push_count = packet_commit ? (FIFO_INDEX_W+1)'(packet_push_count) : '0;
@@ -517,54 +551,21 @@ module Queue
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
             fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index],
-            fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index]};
+            fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index]};
         assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
             serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
-            serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane]};
-        // Payload/state keeps binary selection. Source lookup gets independent
-        // local one-hot registers; preserve only these to prevent copy merging.
-        (* DONT_TOUCH = "yes" *) logic [SERVE_WORDS:0] rs1_select;
-        (* DONT_TOUCH = "yes" *) logic [SERVE_WORDS:0] rs2_select;
-        logic [5:0] selected_rs1, selected_rs2;
-        logic [91:0] selected_payload;
-        assign selected_payload = serve_bank[prev_serve_consumed][lane];
+            serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane]};
+        // All fields, including validity, select the same registered outcome.
         assign {serve_valid_reg[lane], serve_c_reg[lane], serve_taken_reg[lane],
-            serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane]} =
-            selected_payload[91:24];
-        assign {serve_rd[lane], serve_rs3[lane], serve_rs3_float[lane], serve_rd_float[lane]} =
-            {selected_payload[13:4], selected_payload[1:0]};
-
-        for (genvar outcome = 0; outcome <= SERVE_WORDS; outcome++) begin : source_selectors
-            always_ff @(posedge clk) begin
-                if (reset || reset_reg || redirect_taken) begin
-                    rs1_select[outcome] <= (outcome == 0);
-                    rs2_select[outcome] <= (outcome == 0);
-                end else begin
-                    rs1_select[outcome] <= (serve_consumed == SERVE_COUNT_W'(outcome));
-                    rs2_select[outcome] <= (serve_consumed == SERVE_COUNT_W'(outcome));
-                end
-            end
-        end
-        // Packed bank tail: rs1[23:19], rs2[18:14], rd[13:9], rs3[8:4],
-        // then rs1_float[3], rs2_float[2], rs3_float[1], rd_float[0].
-        always_comb begin
-            selected_rs1 = '0;
-            selected_rs2 = '0;
-            for (int outcome = 0; outcome <= SERVE_WORDS; outcome++) begin
-                selected_rs1 |= {6{rs1_select[outcome]}} &
-                    {serve_bank[outcome][lane][23:19], serve_bank[outcome][lane][3]};
-                selected_rs2 |= {6{rs2_select[outcome]}} &
-                    {serve_bank[outcome][lane][18:14], serve_bank[outcome][lane][2]};
-            end
-        end
-        assign {serve_rs1[lane], serve_rs1_float[lane]} = selected_rs1;
-        assign {serve_rs2[lane], serve_rs2_float[lane]} = selected_rs2;
+            serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
+            serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane]} =
+            serve_bank[prev_serve_consumed][lane];
     end
 
     for (genvar consumed = 0; consumed <= SERVE_WORDS; consumed++) begin : serve_outcomes
         logic [SERVE_COUNT_W-1:0] keep_count;
         logic [SERVE_COUNT_W-1:0] pull_count;
-        logic [91:0] next_window [SERVE_WORDS];
+        logic [SERVE_ENTRY_W-1:0] next_window [SERVE_WORDS];
 
         always_comb begin
             keep_count = '0;
@@ -579,15 +580,15 @@ module Queue
             : SERVE_COUNT_W'(SERVE_WORDS - $unsigned(int'(keep_count)));
 
         for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : window_lanes
-            logic [91:0] retained;
+            logic [SERVE_ENTRY_W-1:0] retained;
             // Generate-time bounds keep every elaborated source index valid.
             if (lane + consumed < SERVE_WORDS) begin : retained_source
                 assign retained = retained_candidate[lane + consumed];
             end else begin : no_retained_source
-                assign retained = {1'b0, 3'bxxx, 32'hxxxxxxxx, 32'hxxxxxxxx, 24'bx};
+                assign retained = {1'b0, {(SERVE_ENTRY_W-1){1'bx}}};
             end
             always_comb begin
-                next_window[lane] = {1'b0, 3'bxxx, 32'hxxxxxxxx, 32'hxxxxxxxx, 24'bx};
+                next_window[lane] = {1'b0, {(SERVE_ENTRY_W-1){1'bx}}};
                 if (lane < int'(keep_count)) begin
                     // Legal windows have a contiguous prefix of valid entries.
                     next_window[lane] = retained;
@@ -607,7 +608,7 @@ module Queue
                 occupied_bank[consumed] <= '0;
                 free_bank[consumed] <= (FIFO_INDEX_W+1)'(FIFO_WORDS);
                 for (int unsigned lane = 0; lane < SERVE_WORDS; lane++)
-                    serve_bank[consumed][lane] <= {1'b0, 3'bxxx, 32'hxxxxxxxx, 32'hxxxxxxxx, 24'bx};
+                    serve_bank[consumed][lane] <= {1'b0, {(SERVE_ENTRY_W-1){1'bx}}};
             end else begin
                 head_bank[consumed] <= fifo_head + (FIFO_INDEX_W+1)'(pull_count);
                 occupied_bank[consumed] <= fifo_occipied_slots + push_count -

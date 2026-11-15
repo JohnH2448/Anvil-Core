@@ -27,6 +27,10 @@ module DecodeStage
     input logic serve_rs2_float [ISSUE_WIDTH-1:0],
     input logic serve_rs3_float [ISSUE_WIDTH-1:0],
     input logic serve_rd_float [ISSUE_WIDTH-1:0],
+    input logic serve_rs1_used [ISSUE_WIDTH-1:0],
+    input logic serve_rs2_used [ISSUE_WIDTH-1:0],
+    input logic serve_rd_written [ISSUE_WIDTH-1:0],
+    input logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
@@ -37,9 +41,13 @@ module DecodeStage
     output DecoderPacket_ packets_out [ISSUE_WIDTH-1:0],
     output LaneType_ lane_types_out [ISSUE_WIDTH-1:0],
     output logic packets_valid [ISSUE_WIDTH-1:0],
+    output logic group_raw [ISSUE_WIDTH-1:0],
+    output logic group_serial [ISSUE_WIDTH-1:0],
+    output logic group_resource_bad [ISSUE_WIDTH-1:0],
 
-    // Consumption From Issue
-    input logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed,
+    // Internal selection count: stall-masked, independent of reset/redirect.
+    // Flush invalidates the queue and independently suppresses serve_consumed.
+    input logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count,
 
     // Previous advancing-cycle producer writes from the issue buffer
     input logic [4:0] op_rd [ISSUE_WIDTH-1:0],
@@ -97,6 +105,7 @@ module DecodeStage
             .rs2_float_in(serve_rs2_float[i]),
             .rs3_float_in(serve_rs3_float[i]),
             .rd_float_in(serve_rd_float[i]),
+            .capability_in(DecodeCapability_'(serve_capability[i])),
             .pc(serve_pc_reg[i]),
             .is_branch(serve_branch_reg[i]),
             .is_compressed(serve_c_reg[i]),
@@ -125,7 +134,7 @@ module DecodeStage
     logic [COUNT_W-1:0] available_slots;
     logic [COUNT_W-1:0] serve_consumed_normal;
     logic [COUNT_W-1:0] next_empty_slots;
-    assign available_slots = empty_slots + issue_consumed;
+    assign available_slots = empty_slots + issue_select_count;
     assign serve_consumed_normal = valid_inputs < available_slots ? valid_inputs : available_slots;
     assign next_empty_slots = available_slots - serve_consumed_normal;
     assign serve_consumed = (reset || reset_reg || redirect_taken) ? '0 : serve_consumed_normal;
@@ -211,6 +220,123 @@ module DecodeStage
         end
     end
 
+    // Compare fixed packet sources before the late consumption selection.
+    // Retained packets precede fresh packets in program order. The FIFO masks
+    // below are evaluated for each constant consumption outcome before selection.
+    localparam int unsigned SOURCE_COUNT = 2 * ISSUE_WIDTH;
+    DecoderPacket_ structural_sources [SOURCE_COUNT];
+    logic structural_valid [SOURCE_COUNT];
+    logic [2:0] retained_usage [ISSUE_WIDTH];
+    logic [2:0] structural_usage [SOURCE_COUNT];
+    logic pair_raw [SOURCE_COUNT][SOURCE_COUNT];
+    logic pair_serial [SOURCE_COUNT][SOURCE_COUNT];
+    for (genvar source_slot = 0; source_slot < ISSUE_WIDTH; source_slot++) begin : structural_sources_gen
+        assign structural_usage[source_slot] = retained_usage[source_slot];
+        assign structural_usage[ISSUE_WIDTH + source_slot] =
+            {serve_rd_written[source_slot], serve_rs2_used[source_slot], serve_rs1_used[source_slot]};
+        assign structural_valid[source_slot] = packets_valid[source_slot];
+        assign structural_valid[ISSUE_WIDTH + source_slot] = valid_inputs > COUNT_W'(source_slot);
+        assign structural_sources[source_slot] = packets_out[source_slot];
+        assign structural_sources[ISSUE_WIDTH + source_slot] = packets[source_slot];
+    end
+    // Static lane feasibility for fixed retained/refill sources.
+    localparam int unsigned MEMORY_LANE_BASE = 1 + Parameters::INTEGER_LANE_COUNT;
+    localparam int unsigned FLOATING_LANE_BASE = MEMORY_LANE_BASE + Parameters::MEMORY_LANE_COUNT;
+    logic [TOTAL_LANE_COUNT-1:0] compatible_lanes [SOURCE_COUNT];
+    always_comb begin
+        for (int unsigned i = 0; i < SOURCE_COUNT; i++) begin
+            compatible_lanes[i] = '0;
+            unique case (structural_sources[i].common.capability)
+                CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV: begin
+                    for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
+                        if (lane < Parameters::INTEGER_LANE_COUNT) begin
+                            unique case (structural_sources[i].common.capability)
+                                CAP_ALU: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][0];
+                                CAP_BRU: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][1];
+                                CAP_MUL: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][2];
+                                CAP_DIV: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][3];
+                            endcase
+                        end
+                    end
+                end
+                CAP_MEMORY, CAP_ATOMIC: begin
+                    for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
+                        if (lane < Parameters::MEMORY_LANE_COUNT) begin
+                            compatible_lanes[i][MEMORY_LANE_BASE + lane] =
+                                Parameters::MEMORY_LANE_CAPABILITIES[lane][2'(structural_sources[i].common.capability == CAP_ATOMIC)];
+                        end
+                    end
+                end
+                CAP_FP_F, CAP_FP_CONVERT: begin
+                    for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
+                        if (lane < Parameters::FLOATING_LANE_COUNT) begin
+                            compatible_lanes[i][FLOATING_LANE_BASE + lane] =
+                                Parameters::FLOATING_LANE_CAPABILITIES[lane][structural_sources[i].common.capability == CAP_FP_CONVERT];
+                        end
+                    end
+                end
+                CAP_SYSTEM, CAP_CSR: begin
+                    compatible_lanes[i][SERIAL_LANE_ID] = 1'b1;
+                end
+            endcase
+
+            // Decode never emits a disabled capability. Leave its mask
+            // unspecified so synthesis can eliminate that decode path.
+            if ((SUPPORT_MUL == 0 && structural_sources[i].common.capability == CAP_MUL) ||
+                (SUPPORT_DIV == 0 && structural_sources[i].common.capability == CAP_DIV) ||
+                (SUPPORT_FLOAT == 0 && structural_sources[i].common.capability inside {CAP_FP_F, CAP_FP_CONVERT}) ||
+                (SUPPORT_ATOMIC == 0 && structural_sources[i].common.capability == CAP_ATOMIC)) begin
+                compatible_lanes[i] = 'x;
+            end
+        end
+    end
+
+    logic single_resource_bad [SOURCE_COUNT];
+    logic pair_resource_bad [SOURCE_COUNT][SOURCE_COUNT];
+    for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : single_resource
+        assign single_resource_bad[source_slot] = !(|compatible_lanes[source_slot]);
+    end
+    // Issuer's allocator supports one or two instructions, not wider groups.
+    initial begin
+        if (ISSUE_WIDTH > 2) $fatal(1, "Decode resource precomputation supports ISSUE_WIDTH <= 2");
+    end
+
+    for (genvar older = 0; older < SOURCE_COUNT; older++) begin : structural_older
+        for (genvar younger = 0; younger < SOURCE_COUNT; younger++) begin : structural_younger
+            if (older < younger) begin : ordered_pair
+                logic [TOTAL_LANE_COUNT-1:0] lane_union;
+                logic multiple_lanes;
+                assign lane_union = compatible_lanes[older] | compatible_lanes[younger];
+                always_comb begin
+                    logic seen;
+                    seen = 1'b0;
+                    multiple_lanes = 1'b0;
+                    for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
+                        multiple_lanes |= seen && lane_union[lane];
+                        seen |= lane_union[lane];
+                    end
+                end
+                // Oldest feasibility is checked separately by the issue prefix.
+                assign pair_resource_bad[older][younger] =
+                    single_resource_bad[younger] || !multiple_lanes;
+                assign pair_raw[older][younger] = structural_usage[older][2] &&
+                    ((structural_usage[younger][0] &&
+                      structural_sources[older].common.rd == structural_sources[younger].common.rs1 &&
+                      structural_sources[older].common.rd_float == structural_sources[younger].common.rs1_float) ||
+                     (structural_usage[younger][1] &&
+                      structural_sources[older].common.rd == structural_sources[younger].common.rs2 &&
+                      structural_sources[older].common.rd_float == structural_sources[younger].common.rs2_float));
+                assign pair_serial[older][younger] =
+                    (structural_sources[older].common.capability inside {CAP_SYSTEM, CAP_CSR}) &&
+                    (structural_sources[younger].common.capability inside {CAP_SYSTEM, CAP_CSR});
+            end else begin : unordered_pair
+                assign pair_resource_bad[older][younger] = 1'b0;
+                assign pair_raw[older][younger] = 1'b0;
+                assign pair_serial[older][younger] = 1'b0;
+            end
+        end
+    end
+
     // Parallel constant slot comparisons replace variable source indexing and
     // the consumption -> retained-count arithmetic -> metadata-update chain.
     for (genvar destination = 0; destination < ISSUE_WIDTH; destination++) begin : fifo_slots
@@ -220,11 +346,13 @@ module DecodeStage
         LaneType_ lane_next;
         OperandProducers_ producers_next;
         logic valid_next;
+        logic [2:0] usage_next;
+        logic [ISSUE_WIDTH:0] raw_candidates, serial_candidates, resource_candidates;
 
         for (genvar source_slot = 0; source_slot < ISSUE_WIDTH; source_slot++) begin : choices
             if (source_slot >= destination) begin : retained_choice
                 assign keep[source_slot] = packets_valid[source_slot] &&
-                    issue_consumed == COUNT_W'(source_slot - destination);
+                    issue_select_count == COUNT_W'(source_slot - destination);
             end else begin : no_retained_choice
                 assign keep[source_slot] = 1'b0;
             end
@@ -238,7 +366,7 @@ module DecodeStage
                         for (int consumed = 0; consumed <= ISSUE_WIDTH - empty; consumed++) begin
                             if (ISSUE_WIDTH - empty - consumed == destination - source_slot)
                                 position_matches |= empty_slots == COUNT_W'(empty) &&
-                                    issue_consumed == COUNT_W'(consumed);
+                                    issue_select_count == COUNT_W'(consumed);
                         end
                     end
                 end
@@ -248,12 +376,66 @@ module DecodeStage
             end
         end
 
+        // Each outcome is independent of live issue_select_count. Occupancy,
+        // validity, flush and all pair reductions belong before the final mux.
+        for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : structural_outcomes
+            always_comb begin
+                raw_candidates[consumed] = 1'b0;
+                serial_candidates[consumed] = 1'b0;
+                resource_candidates[consumed] = 1'b0;
+                for (int empty = 0; empty <= ISSUE_WIDTH - consumed; empty++) begin
+                    // Oldest needs one compatible lane. Younger needs a distinct
+                    // pair; all source choices are constant after loop unrolling.
+                    if (destination == 0) begin
+                        int retained, source_slot;
+                        retained = ISSUE_WIDTH - empty - consumed;
+                        source_slot = retained > 0 ? consumed : ISSUE_WIDTH;
+                        resource_candidates[consumed] |= empty_slots == COUNT_W'(empty) &&
+                            structural_valid[source_slot] && single_resource_bad[source_slot];
+                    end
+                    // Constant after unrolling: retained suffix followed by refill.
+                    for (int older_slot = 0; older_slot < destination; older_slot++) begin
+                        int retained, older, younger;
+                        retained = ISSUE_WIDTH - empty - consumed;
+                        older = older_slot < retained ? older_slot + consumed :
+                            ISSUE_WIDTH + older_slot - retained;
+                        younger = destination < retained ? destination + consumed :
+                            ISSUE_WIDTH + destination - retained;
+                        resource_candidates[consumed] |= empty_slots == COUNT_W'(empty) &&
+                            structural_valid[older] && structural_valid[younger] &&
+                            pair_resource_bad[older][younger];
+                        raw_candidates[consumed] |= empty_slots == COUNT_W'(empty) &&
+                            structural_valid[older] && structural_valid[younger] &&
+                            pair_raw[older][younger];
+                        serial_candidates[consumed] |= empty_slots == COUNT_W'(empty) &&
+                            structural_valid[older] && structural_valid[younger] &&
+                            pair_serial[older][younger];
+                    end
+                end
+                if (reset || reset_reg || redirect_taken) begin
+                    raw_candidates[consumed] = 1'b0;
+                    serial_candidates[consumed] = 1'b0;
+                    resource_candidates[consumed] = 1'b0;
+                end
+            end
+        end
+        // Direct consumption-selected bits into D: no selection masks, validity
+        // qualification, reduction or hold enable after this mux.
+        always_ff @(posedge clk) begin
+            group_raw[destination] <= raw_candidates[issue_select_count];
+            group_serial[destination] <= serial_candidates[issue_select_count];
+            group_resource_bad[destination] <= resource_candidates[issue_select_count];
+        end
+
         always_comb begin
             packet_next = '0;
+            usage_next = '0;
             lane_next = LaneType_'('0);
             producers_next = '0;
             valid_next = 1'b0;
             for (int source_slot = 0; source_slot < ISSUE_WIDTH; source_slot++) begin
+                usage_next |= {3{keep[source_slot]}} & structural_usage[source_slot];
+                usage_next |= {3{refill[source_slot]}} & structural_usage[ISSUE_WIDTH + source_slot];
                 packet_next |= {$bits(DecoderPacket_){keep[source_slot]}} & packets_out[source_slot];
                 packet_next |= {$bits(DecoderPacket_){refill[source_slot]}} & packets[source_slot];
                 lane_next = LaneType_'(lane_next |
@@ -271,11 +453,13 @@ module DecodeStage
             packets_valid[destination] <= (reset || reset_reg || redirect_taken) ? 1'b0 : valid_next;
             if (reset || reset_reg || redirect_taken || !valid_next) begin
                 packets_out[destination] <= 'x;
+                retained_usage[destination] <= 'x;
                 lane_types_out[destination] <= LaneType_'('x);
                 {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination]} <= 'x;
                 {rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]} <= 'x;
             end else begin
                 packets_out[destination] <= packet_next;
+                retained_usage[destination] <= usage_next;
                 lane_types_out[destination] <= lane_next;
                 {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination]} <= producers_next.rs1;
                 {rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]} <= producers_next.rs2;
@@ -287,7 +471,7 @@ endmodule
 // MOVE NEXT PC CALC FORWARD INTO INTEGER LANE OR SOMETHING
 
 // not sure if this is presently being done but you dont need
-// to zero serve_consumed on stall, only issue_consumed
+// to zero serve_consumed on stall, only issue_select_count
 
 // if 200-250MHz still evades, make decode a mini FIFO.
 // Keep 4ish entries to keep it always ahead of issue.

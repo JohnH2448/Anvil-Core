@@ -23,6 +23,10 @@ module DispatchTop
     input logic serve_rs2_float [ISSUE_WIDTH-1:0],
     input logic serve_rs3_float [ISSUE_WIDTH-1:0],
     input logic serve_rd_float [ISSUE_WIDTH-1:0],
+    input logic serve_rs1_used [ISSUE_WIDTH-1:0],
+    input logic serve_rs2_used [ISSUE_WIDTH-1:0],
+    input logic serve_rd_written [ISSUE_WIDTH-1:0],
+    input logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
@@ -39,7 +43,11 @@ module DispatchTop
     DecoderPacket_ packets_out [ISSUE_WIDTH-1:0];
     LaneType_ lane_types_out [ISSUE_WIDTH-1:0];
     logic packets_valid [ISSUE_WIDTH-1:0];
+    logic group_raw [ISSUE_WIDTH-1:0];
+    logic group_serial [ISSUE_WIDTH-1:0];
+    logic group_resource_bad [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed;
+    logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count;
 
     // ProducerTable lookups
     logic [4:0] rs1 [ISSUE_WIDTH-1:0];
@@ -87,6 +95,10 @@ module DispatchTop
         .serve_rs2_float(serve_rs2_float),
         .serve_rs3_float(serve_rs3_float),
         .serve_rd_float(serve_rd_float),
+        .serve_rs1_used(serve_rs1_used),
+        .serve_rs2_used(serve_rs2_used),
+        .serve_rd_written(serve_rd_written),
+        .serve_capability(serve_capability),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
@@ -95,7 +107,10 @@ module DispatchTop
         .packets_out(packets_out),
         .lane_types_out(lane_types_out),
         .packets_valid(packets_valid),
-        .issue_consumed(issue_consumed),
+        .group_raw(group_raw),
+        .group_serial(group_serial),
+        .group_resource_bad(group_resource_bad),
+        .issue_select_count(issue_select_count),
         .serve_consumed(serve_consumed),
         .op_rd(op_rd),
         .op_lane(op_lane),
@@ -130,7 +145,11 @@ module DispatchTop
         .packets_out(packets_out),
         .lane_types_out(lane_types_out),
         .packets_valid(packets_valid),
+        .group_raw(group_raw),
+        .group_serial(group_serial),
+        .group_resource_bad(group_resource_bad),
         .issue_consumed(issue_consumed),
+        .issue_select_count(issue_select_count),
         .decoder_packet(decoder_packet),
         .issuer_packet(issuer_packet),
         .accept_vector(accept_vector),

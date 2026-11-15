@@ -18,9 +18,14 @@ module Issuer
     input DecoderPacket_ packets_out [ISSUE_WIDTH-1:0],
     input LaneType_ lane_types_out [ISSUE_WIDTH-1:0],
     input logic packets_valid [ISSUE_WIDTH-1:0],
+    input logic group_raw [ISSUE_WIDTH-1:0],
+    input logic group_serial [ISSUE_WIDTH-1:0],
+    input logic group_resource_bad [ISSUE_WIDTH-1:0],
 
     // Consumption To Frontend
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed,
+    // Decode payload selection ignores flush, but must retain packets on stall.
+    output logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count,
 
     // Packets To Backend
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
@@ -133,11 +138,12 @@ module Issuer
 
     // Consumption depends only on the contract, independently of lane selection.
     always_comb begin
-        issue_consumed = '0;
+        issue_select_count = '0;
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
-            issue_consumed += $clog2(ISSUE_WIDTH+1)'(issue_good[slot]);
+            issue_select_count += $clog2(ISSUE_WIDTH+1)'(issue_good[slot]);
         end
-        if (reset || redirect_taken || stall) issue_consumed = '0;
+        if (stall) issue_select_count = '0;
+        issue_consumed = (reset || redirect_taken) ? '0 : issue_select_count;
     end
 
     // The current lookahead allocator guarantees the contract's mask at widths 1/2.
@@ -162,6 +168,9 @@ module Issuer
         .packets(packets_out),
         .lane_types(lane_types_out),
         .packets_valid(packets_valid),
+        .group_raw(group_raw),
+        .group_serial(group_serial),
+        .group_resource_bad(group_resource_bad),
         .serial_active(serial_active),
         .rs1_index(rs1_index_corrected),
         .rs2_index(rs2_index_corrected),
@@ -201,19 +210,17 @@ module Issuer
         end
     endfunction
 
-    // Lane Selection
+    // Preselect lanes from packet capabilities/validity, independently of readiness.
     logic [AGE_WIDTH-1:0] index_array [TOTAL_LANE_COUNT-1:0];
+    logic [TOTAL_LANE_COUNT-1:0] assigned_lanes [ISSUE_WIDTH-1:0];
     localparam int unsigned INT_LANE_MAX = 1 + Parameters::INTEGER_LANE_COUNT;
     localparam int unsigned MEM_LANE_MAX = INT_LANE_MAX + Parameters::MEMORY_LANE_COUNT;
     always_comb begin
         logic [TOTAL_LANE_COUNT-1:0] compatible [ISSUE_WIDTH-1:0];
         logic [TOTAL_LANE_COUNT-1:0] used_lanes;
-        logic stop_issue;
 
         used_lanes = '0;
-        stop_issue = reset;
         index_array = '{default: 'x};
-        accept_vector = '{default: 1'b0};
         issue_lane = '{default: 'x};
 
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
@@ -245,6 +252,8 @@ module Issuer
                 end
                 default: ;
             endcase
+            // Invalid packets can have unspecified capability; do not reserve lanes.
+            if (!packets_valid[slot]) compatible[slot] = '0;
         end
 
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
@@ -253,30 +262,36 @@ module Issuer
             available = compatible[slot] & ~used_lanes;
             younger_lanes = '0;
             for (int unsigned younger = 0; younger < ISSUE_WIDTH; younger++) begin
-                if (younger > slot && issue_good[younger])
+                if (younger > slot)
                     younger_lanes |= compatible[younger];
             end
             preferred = available & ~younger_lanes;
             // Priority encode both choices in parallel; late preference selects
             // one-hot results rather than feeding another priority encoder.
             chosen = (|preferred) ? first_lane(preferred) : first_lane(available);
-            if (!stop_issue && issue_good[slot] && (|chosen)) begin
+            assigned_lanes[slot] = chosen;
+            if (|chosen) begin
                 for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
                     if (chosen[lane]) begin
                         index_array[lane] = AGE_WIDTH'(slot);
-                        accept_vector[lane] = 1'b1;
                         issue_lane[slot] = LANE_WIDTH'(lane);
                     end
                 end
                 used_lanes |= chosen;
-            end else begin
-                stop_issue = 1'b1;
             end
         end
-        // Stall/redirect suppress acceptance directly, after normal lane selection.
-        if (stall || redirect_taken) begin
-            accept_vector = '{default: 1'b0};
+    end
+
+    // The contract signs off on fixed assignments. It never steers payload muxes.
+    always_comb begin
+        accept_vector = '{default: 1'b0};
+        for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
+            for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
+                accept_vector[lane] |= assigned_lanes[slot][lane] && issue_good[slot];
             end
+        end
+        if (reset || stall || redirect_taken)
+            accept_vector = '{default: 1'b0};
     end
     for (genvar i = 0; i < TOTAL_LANE_COUNT; i++) begin : gen_lane_mux
         // Remove the reserved field before lane selection so it has no mux.

@@ -18,6 +18,7 @@ module DecoderSlice
     input logic rs2_float_in,
     input logic rs3_float_in,
     input logic rd_float_in,
+    input DecodeCapability_ capability_in,
     input logic [31:0] pc,
     input logic is_branch,
     input logic is_compressed,
@@ -333,34 +334,16 @@ module DecoderSlice
          c_ci || c_math || c_shift || c_load || (c_jump && !c[15]) ||
          (c_cr && (c[6:2] != 0 || c[12])));
 
-    // common.capability
-    always_comb begin
-        packet.common.capability = CAP_ALU;
-        if (ok) begin
-            case (1'b1)
-                mul_op: packet.common.capability = CAP_MUL;
-                div_op: packet.common.capability = CAP_DIV;
-                branch_op || jal || jalr || c_branch || c_jump || (c_cr && c[6:2] == 0): packet.common.capability = CAP_BRU;
-                load_op || store_op || c_load || c_store: packet.common.capability = CAP_MEMORY;
-                atomic_op: packet.common.capability = CAP_ATOMIC;
-                convert_op: packet.common.capability = CAP_FP_CONVERT;
-                fused || float_op: packet.common.capability = CAP_FP_F;
-                csr_op: packet.common.capability = CAP_CSR;
-                system_op: packet.common.capability = CAP_SYSTEM;
-                default: ;
-            endcase
-        end
-    end
+    // Encoding-only capability is carried from Fetch with the instruction.
+    assign packet.common.capability = capability_in;
     always_comb begin
         lane_type = INTEGER;
-        if (ok) begin
-            case (1'b1)
-                load_op || store_op || atomic_op || c_load || c_store: lane_type = MEMORY;
-                fused || float_op: lane_type = FLOATING;
-                csr_op || system_op: lane_type = SERIAL;
-                default: ;
-            endcase
-        end
+        case (capability_in)
+            CAP_MEMORY, CAP_ATOMIC: lane_type = MEMORY;
+            CAP_FP_F, CAP_FP_CONVERT: lane_type = FLOATING;
+            CAP_SYSTEM, CAP_CSR: lane_type = SERIAL;
+            default: ;
+        endcase
     end
 
     // alu.operation

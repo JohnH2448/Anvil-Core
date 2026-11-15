@@ -1,4 +1,6 @@
-module FetchTop #(
+module FetchTop
+    import Enumerations::*;
+#(
     parameter unsigned FETCH_WORDS = 2,
     parameter unsigned SUPPORT_MUL = Parameters::SUPPORT_MUL,
     parameter unsigned SUPPORT_DIV = Parameters::SUPPORT_DIV,
@@ -29,6 +31,10 @@ module FetchTop #(
     output logic serve_rs2_float [ISSUE_WIDTH-1:0],
     output logic serve_rs3_float [ISSUE_WIDTH-1:0],
     output logic serve_rd_float [ISSUE_WIDTH-1:0],
+    output logic serve_rs1_used [ISSUE_WIDTH-1:0],
+    output logic serve_rs2_used [ISSUE_WIDTH-1:0],
+    output logic serve_rd_written [ISSUE_WIDTH-1:0],
+    output logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0],
     output logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     output logic serve_valid_reg [ISSUE_WIDTH-1:0],
     output logic serve_c_reg [ISSUE_WIDTH-1:0],
@@ -82,6 +88,10 @@ module FetchTop #(
         .serve_rs2_float(serve_rs2_float),
         .serve_rs3_float(serve_rs3_float),
         .serve_rd_float(serve_rd_float),
+        .serve_rs1_used(serve_rs1_used),
+        .serve_rs2_used(serve_rs2_used),
+        .serve_rd_written(serve_rd_written),
+        .serve_capability(serve_capability),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
