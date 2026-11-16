@@ -47,6 +47,8 @@ module DispatchTop
     logic group_raw [ISSUE_WIDTH-1:0];
     logic group_serial [ISSUE_WIDTH-1:0];
     logic group_resource_bad [ISSUE_WIDTH-1:0];
+    logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0];
+    logic [ISSUE_WIDTH-1:0] rs2_buffer_match [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed;
     logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count;
     logic issue_select_any, issue_select_two;
@@ -113,6 +115,8 @@ module DispatchTop
         .group_raw(group_raw),
         .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
+        .rs1_buffer_match(rs1_buffer_match),
+        .rs2_buffer_match(rs2_buffer_match),
         .issue_select_count(issue_select_count),
         .issue_select_any(issue_select_any),
         .issue_select_two(issue_select_two),
@@ -153,6 +157,8 @@ module DispatchTop
         .group_raw(group_raw),
         .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
+        .rs1_buffer_match(rs1_buffer_match),
+        .rs2_buffer_match(rs2_buffer_match),
         .issue_consumed(issue_consumed),
         .issue_select_count(issue_select_count),
         .issue_select_any(issue_select_any),

@@ -14,6 +14,12 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
+Decode precomputes source matches against current issue-candidate destinations and
+registers them with the next packets. Issuer qualifies these bits with next-cycle
+buffered op_write rather than comparing addresses in its correction path. Decode's
+own current-buffer absorption still uses direct address matching.
+
+
 Queue owns encoding legality: InstructionLegality evaluates registered prediction
 payloads before FIFO insertion. Four trap bits are stored with each FIFO entry and
 carried through the same speculative serve selection as the instruction.
@@ -1308,3 +1314,45 @@ correction/readiness and named issue_select_any, then ends at slot-one rs1
 capability[2]/D. After issue_select_any arrives at 5.485 ns, metadata selection tail
 is 1.740 ns. Forward legality path is no longer reported worst; its exact new delay
 is unknown. No RTL changes or additional tool runs beyond report reading/logging.
+
+
+### 2026-11-15 - register next-packet matches to next buffered writers
+
+Decode.sv compares each fixed retained/fresh source rs1/rs2 and integer-bank flag
+against packets_out[writer].common.rd, the exact issue_rd captured by Issuer's write
+buffer on that edge. No live issue_good/write-valid/legality gate enters comparison.
+Packed PacketChoice_ carries the match vectors through identical occupancy and
+zero/one/two prefix selection as its packet. Two ISSUE_WIDTH-bit vectors per Decode
+slot capture under !stall. Dispatch/Top.sv wires them to Issue.sv, whose correction
+function now uses source_matches[writer] AND op_write[writer] instead of rd equality.
+Nominal state increase: eight bits at dual issue. No extra stage.
+
+Correctness: next-cycle op_write qualifies actual accepted nonzero integer writes
+and retains youngest-destination dedup. Matches describe next Decode sources and
+next buffer identities, not current buffer destinations. Both hold during stall.
+Reset/redirect clear packet/write validity, making stale match payload irrelevant;
+first resumed capture realigns packets, matches and buffer identities. Partial pop,
+full pop and empty-slot refill use the same source mapping as packets. Self/younger
+unaccepted candidates can compare equal but cannot qualify without op_write.
+Incoming packet matches do not depend on the outgoing destination slot's source.
+Current buffered writes are still absorbed into retained/refill snapshots by the
+existing direct-match refresh path, and identity enables are unchanged.
+
+Targets register equality ahead of Issue correction/readiness, avoiding a live
+acceptance -> comparison chain. Comparisons add fanout to current rd/source fields
+and a new consumption-selected match-register endpoint; synthesis sharing/placement
+can offset gains. Timing unmeasured. Current flow/README updated. Static buffer
+capture identity, packet-choice field ordering, stall/flush/dedup/interface and diff
+review only; no tests, lint or synthesis. No permanent test artifacts generated.
+
+### 2026-11-15 - registered match timing result
+
+User supplied WNS -0.967 ns after registered source/write-candidate matches,
+improving 0.075 ns over the retained -1.042 ns baseline. Data delay 7.183 - 1.246
+= 5.937 ns versus 6.021 ns previously. Seven LUTs versus eight. New launch is
+buffered op_write[0] (81 loads), not rd/source-address bits. Path traverses issue
+qualification/count, then producer snapshot selection to slot-zero rs1_index[1]/D.
+Named issue_select_count[1] arrives at 5.365 ns; remaining selection tail 1.818 ns,
+including a 1.125 ns route. This is consistent with removal of live equality from
+Issue correction, but specific before/after cones differ and TNS was not supplied.
+No additional RTL changes or synthesis/testing performed for this review.

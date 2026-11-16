@@ -45,6 +45,8 @@ module DecodeStage
     output logic group_raw [ISSUE_WIDTH-1:0],
     output logic group_serial [ISSUE_WIDTH-1:0],
     output logic group_resource_bad [ISSUE_WIDTH-1:0],
+    output logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0],
+    output logic [ISSUE_WIDTH-1:0] rs2_buffer_match [ISSUE_WIDTH-1:0],
 
     // Unmasked candidate selection; state captures only when not stalled.
     // Flush invalidates the queue and independently suppresses serve_consumed.
@@ -342,6 +344,22 @@ module DecodeStage
         end
     end
 
+    // Compare fixed next-packet sources against candidate writers BEFORE issue
+    // selection. Issuer captures packets_out[writer].common.rd as op_rd on this
+    // same edge. Next-cycle op_write qualifies acceptance, bank, x0 and dedup.
+    logic [ISSUE_WIDTH-1:0] next_rs1_match [SOURCE_COUNT];
+    logic [ISSUE_WIDTH-1:0] next_rs2_match [SOURCE_COUNT];
+    for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : next_buffer_matches
+        for (genvar writer = 0; writer < ISSUE_WIDTH; writer++) begin : writers
+            assign next_rs1_match[source_slot][writer] =
+                !structural_sources[source_slot].common.rs1_float &&
+                structural_sources[source_slot].common.rs1 == packets_out[writer].common.rd;
+            assign next_rs2_match[source_slot][writer] =
+                !structural_sources[source_slot].common.rs2_float &&
+                structural_sources[source_slot].common.rs2 == packets_out[writer].common.rd;
+        end
+    end
+
     // Packet movement uses the issue prefix directly: oldest chooses zero/one
     // consumption early, then younger chooses the full-pop outcome at the end.
     typedef struct packed {
@@ -349,6 +367,8 @@ module DecodeStage
         LaneType_ lane;
         logic [2:0] usage_bits;
         logic valid;
+        logic [ISSUE_WIDTH-1:0] rs1_match;
+        logic [ISSUE_WIDTH-1:0] rs2_match;
     } PacketChoice_;
     for (genvar destination = 0; destination < ISSUE_WIDTH; destination++) begin : fifo_slots
         PacketChoice_ packet_outcomes [2];
@@ -364,11 +384,13 @@ module DecodeStage
                 if (destination < RETAINED) begin : keep_source
                     assign occupancy_outcomes[empty] = {
                         packets_out[destination + consumed], lane_types_out[destination + consumed],
-                        retained_usage[destination + consumed], packets_valid[destination + consumed]};
+                        retained_usage[destination + consumed], packets_valid[destination + consumed],
+                        next_rs1_match[destination + consumed], next_rs2_match[destination + consumed]};
                 end else begin : refill_source
                     localparam int SOURCE = destination - RETAINED;
                     assign occupancy_outcomes[empty] = {packets[SOURCE], lane_types[SOURCE],
-                        structural_usage[ISSUE_WIDTH + SOURCE], structural_valid[ISSUE_WIDTH + SOURCE]};
+                        structural_usage[ISSUE_WIDTH + SOURCE], structural_valid[ISSUE_WIDTH + SOURCE],
+                        next_rs1_match[ISSUE_WIDTH + SOURCE], next_rs2_match[ISSUE_WIDTH + SOURCE]};
                 end
             end
             always_comb begin
@@ -385,7 +407,8 @@ module DecodeStage
             // packet: fresh destination is the full-pop result without occupancy.
             PacketChoice_ full_pop_packet;
             assign full_pop_packet = {packets[destination], lane_types[destination],
-                structural_usage[ISSUE_WIDTH + destination], structural_valid[ISSUE_WIDTH + destination]};
+                structural_usage[ISSUE_WIDTH + destination], structural_valid[ISSUE_WIDTH + destination],
+                next_rs1_match[ISSUE_WIDTH + destination], next_rs2_match[ISSUE_WIDTH + destination]};
             assign selected_packet = issue_select_two ? full_pop_packet : early_packet;
         end else begin : final_single_selection
             assign selected_packet = early_packet;
@@ -512,6 +535,8 @@ module DecodeStage
                 packets_valid[destination] <= selected_packet.valid;
             if (!stall) begin
                 packets_out[destination] <= selected_packet.packet;
+                rs1_buffer_match[destination] <= selected_packet.rs1_match;
+                rs2_buffer_match[destination] <= selected_packet.rs2_match;
                 retained_usage[destination] <= selected_packet.usage_bits;
                 lane_types_out[destination] <= selected_packet.lane;
             end

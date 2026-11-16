@@ -21,6 +21,8 @@ module Issuer
     input logic group_raw [ISSUE_WIDTH-1:0],
     input logic group_serial [ISSUE_WIDTH-1:0],
     input logic group_resource_bad [ISSUE_WIDTH-1:0],
+    input logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0],
+    input logic [ISSUE_WIDTH-1:0] rs2_buffer_match [ISSUE_WIDTH-1:0],
 
     // Consumption To Frontend
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed,
@@ -97,15 +99,14 @@ module Issuer
     end
     function automatic SourceProducer_ correct_source(
         input SourceProducer_ snapshot,
-        input logic [4:0] source_register,
-        input logic source_float
+        input logic [ISSUE_WIDTH-1:0] source_matches
     );
         SourceProducer_ selected;
         logic matched, hit;
         selected = '0;
         matched = 1'b0;
         for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
-            hit = op_write[slot] && !source_float && op_rd[slot] == source_register;
+            hit = op_write[slot] && source_matches[slot];
             selected |= {$bits(SourceProducer_){hit}} & buffered_producer[slot];
             matched |= hit;
         end
@@ -114,10 +115,10 @@ module Issuer
     for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : source_correction
         assign corrected_1[slot] = correct_source(
             {rs1_index_in[slot], rs1_lane_in[slot], rs1_capability_in[slot]},
-            packets_out[slot].common.rs1, packets_out[slot].common.rs1_float);
+            rs1_buffer_match[slot]);
         assign corrected_2[slot] = correct_source(
             {rs2_index_in[slot], rs2_lane_in[slot], rs2_capability_in[slot]},
-            packets_out[slot].common.rs2, packets_out[slot].common.rs2_float);
+            rs2_buffer_match[slot]);
     end
 
     logic [UNROLLED_W-1:0] rs1_index_corrected [ISSUE_WIDTH-1:0];

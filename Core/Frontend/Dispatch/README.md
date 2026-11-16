@@ -514,3 +514,13 @@ DecoderSlice consumes trap_in directly. This supersedes the initial per-serve-ba
 legality experiment; the main FIFO is now four bits wider, with no extra stage.
 All remaining instruction payload decoding stays in DecoderSlice.
 Earlier local-legality descriptions are superseded by this ownership change.
+
+
+Decode now registers rs1/rs2 match vectors against the destinations that Issuer
+will capture in its next write buffer. Comparisons occur per fixed source before
+packet selection; the bits travel through PacketChoice_ with that source. Issuer
+qualifies each registered bit with buffered op_write, preserving acceptance,
+integer/x0 and youngest-writer rules without live address comparisons in correction.
+Packet/match/write-buffer capture holds on stall; flush clears packet/write validity.
+Decode's own current-buffer refresh matching remains unchanged. Dual issue adds
+eight match bits, with no pipeline stage or live-write qualification before comparison.
