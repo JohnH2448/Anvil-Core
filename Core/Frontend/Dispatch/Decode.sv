@@ -45,7 +45,7 @@ module DecodeStage
     output logic group_serial [ISSUE_WIDTH-1:0],
     output logic group_resource_bad [ISSUE_WIDTH-1:0],
 
-    // Internal selection count: stall-masked, independent of reset/redirect.
+    // Unmasked candidate selection; state captures only when not stalled.
     // Flush invalidates the queue and independently suppresses serve_consumed.
     input logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count,
     input logic issue_select_any,
@@ -142,11 +142,11 @@ module DecodeStage
     assign available_slots = empty_slots + issue_select_count;
     assign serve_consumed_normal = valid_inputs < available_slots ? valid_inputs : available_slots;
     assign next_empty_slots = available_slots - serve_consumed_normal;
-    assign serve_consumed = (reset || reset_reg || redirect_taken) ? '0 : serve_consumed_normal;
+    assign serve_consumed = (reset || reset_reg || redirect_taken || stall) ? '0 : serve_consumed_normal;
 
     always_ff @(posedge clk) begin
         if (reset || reset_reg || redirect_taken) empty_slots <= COUNT_W'(ISSUE_WIDTH);
-        else empty_slots <= next_empty_slots;
+        else if (!stall) empty_slots <= next_empty_slots;
     end
 
     typedef struct packed {
@@ -163,9 +163,7 @@ module DecodeStage
     function automatic SourceProducer_ age_source(input SourceProducer_ current);
         SourceProducer_ aged;
         aged = current;
-        if (!stall) begin
-            if (current.index < RF_INDEX) aged.index = current.index + 1'b1;
-        end
+        if (current.index < RF_INDEX) aged.index = current.index + 1'b1;
         return aged;
     endfunction
 
@@ -177,7 +175,7 @@ module DecodeStage
     end
 
     // Update each fixed source slot before the late FIFO-selection signal.
-    // All candidates are already aged to the capture edge before selection.
+    // Candidates assume an advancing capture edge; stall holds snapshot registers.
     // Prepare metadata even for unused operands; issue ignores it when rs*_valid
     // is low. Full instruction legality must not gate producer-write matching.
     function automatic SourceProducer_ refresh_source(
@@ -196,7 +194,7 @@ module DecodeStage
             matched |= hit;
         end
         // All buffered writers precede every current packet, including slot zero.
-        // Stall still permits absorption/refill, but all candidates remain unaged.
+        // Stall defers absorption/refill; buffered writers hold until advancement.
         return matched ? selected : aged_current;
     endfunction
 
@@ -411,12 +409,14 @@ module DecodeStage
                 end
             end
         end
-        // Metadata is unobservable for invalid/flushed slots. No validity or
-        // flush qualification follows this mux, and no new hold enable is needed.
+        // Stall is a capture enable, not part of metadata candidate calculation.
+        // Flushed metadata remains unobservable through packet validity.
         always_ff @(posedge clk) begin
-            {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination],
-             rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]}
-                <= producer_outcomes[issue_select_count];
+            if (!stall) begin
+                {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination],
+                 rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]}
+                    <= producer_outcomes[issue_select_count];
+            end
         end
 
         // Each outcome is independent of live issue_select_count. Occupancy,
@@ -455,37 +455,35 @@ module DecodeStage
                             pair_serial[older][younger];
                     end
                 end
-                if (reset || reset_reg || redirect_taken) begin
-                    raw_candidates[consumed] = 1'b0;
-                    serial_candidates[consumed] = 1'b0;
-                    resource_candidates[consumed] = 1'b0;
-                end
             end
         end
-        // Direct consumption-selected bits into D: no selection masks, validity
-        // qualification, reduction or hold enable after this mux.
+        // Structural flags freeze with their packet; flush overrides the hold.
         always_ff @(posedge clk) begin
-            group_raw[destination] <= raw_candidates[issue_select_count];
-            group_serial[destination] <= serial_candidates[issue_select_count];
-            group_resource_bad[destination] <= resource_candidates[issue_select_count];
+            if (reset || reset_reg || redirect_taken) begin
+                group_raw[destination] <= 1'b0;
+                group_serial[destination] <= 1'b0;
+                group_resource_bad[destination] <= 1'b0;
+            end else if (!stall) begin
+                group_raw[destination] <= raw_candidates[issue_select_count];
+                group_serial[destination] <= serial_candidates[issue_select_count];
+                group_resource_bad[destination] <= resource_candidates[issue_select_count];
+            end
         end
 
-        // Only validity needs flush control. Unconditionally capturing payload
-        // keeps the late second-issue selector directly at the packet mux output.
+        // Flush validity even when stalled. Payload holds on global stall and
+        // may be arbitrary when invalid; no gated clock is generated.
         always_ff @(posedge clk) begin
-            packets_valid[destination] <= (reset || reset_reg || redirect_taken) ? 1'b0 : selected_packet.valid;
-            packets_out[destination] <= selected_packet.packet;
-            retained_usage[destination] <= selected_packet.usage_bits;
-            lane_types_out[destination] <= selected_packet.lane;
+            if (reset || reset_reg || redirect_taken)
+                packets_valid[destination] <= 1'b0;
+            else if (!stall)
+                packets_valid[destination] <= selected_packet.valid;
+            if (!stall) begin
+                packets_out[destination] <= selected_packet.packet;
+                retained_usage[destination] <= selected_packet.usage_bits;
+                lane_types_out[destination] <= selected_packet.lane;
+            end
         end
     end
 endmodule
 
-// MOVE NEXT PC CALC FORWARD INTO INTEGER LANE OR SOMETHING
-
-// not sure if this is presently being done but you dont need
-// to zero serve_consumed on stall, only issue_select_count
-
-// if 200-250MHz still evades, make decode a mini FIFO.
-// Keep 4ish entries to keep it always ahead of issue.
-// this entirely removes issue accept chained dependency
+// next_pc remains unassigned; execution must derive it later.

@@ -14,12 +14,20 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
+**Current stall policy:** Decode freezes packet payload, producer snapshots,
+structural flags, retained-use bits, lane tags, validity and occupancy on global
+stall. Fetch consumption is zero. Reset/delayed-reset/redirect override the hold
+for validity, structural flags and occupancy. Candidate aging/count/prefix logic
+assumes advancement; only register enables and outward consumption depend on stall.
+Earlier refill-during-stall descriptions below are superseded by this policy.
+
+
 1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd, their register-bank flags, encoding-only operand-use bits and capability alongside branch prediction, using the same extension support parameters as decoding.
 2. Source addresses are latched with prediction results, compacted into the instruction FIFO, and carried through speculative serve windows with instruction, PC, validity, and prediction flags.
 3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects all payload fields and FIFO state combinationally, including rs1/rs2 and their bank flags. Dual issue has three outcomes: 0, 1, 2.
-4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, unless globally stalled. Table reads expose raw indices; Decode ages fresh reads, retained snapshots and buffered corrections locally before their correction mux.
+4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, on advancing captures; Decode holds all packet-related state during global stall. Table reads expose raw indices; Decode ages fresh reads, retained snapshots and buffered corrections locally before their correction mux.
 5. Issuer registers accepted integer writes in a one-advancing-cycle buffer, suppressing older duplicate destinations before capture. Buffered rd/source matches correct both readiness and forwarding; all buffered writers precede all current Decode packets.
-6. Decode absorbs buffered corrections into retained and refill metadata. Candidates are independently aged before correction selection, equivalent to aging the selected producer; the producer table commits the same buffer at index one. Stall holds buffer/table progress, while Decode may absorb unaged corrections into empty-slot refills. Reset/redirect clears buffer validity. No live Issue write reaches Decode refresh or table inputs combinationally.
+6. Decode absorbs buffered corrections into retained and refill metadata. Candidates are independently aged before correction selection, equivalent to aging the selected producer; the producer table commits the same buffer at index one. Stall holds buffer/table progress and all Decode packet-related state; corrections and refills resume on the first advancing edge. Reset/redirect clears buffer validity. No live Issue write reaches Decode refresh or table inputs combinationally.
 
 Source extraction's module file remains under Dispatch even though Fetch instantiates it. The old instruction-counted history remains removed; the current write buffer is replaced every advancing cycle, including idle cycles.
 
@@ -49,8 +57,7 @@ classified route; trap_type and legality-qualified
 operand/write/side-effect controls remain authoritative. All implemented lane
 classes must deliver traps; noninteger lane execution remains unfinished.
 
-Issuer supplies Decode with issue_select_count: the normal contract count masked
-only by global stall. Effective issue_consumed/acceptance still suppress reset and
+Issuer supplies Decode with issue_select_count: the unmasked normal contract count. Effective issue_consumed/acceptance still suppress reset and
 redirect. Decode uses the internal count for candidate selection; its validity,
 occupancy reset and outward serve_consumed independently enforce flush.
 
@@ -62,7 +69,7 @@ DecoderSlice also consumes carried operand-use bits: actual rs1/rs2/rd validity 
 ok AND the corresponding predecoded bit. MUL/DIV/atomic/CSR class predicates use
 carried capability; detailed operation and legality decoding remain local.
 
-Decode packet movement now uses stall-qualified issue prefix bits directly.
+Decode packet movement now uses unmasked issue prefix bits directly.
 issue_select_any resolves zero/one-pop occupancy candidates; issue_select_two
 selects the all-fresh pair at the final mux. Only selected packets are registered.
 Producer snapshots and structural flags retain binary-count outcome selection.
@@ -1136,3 +1143,47 @@ No stage or functional timing change. Previous pre-read-aging experiment/history
 retained; this reverses its read placement under the newer architecture.
 Static equation/interface/diff review only; no tests, lint or synthesis. Benefit
 unmeasured. Current description and Dispatch README updated.
+
+
+### 2026-11-15 - freeze Decode on global stall
+
+Started from clean local 3748638 (Prototype 2.2). Previous local-aging run reported
+WNS -2.055 ns and TNS -446.081 ns; pasted worst path was stall to Decode slot-one
+rs2_index[0]/D, 4.457 ns internal delay, five LUTs, dominated by routing.
+
+Decode.sv now uses !stall register enables for packets, lane/use metadata, producer
+snapshots, structural flags and normal validity/occupancy advancement. Reset,
+delayed reset and redirect still clear validity/flags and reset occupancy during
+stall. Outward serve_consumed is forced zero on stall, preventing Fetch from
+consuming inputs that Decode did not capture. reset_reg continues tracking reset.
+Candidate age_source always computes saturated advancement; candidate structural
+flush gating moved to register control. Issue.sv exposes unmasked count/any/two
+selection controls, while effective consumption/acceptance/writes remain stall-
+and flush-masked. No fabric-gated clocks, added pipeline stages or packet banks.
+
+Invariant: table and buffered writes hold during stall, so frozen Decode snapshots
+remain cycle-aligned and pending corrections survive until resume. On first advance,
+fresh/retained sources and buffered corrections age once and are captured with the
+corresponding packet selection. Flush invalidates frozen payload even if it holds.
+This deliberately removes refill/correction absorption during stall; the throughput
+tradeoff is losing that preparation opportunity. Stall fanout now targets register
+enables and outward consumption rather than candidate arithmetic/selection, and
+may become a CE or Fetch-side path. No timing improvement guaranteed.
+Updated current description/Dispatch README. Static stall/resume/flush-priority,
+interface and diff inspection only; no tests, lint or synthesis performed. next_pc
+remains unassigned and must be calculated later in execution.
+
+### 2026-11-15 - full Decode freeze timing result
+
+User reports WNS -1.577 ns / TNS -456.201 ns after Decode freeze, compared with
+-2.055 / -446.081: WNS improves 0.478 ns while TNS magnitude increases 10.120 ns.
+Pasted path launches buffered op_rd_reg[0][4], passes through producer correction,
+issue qualification and named issue_select_any, then ends at Decode slot-zero
+rs1_capability[0]/CE. Arrival 7.509 minus source clock 1.209 gives 6.300 ns data
+path delay, eight LUTs. Final portion after issue_select_any arrival at 5.640 is
+1.869 ns. CE setup is -0.150 ns. This is not the direct external-stall path.
+RTL's payload enable is !stall, but the routed CE also depends on issue selection;
+likely synthesis extracted additional hold enables from self-feedback metadata
+selection (capability/lane can remain unchanged while index ages). Exact CE Boolean
+function requires netlist inspection; no inference of a new explicit RTL gate.
+No RTL change, test, synthesis or implementation run performed for this review.

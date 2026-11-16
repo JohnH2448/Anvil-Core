@@ -24,7 +24,7 @@ module Issuer
 
     // Consumption To Frontend
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed,
-    // Decode payload selection ignores flush, but must retain packets on stall.
+    // Unmasked Decode candidate controls; Decode captures only when advancing.
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count,
     output logic issue_select_any,
     output logic issue_select_two,
@@ -139,10 +139,10 @@ module Issuer
     logic issue_good [ISSUE_WIDTH-1:0];
 
     // Early oldest eligibility does not wait for the younger readiness cone.
-    // Flush acts on validity/effective acceptance, not internal payload selection.
-    assign issue_select_any = issue_good[0] && !stall;
+    // Stall/flush act on capture/effective acceptance, not candidate selection.
+    assign issue_select_any = issue_good[0];
     if (ISSUE_WIDTH == 2) begin : second_selection
-        assign issue_select_two = issue_good[1] && !stall;
+        assign issue_select_two = issue_good[1];
     end else begin : single_selection
         assign issue_select_two = 1'b0;
     end
@@ -153,8 +153,7 @@ module Issuer
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
             issue_select_count += $clog2(ISSUE_WIDTH+1)'(issue_good[slot]);
         end
-        if (stall) issue_select_count = '0;
-        issue_consumed = (reset || redirect_taken) ? '0 : issue_select_count;
+        issue_consumed = (reset || redirect_taken || stall) ? '0 : issue_select_count;
     end
 
     // The current lookahead allocator guarantees the contract's mask at widths 1/2.

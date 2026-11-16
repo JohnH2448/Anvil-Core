@@ -4,6 +4,14 @@ See [frontend architecture and timing history](../ARCHITECTURE_HISTORY.md) for t
 
 ## Decode queue
 
+**Current global-stall behavior:** Decode freezes all packet-related state and
+forces serve_consumed to zero. Reset/redirect still flush validity and reset
+occupancy while stalled. Candidate metadata always assumes an advancing edge;
+unmasked issue count/prefix controls select candidates, and !stall enables their
+capture. Buffered writes/table state hold, preserving corrections until resume.
+This supersedes the earlier refill-during-stall notes retained below.
+
+
 `Decode.sv` defines `DecodeStage`, an ISSUE_WIDTH-entry queue of decoded
 packets. Issue pops a binary count of consecutive valid packets from lane zero.
 The queue retains the remaining packets and accepts up to the smaller of the
