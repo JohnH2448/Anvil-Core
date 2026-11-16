@@ -31,6 +31,7 @@ module DecodeStage
     input logic serve_rs2_used [ISSUE_WIDTH-1:0],
     input logic serve_rd_written [ISSUE_WIDTH-1:0],
     input logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0],
+    input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
@@ -108,6 +109,7 @@ module DecodeStage
             .rs3_float_in(serve_rs3_float[i]),
             .rd_float_in(serve_rd_float[i]),
             .capability_in(DecodeCapability_'(serve_capability[i])),
+            .trap_in(serve_trap[i]),
             .rs1_used_in(serve_rs1_used[i]),
             .rs2_used_in(serve_rs2_used[i]),
             .rd_written_in(serve_rd_written[i]),
@@ -409,13 +411,44 @@ module DecodeStage
                 end
             end
         end
-        // Stall is a capture enable, not part of metadata candidate calculation.
-        // Flushed metadata remains unobservable through packet validity.
+        OperandProducers_ selected_producers;
+        logic retained_rs1_match, retained_rs2_match;
+        logic rs1_identity_enable, rs2_identity_enable;
+        assign selected_producers = producer_outcomes[issue_select_count];
+        // Use the same integer-bank/write-valid match as refresh_source, without
+        // legality/operand-use qualification. Incoming sources are corrected in
+        // their own candidates and do not need to match the outgoing packet.
+        always_comb begin
+            retained_rs1_match = 1'b0;
+            retained_rs2_match = 1'b0;
+            for (int writer = 0; writer < ISSUE_WIDTH; writer++) begin
+                retained_rs1_match |= op_write[writer] &&
+                    !packets_out[destination].common.rs1_float &&
+                    op_rd[writer] == packets_out[destination].common.rs1;
+                retained_rs2_match |= op_write[writer] &&
+                    !packets_out[destination].common.rs2_float &&
+                    op_rd[writer] == packets_out[destination].common.rs2;
+            end
+        end
+        // Any pop permits replacement; empty slots permit refill. Deliberately
+        // allow extra captures rather than derive an exact value-change enable.
+        assign rs1_identity_enable = !stall &&
+            (issue_select_any || !packets_valid[destination] || retained_rs1_match);
+        assign rs2_identity_enable = !stall &&
+            (issue_select_any || !packets_valid[destination] || retained_rs2_match);
         always_ff @(posedge clk) begin
+            // Position progresses even when the same packet waits without a hit.
             if (!stall) begin
-                {rs1_index_out[destination], rs1_lane_out[destination], rs1_capability_out[destination],
-                 rs2_index_out[destination], rs2_lane_out[destination], rs2_capability_out[destination]}
-                    <= producer_outcomes[issue_select_count];
+                rs1_index_out[destination] <= selected_producers.rs1.index;
+                rs2_index_out[destination] <= selected_producers.rs2.index;
+            end
+            if (rs1_identity_enable) begin
+                rs1_lane_out[destination] <= selected_producers.rs1.lane;
+                rs1_capability_out[destination] <= selected_producers.rs1.capability;
+            end
+            if (rs2_identity_enable) begin
+                rs2_lane_out[destination] <= selected_producers.rs2.lane;
+                rs2_capability_out[destination] <= selected_producers.rs2.capability;
             end
         end
 

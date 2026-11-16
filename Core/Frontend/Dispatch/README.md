@@ -90,7 +90,7 @@ The decoder is organized by output field. Shared encoding predicates feed
 independent operation/payload case tables and explicit common-field equations.
 There is no whole-packet compressed/full selection or capability-driven
 `relevant_fields` pass. Unused payloads default to don't-care. Trap legality is
-computed independently and qualifies operand validity and defined
+precomputed in Queue and qualifies operand validity and defined
 side-effect controls; BR_NONE remains defined to suppress the parallel BRU.
 Compressed legality and payload mapping use raw 16-bit fields directly without
 canonical expansion. All register identities/banks come from predecode. Constant
@@ -496,3 +496,21 @@ stored. Packet validity flushes independently, with arbitrary invalid payload.
 Producer snapshots, structural flags and FIFO accounting retain the equivalent
 binary-count path. Width one uses only the oldest bit. The two-bit selection relies
 on the contract's oldest-first prefix and retains stall refill behavior.
+
+
+Producer snapshot index registers advance on !stall. Lane/capability registers
+instead use explicit permissive per-source enables: !stall AND (any consumption
+OR slot invalid OR retained buffered-write match). Any replacement can therefore
+capture incoming corrected metadata independently of the outgoing source match;
+waiting valid packets absorb matching writes, and empty slots can refill. The
+selected data path is unchanged. Extra captures are allowed to simplify control.
+
+
+Queue computes instruction trap_type from registered prediction payloads before
+FIFO insertion, using Fetch/InstructionLegality.sv. The result is stored with each
+FIFO entry under the identical commit/keep/index controls and carried through all
+serve candidates. No legality computation remains on serve-candidate construction.
+DecoderSlice consumes trap_in directly. This supersedes the initial per-serve-bank
+legality experiment; the main FIFO is now four bits wider, with no extra stage.
+All remaining instruction payload decoding stays in DecoderSlice.
+Earlier local-legality descriptions are superseded by this ownership change.

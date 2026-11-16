@@ -42,6 +42,7 @@ module FrontendTop
     logic serve_rs2_used [ISSUE_WIDTH-1:0];
     logic serve_rd_written [ISSUE_WIDTH-1:0];
     logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0];
+    TrapType_ serve_trap [ISSUE_WIDTH-1:0];
     logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0];
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
     logic serve_c_reg [ISSUE_WIDTH-1:0];
@@ -74,6 +75,7 @@ module FrontendTop
         .serve_rs2_used(serve_rs2_used),
         .serve_rd_written(serve_rd_written),
         .serve_capability(serve_capability),
+        .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
@@ -105,6 +107,7 @@ module FrontendTop
         .serve_rs2_used(serve_rs2_used),
         .serve_rd_written(serve_rd_written),
         .serve_capability(serve_capability),
+        .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),

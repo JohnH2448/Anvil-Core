@@ -14,6 +14,12 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
+Queue owns encoding legality: InstructionLegality evaluates registered prediction
+payloads before FIFO insertion. Four trap bits are stored with each FIFO entry and
+carried through the same speculative serve selection as the instruction.
+DecoderSlice consumes the carried result without repeating legality decoding.
+
+
 **Current stall policy:** Decode freezes packet payload, producer snapshots,
 structural flags, retained-use bits, lane tags, validity and occupancy on global
 stall. Fetch consumption is zero. Reset/delayed-reset/redirect override the hold
@@ -73,6 +79,11 @@ Decode packet movement now uses unmasked issue prefix bits directly.
 issue_select_any resolves zero/one-pop occupancy candidates; issue_select_two
 selects the all-fresh pair at the final mux. Only selected packets are registered.
 Producer snapshots and structural flags retain binary-count outcome selection.
+
+Decode snapshot indices capture every advancing edge. Lane/capability identity
+registers use explicit permissive enables: !stall AND (any consumption OR slot
+invalid OR retained-source buffered-write match), independently for rs1 and rs2.
+Their data still comes from fully corrected next-source candidates.
 
 ## Invariants introduced by timing work
 
@@ -1187,3 +1198,113 @@ likely synthesis extracted additional hold enables from self-feedback metadata
 selection (capability/lane can remain unchanged while index ages). Exact CE Boolean
 function requires netlist inspection; no inference of a new explicit RTL gate.
 No RTL change, test, synthesis or implementation run performed for this review.
+
+
+### 2026-11-15 - explicit permissive producer identity enables
+
+Started from clean local 0cccef8 (Prototype 2.3). Decode.sv separates source index
+capture (!stall) from lane/capability capture. For each operand, identity enable is
+!stall AND (issue_select_any OR !packets_valid[destination] OR retained_match).
+Retained match uses exactly refresh_source's buffered op_write, integer-bank and
+rd equality conditions, without operand-valid/legality qualification. Data remains
+selected_producers from existing aged/refreshed consumption/occupancy candidates.
+
+Invariant: without consumption a valid packet stays put, so only matching buffered
+writes can change lane/capability; index still progresses independently. Any pop
+permits all slots to capture shifted/refill metadata even if the outgoing source
+has no match. Invalid slots permit refill capture even with no consumption.
+Incoming-source matches are resolved before selection and cannot be lost when the
+write buffer changes at the edge. Stall holds everything; flush invalidates payload
+as before. Allows extra captures into invalid/unchanged slots intentionally.
+
+Goal: express a shallow enable instead of synthesis-derived hold conditions through
+wide metadata selection, targeting the reported issue_select_any-to-capability CE
+tail. Match logic may share with existing refresh logic or increase loads; Vivado
+may refactor enables again. No timing guarantee or new pipeline state. Current
+flow/README updated. Static retained/refill/pop/stall/flush reasoning and diff
+checks only; no tests, lint, synthesis or implementation run.
+
+### 2026-11-15 - explicit identity enable timing result
+
+User supplied routed path after permissive lane/capability enables: WNS -1.214 ns,
+an improvement of 0.363 ns over -1.577 ns. Data delay 7.334 - 1.217 = 6.117 ns,
+nine LUT levels. TNS not supplied. Worst path now launches Fetch's registered
+serve-consumption selector and traverses serve selection, legality/trap-related
+logic and memory-operation output selection into Decode slot-one memory.operation[1]/D.
+The previous producer-correction/issue-to-snapshot-CE path is no longer worst;
+its specific new delay is unknown. Approximate portions: launch/serve selection
+2.695 ns, remaining decode/output/capture 3.422 ns. Synthesized field names alone
+do not establish that rs1_valid itself feeds memory operation. No RTL changes or
+additional synthesis/testing performed for this report review.
+
+
+### 2026-11-15 - precompute trap type at speculative serve capture
+
+Moved DecoderSlice's compressed legality, full_trap function (including CSR policy,
+FP rounding restrictions and optional-extension checks), and final compressed trap
+selection unchanged into Fetch/InstructionLegality.sv. Queue.sv instantiates it
+per consumption outcome/serve lane on next_window instruction/compressed fields.
+Its four-bit TrapType_ output captures into serve_trap_bank alongside serve_bank.
+The same registered prev_serve_consumed selects both outputs. FetchTop,
+FrontendTop, DispatchTop and Decode carry serve_trap into DecoderSlice's trap_in.
+DecoderSlice now derives ok from the carried result; remaining operation payload
+formatting and all existing legality qualification stay local. Capability routing
+continues to ignore legality as previously requested. next_pc remains unassigned.
+
+No extra stage or main FIFO/prediction width increase. For dual serve, six trap
+candidates add 24 nominal stored bits plus duplicated legality logic; synthesis
+may share it. Retained and refilled candidates are both evaluated from their exact
+next_window word, including compression status. Empty/flush trap values are X,
+qualified by the accompanying valid bit. Trap banks capture on precisely the same
+edges as serve banks, including Fetch activity during backend stall; Decode holds
+and outward consumption is zero during stall as before. No semantic legality changes.
+
+Targets the measured serve-selector -> full legality -> memory.operation critical
+path (-1.214 ns WNS). Full legality is not shallow hardware, but its small result
+has broad downstream influence; the computation now precedes the serve latch.
+Risk: FIFO/retention selection plus legality may become the new capture path and
+increase area/routing. No timing gain assumed. Existing Tcl glob includes the new
+Fetch SV file without flow changes. Static extracted-equation, field-offset,
+interface/capture alignment and diff review only; no tests/lint/synthesis run.
+Current architecture/Dispatch README updated; prior ownership history preserved.
+
+
+### 2026-11-15 - move legality between prediction capture and FIFO insertion
+
+Serve-candidate legality experiment exposed a new path from registered serve
+consumption through FIFO read/candidate selection then legality into serve_trap_bank.
+User excerpt arrival 8.183 minus launch clock 1.365 = 6.818 ns data delay; WNS not
+provided. This is 0.701 ns above the preceding supplied 6.117 ns path, with different
+endpoints. Preserve the prior experiment as unsuccessful at its intended placement.
+
+Queue.sv now instantiates InstructionLegality once per FETCH_SLOTS on registered
+prediction_payload.bp_instruction/bp_compressed. fifo_trap captures prediction_trap
+using exactly the instruction's packet_commit/packet_keep/compacted write index.
+Trap bits are appended to FIFO candidate and retained serve payloads; serve banks
+are widened by TrapType_ width (currently 99 -> 103 bits). Removed per-serve-outcome
+legality instances and the separate trap bank. Existing serve_trap interface and
+DecoderSlice behavior are unchanged. Helper comment and current docs updated.
+
+No work added before prediction capture and no added stage. Prediction stalls
+retain the input word until commit; simultaneous prediction replacement uses old
+registered payload/trap at FIFO write, aligned by nonblocking edge semantics.
+Branch-prefix filtering, wraparound, FIFO occupancy and flush apply identically to
+instruction and trap. Invalid entries remain unobservable; no trap-array reset is
+needed. Serve retention carries existing trap bits without recomputation.
+
+Tradeoff: four additional bits per main FIFO entry and legality-plus-write-selection
+path on prediction-to-FIFO stage. That stage's spare timing is not measured. Expected
+relief of serve feedback path is unmeasured. Static equation/source alignment,
+packing widths, commit/flush and diff review only; no tests, lint or synthesis.
+
+### 2026-11-15 - post-prediction legality timing result
+
+User supplied WNS -1.042 ns after moving legality to prediction-register -> FIFO
+insertion. New data path 7.225 - 1.204 = 6.021 ns, eight LUTs. Compared with the
+failed serve-candidate legality placement (6.818 ns), data delay is lower by
+0.797 ns; compared with pre-legality-move WNS -1.214 ns, WNS improves 0.172 ns.
+TNS not supplied. Worst path now launches Decode slot-zero rs1[3], passes producer
+correction/readiness and named issue_select_any, then ends at slot-one rs1
+capability[2]/D. After issue_select_any arrives at 5.485 ns, metadata selection tail
+is 1.740 ns. Forward legality path is no longer reported worst; its exact new delay
+is unknown. No RTL changes or additional tool runs beyond report reading/logging.

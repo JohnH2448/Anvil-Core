@@ -45,6 +45,7 @@ module Queue
     output logic serve_rs2_used [SERVE_WORDS-1:0],
     output logic serve_rd_written [SERVE_WORDS-1:0],
     output logic [$bits(DecodeCapability_)-1:0] serve_capability [SERVE_WORDS-1:0],
+    output TrapType_ serve_trap [SERVE_WORDS-1:0],
     output logic [31:0] serve_pc_reg [SERVE_WORDS-1:0],
     output logic serve_valid_reg [SERVE_WORDS-1:0],
     output logic serve_c_reg [SERVE_WORDS-1:0],
@@ -245,8 +246,10 @@ module Queue
     // Each bank is the next state for one possible binary consumption count.
     // The actual count is registered alongside all banks, not used to build them.
     logic [SERVE_COUNT_W-1:0] prev_serve_consumed;
-    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + $bits(DecodeCapability_);
+    localparam int unsigned TRAP_W = $bits(TrapType_);
+    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + $bits(DecodeCapability_) + TRAP_W;
     logic [SERVE_ENTRY_W-1:0] serve_bank [SERVE_WORDS+1][SERVE_WORDS];
+
     logic [FIFO_INDEX_W:0] head_bank [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] occupied_bank [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] free_bank [SERVE_WORDS+1];
@@ -499,6 +502,23 @@ module Queue
         end
     end
 
+    // Legality runs after prediction capture, in parallel with FIFO admission.
+    // The same commit/keep/index as the instruction captures its result.
+    TrapType_ prediction_trap [FETCH_SLOTS];
+    TrapType_ fifo_trap [FIFO_WORDS];
+    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : prediction_legality
+        InstructionLegality #(
+            .SUPPORT_MUL(SUPPORT_MUL),
+            .SUPPORT_DIV(SUPPORT_DIV),
+            .SUPPORT_FLOAT(SUPPORT_FLOAT),
+            .SUPPORT_ATOMIC(SUPPORT_ATOMIC)
+        ) legality (
+            .instruction(prediction_payload[lane].bp_instruction),
+            .is_compressed(prediction_payload[lane].bp_compressed),
+            .trap(prediction_trap[lane])
+        );
+    end
+
     // Compacts Kept Prediction Lanes Into FIFO Entries Through First Taken Branch
     always_ff @(posedge clk) begin
         if (!reset && !reset_reg && !redirect_taken && packet_commit) begin
@@ -521,6 +541,7 @@ module Queue
                     fifo_capability[index] <= prediction_capability[i];
                     fifo_rs2[index] <= prediction_rs2[i];
                     fifo_data[index] <= prediction_payload[i].bp_instruction;
+                    fifo_trap[index] <= prediction_trap[i];
                     fifo_pc[index] <= prediction_payload[i].bp_pc;
                     fifo_c[index] <= prediction_payload[i].bp_compressed;
                     fifo_branch[index] <= prediction_payload[i].bp_branch;
@@ -547,19 +568,20 @@ module Queue
     assign fifo_empty = fifo_occipied_slots == '0;
 
     for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : serve_lanes
+        assign serve_trap[lane] = TrapType_'(serve_bank[prev_serve_consumed][lane][TRAP_W-1:0]);
         logic [FIFO_INDEX_W-1:0] read_index;
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
             fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index],
-            fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index]};
+            fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index], fifo_trap[read_index]};
         assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
             serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
-            serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane]};
+            serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane], serve_trap[lane]};
         // All fields, including validity, select the same registered outcome.
         assign {serve_valid_reg[lane], serve_c_reg[lane], serve_taken_reg[lane],
             serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
             serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane]} =
-            serve_bank[prev_serve_consumed][lane];
+            serve_bank[prev_serve_consumed][lane][SERVE_ENTRY_W-1:TRAP_W];
     end
 
     for (genvar consumed = 0; consumed <= SERVE_WORDS; consumed++) begin : serve_outcomes
