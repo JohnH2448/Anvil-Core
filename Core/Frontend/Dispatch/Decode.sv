@@ -5,6 +5,8 @@ module DecodeStage
 #(
     parameter unsigned ISSUE_WIDTH = 2,
     parameter unsigned EXECUTION_UNROLL = Parameters::EXECUTION_UNROLL,
+    parameter unsigned BYPASS_ENABLED = Parameters::BYPASS_ENABLED,
+    parameter unsigned DIVIDER_AUTO_PIPE = Parameters::DIVIDER_AUTO_PIPE,
     parameter unsigned SUPPORT_MUL = 1,
     parameter unsigned SUPPORT_DIV = 1,
     parameter unsigned SUPPORT_FLOAT = 1,
@@ -45,6 +47,7 @@ module DecodeStage
     output logic group_raw [ISSUE_WIDTH-1:0],
     output logic group_serial [ISSUE_WIDTH-1:0],
     output logic group_resource_bad [ISSUE_WIDTH-1:0],
+    output logic operands_ready [ISSUE_WIDTH-1:0],
     output logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0],
     output logic [ISSUE_WIDTH-1:0] rs2_buffer_match [ISSUE_WIDTH-1:0],
 
@@ -66,6 +69,9 @@ module DecodeStage
     // Producer Table Reads
     output logic [4:0] rs1 [ISSUE_WIDTH-1:0],
     output logic [4:0] rs2 [ISSUE_WIDTH-1:0],
+
+    input logic rs1_capture_ready [ISSUE_WIDTH-1:0],
+    input logic rs2_capture_ready [ISSUE_WIDTH-1:0],
 
     // Current Producer Table Data; fresh snapshots are aged locally for capture.
     input logic [UNROLLED_W-1:0] rs1_index [ISSUE_WIDTH-1:0],
@@ -360,6 +366,78 @@ module DecodeStage
         end
     end
 
+    // Evaluate next-cycle readiness for every possible accepted prefix. No live
+    // acceptance gates these computations: consumption selects only final bits.
+    // Evaluate each old buffer writer at capture position one, independently
+    // of source matching. Data correction and eligibility correction run in parallel.
+    logic buffered_capture_ready [ISSUE_WIDTH];
+    for (genvar writer = 0; writer < ISSUE_WIDTH; writer++) begin : buffered_readiness
+        assign buffered_capture_ready[writer] = producer_capture_ready(UNROLLED_W'(0),
+            op_type[writer], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
+    end
+    function automatic logic refresh_ready(
+        input logic snapshot_ready,
+        input logic [4:0] source_register,
+        input logic source_float
+    );
+        logic hit, matched, selected;
+        matched = 1'b0;
+        selected = 1'b0;
+        for (int writer = 0; writer < ISSUE_WIDTH; writer++) begin
+            hit = op_write[writer] && !source_float && op_rd[writer] == source_register;
+            matched |= hit;
+            selected |= hit && buffered_capture_ready[writer];
+        end
+        return matched ? selected : snapshot_ready;
+    endfunction
+
+    logic candidate_writes [ISSUE_WIDTH];
+    logic candidate_bypass_ready [ISSUE_WIDTH];
+    for (genvar writer = 0; writer < ISSUE_WIDTH; writer++) begin : prospective_writers
+        // Mirrors issue_write except acceptance/stall/flush, which are implicit
+        // in the chosen outcome and the capture enable/validity.
+        assign candidate_writes[writer] = packets_out[writer].common.rd_valid &&
+            !packets_out[writer].common.rd_float && packets_out[writer].common.rd != 0;
+        assign candidate_bypass_ready[writer] = BYPASS_ENABLED &&
+            packets_out[writer].common.capability == CAP_ALU;
+    end
+    logic source_ready_by_pop [ISSUE_WIDTH+1][SOURCE_COUNT];
+    for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : readiness_sources
+        logic snapshot_rs1_ready, snapshot_rs2_ready;
+        logic base_rs1_ready, base_rs2_ready;
+        if (source_slot < ISSUE_WIDTH) begin : retained
+            assign snapshot_rs1_ready = producer_capture_ready(rs1_index_out[source_slot],
+                rs1_capability_out[source_slot], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
+            assign snapshot_rs2_ready = producer_capture_ready(rs2_index_out[source_slot],
+                rs2_capability_out[source_slot], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
+        end else begin : fresh
+            assign snapshot_rs1_ready = rs1_capture_ready[source_slot - ISSUE_WIDTH];
+            assign snapshot_rs2_ready = rs2_capture_ready[source_slot - ISSUE_WIDTH];
+        end
+        assign base_rs1_ready = refresh_ready(snapshot_rs1_ready,
+            structural_sources[source_slot].common.rs1, structural_sources[source_slot].common.rs1_float);
+        assign base_rs2_ready = refresh_ready(snapshot_rs2_ready,
+            structural_sources[source_slot].common.rs2, structural_sources[source_slot].common.rs2_float);
+        for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : outcome
+            always_comb begin
+                logic ready_1, ready_2;
+                ready_1 = base_rs1_ready;
+                ready_2 = base_rs2_ready;
+                // New buffer writers start at zero NEXT cycle. Ascending priority
+                // reproduces youngest-writer dedup without live op_write gating.
+                for (int writer = 0; writer < consumed; writer++) begin
+                    if (candidate_writes[writer] && next_rs1_match[source_slot][writer])
+                        ready_1 = candidate_bypass_ready[writer];
+                    if (candidate_writes[writer] && next_rs2_match[source_slot][writer])
+                        ready_2 = candidate_bypass_ready[writer];
+                end
+                source_ready_by_pop[consumed][source_slot] =
+                    (!structural_sources[source_slot].common.rs1_valid || ready_1) &&
+                    (!structural_sources[source_slot].common.rs2_valid || ready_2);
+            end
+        end
+    end
+
     // Packet movement uses the issue prefix directly: oldest chooses zero/one
     // consumption early, then younger chooses the full-pop outcome at the end.
     typedef struct packed {
@@ -375,6 +453,7 @@ module DecodeStage
         PacketChoice_ early_packet, selected_packet;
         OperandProducers_ producer_outcomes [ISSUE_WIDTH+1];
         logic [ISSUE_WIDTH:0] raw_candidates, serial_candidates, resource_candidates;
+        logic [ISSUE_WIDTH:0] ready_candidates;
 
         // Combinational source choices only; no candidate packet bank is stored.
         for (genvar consumed = 0; consumed <= 1; consumed++) begin : packet_selection
@@ -513,6 +592,31 @@ module DecodeStage
                 end
             end
         end
+        // Source identity is resolved for each constant pop/occupancy combination
+        // before the late count mux, exactly as for the associated packet.
+        for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : readiness_selection
+            logic occupancy_ready [ISSUE_WIDTH-consumed+1];
+            for (genvar empty = 0; empty <= ISSUE_WIDTH - consumed; empty++) begin : occupancy
+                localparam int RETAINED = ISSUE_WIDTH - empty - consumed;
+                localparam int SOURCE = destination < RETAINED ? destination + consumed :
+                    ISSUE_WIDTH + destination - RETAINED;
+                assign occupancy_ready[empty] = source_ready_by_pop[consumed][SOURCE];
+            end
+            always_comb begin
+                ready_candidates[consumed] = 1'b0;
+                for (int empty = 0; empty <= ISSUE_WIDTH - consumed; empty++) begin
+                    if (empty_slots == COUNT_W'(empty))
+                        ready_candidates[consumed] = occupancy_ready[empty];
+                end
+            end
+        end
+        always_ff @(posedge clk) begin
+            if (reset || reset_reg || redirect_taken)
+                operands_ready[destination] <= 1'b0;
+            else if (!stall)
+                operands_ready[destination] <= ready_candidates[issue_select_count];
+        end
+
         // Structural flags freeze with their packet; flush overrides the hold.
         always_ff @(posedge clk) begin
             if (reset || reset_reg || redirect_taken) begin

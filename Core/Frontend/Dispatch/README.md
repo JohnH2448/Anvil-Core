@@ -4,6 +4,14 @@ See [frontend architecture and timing history](../ARCHITECTURE_HISTORY.md) for t
 
 ## Decode queue
 
+**Current operand eligibility:** Decode registers next-cycle operands_ready for
+consume-zero/one/two outcomes, including the new write buffer each outcome implies.
+IssueContract uses that bit with structural flags, validity and live serial_active;
+its former producer-readiness/bypass checks now reside in Decode. Full producer
+correction remains on forwarding payload only. Earlier descriptions of combinational
+Issue readiness are superseded by this lookahead experiment.
+
+
 **Current global-stall behavior:** Decode freezes all packet-related state and
 forces serve_consumed to zero. Reset/redirect still flush validity and reset
 occupancy while stalled. Candidate metadata always assumes an advancing edge;
@@ -524,3 +532,24 @@ integer/x0 and youngest-writer rules without live address comparisons in correct
 Packet/match/write-buffer capture holds on stall; flush clears packet/write validity.
 Decode's own current-buffer refresh matching remains unchanged. Dual issue adds
 eight match bits, with no pipeline stage or live-write qualification before comparison.
+
+
+Operand lookahead starts from aged/refreshed retained or fresh producer snapshots.
+It applies prospective accepted integer writers at index zero using precomputed
+source matches and youngest-writer priority, without live acceptance qualification
+before the comparisons. Actual consumption selects the final eligibility bit into
+its packet-aligned register. Stalls hold it; flush clears it. BYPASS_ENABLED and
+execution/divider thresholds are applied in Decode. Snapshot/forwarding payload
+protocols and the registered write buffer remain unchanged; no added issue stage.
+
+
+For operand lookahead, ProducerTable now supplies one-bit capture-edge eligibility
+computed per entry before source-address selection, alongside unchanged raw metadata.
+Decode uses the same threshold helper on retained snapshots and corrects eligibility
+with precomputed buffered-writer ready bits independently of metadata correction.
+Prospective newly issued writers retain the separate index-zero bypass rule. These
+are combinational summaries, not new table state; stall remains a register enable.
+
+Capture eligibility compares the index against constant per-capability thresholds
+before selecting the result. Threshold arithmetic depends only on configuration;
+no live capability-selected integer threshold is decremented before comparison.

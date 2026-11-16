@@ -14,6 +14,18 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
+ProducerTable precomputes one-bit capture-edge eligibility per entry before source
+address lookup. Decode corrects these ready bits independently of full metadata,
+then applies prospective new writers for its registered operand lookahead.
+
+
+Decode computes next-cycle operand eligibility separately for every possible
+consumption prefix, including prospective newly issued writers. It registers the
+selected operands_ready bit with each packet. IssueContract no longer evaluates
+corrected index/capability: it combines this bit with structural flags, validity
+and live serial occupancy. Full buffered correction still builds forwarding payload.
+
+
 Decode precomputes source matches against current issue-candidate destinations and
 registers them with the next packets. Issuer qualifies these bits with next-cycle
 buffered op_write rather than comparing addresses in its correction path. Decode's
@@ -43,7 +55,7 @@ Earlier refill-during-stall descriptions below are superseded by this policy.
 
 Source extraction's module file remains under Dispatch even though Fetch instantiates it. The old instruction-counted history remains removed; the current write buffer is replaced every advancing cycle, including idle cycles.
 
-Current producer metadata contains only index, lane, and capability. IssueContract derives readiness directly from index/capability and configured execution/divider bounds; no countdown state or wiring remains. RF-position entries are ready independently of capability.
+Current producer metadata contains only index, lane, and capability. Decode lookahead derives readiness from index/capability and configured execution/divider bounds; no countdown state or wiring remains. RF-position entries are ready independently of capability.
 
 FrontendTop's representative lane input payload registers capture every unstalled
 cycle; acceptance controls only validity. IntegerLane's actual input payload latch
@@ -1356,3 +1368,114 @@ Named issue_select_count[1] arrives at 5.365 ns; remaining selection tail 1.818 
 including a 1.125 ns route. This is consistent with removal of live equality from
 Issue correction, but specific before/after cones differ and TNS was not supplied.
 No additional RTL changes or synthesis/testing performed for this review.
+
+
+### 2026-11-16 - speculative next-cycle operand eligibility
+
+Started from clean local 6d481d1 (Prototype 2.5), baseline reported WNS -0.967 ns.
+Decode.sv evaluates eligibility per fixed retained/fresh source and consumption
+outcome. Base eligibility uses the existing aged/current-buffer-refreshed snapshot.
+For each writer below the constant assumed consumed count, valid nonzero integer rd
+and precomputed next-source match override eligibility with that producer's index-zero
+rule (BYPASS_ENABLED AND CAP_ALU). Ascending writer priority matches youngest-writer
+buffer dedup. Current issue_good/op_write for prospective writers never gates this
+calculation; actual consumption only selects completed outcome bits for capture.
+
+Each slot's registered operands_ready is selected with the same constant-pop and
+occupancy source mapping as its packet. Decode gains BYPASS_ENABLED/DIVIDER_AUTO_PIPE
+parameters, wired from Dispatch. Source usability preserves prior readiness thresholds,
+RF behavior and bypass rules; actual rs1/rs2_valid still masks unused operands.
+Issue.sv/Top.sv carry readiness to IssueContract.sv. Contract no longer has producer
+metadata inputs or readiness/bypass calculation; it combines registered operand
+eligibility, existing structural flags, validity and live serial_active. Removed
+unused contract parameter overrides; readiness configuration is now Decode-owned.
+Full corrected metadata and registered matches remain for forwarding and Decode
+absorption; acceptance no longer waits for that Issue correction output.
+
+Invariant: at each advancing edge, consumed prefix identifies precisely which
+current candidates become new buffered writers. The selected eligibility therefore
+includes new buffer index-zero overrides, while its base snapshot includes old
+buffer absorption at index one and exactly one advancement. Nonwriting/illegal/x0/
+FP destinations never override. Younger accepted same-rd writers win, unaccepted
+younger writers do not. Same-group RAW remains separate. No-pop waiting packets
+re-evaluate progressed old producers; incoming packets evaluate their own sources.
+Stall freezes eligibility, packets, buffer and backend; flush clears eligibility
+and validity even while stalled. No extra stage, two additional state bits for dual
+issue. Existing variable-latency/global-stall and incomplete FP tracking assumptions
+are unchanged; this is not a new dynamic completion mechanism.
+
+Goal: replace correction/readiness -> issue -> wide snapshot selection feedback
+with registered eligibility -> small issue decision -> candidate capture. Cost:
+prospective-writer priority logic and eligibility computation before Decode capture;
+base table-read/refresh -> eligibility can become critical. No measured gain claimed.
+Current flow/README updated. Static threshold/bypass equivalence, prefix writer/dedup,
+source mapping, stall/flush and interface/diff review only. No tests, lint, synthesis
+or implementation run, as requested. No permanent test artifacts.
+
+### 2026-11-16 - operand-lookahead first timing result
+
+User supplied WNS -1.163 ns versus baseline -0.967 ns (0.196 ns regression).
+Data delay 7.310 - 1.205 = 6.105 ns versus 5.937 ns (+0.168), nine LUTs.
+Launch is Fetch prev_serve_consumed[0], endpoint Decode operands_ready_reg[1]/D.
+The path crosses serve selection then fresh-source producer/readiness candidate
+calculation; previous live Issue feedback is no longer the reported worst path.
+Approximate portions: launch/serve selection 2.247 ns, intermediate producer
+lookup/correction cone 2.524 ns, remaining readiness/outcome logic 1.334 ns.
+Exact intermediate LUT functions require netlist inspection. No TNS supplied;
+no proof of timing improvement for the complete design. Potential follow-up is
+compute fresh-table capture-edge eligibility before address selection, selecting
+one-bit eligibility in parallel with metadata instead of evaluating it afterward.
+Not implemented or measured. No RTL edits or additional tests/synthesis for review.
+
+
+### 2026-11-16 - calculate capture eligibility before producer lookup
+
+User believes TNS improved with operand lookahead; no numeric TNS supplied.
+To shorten the newly exposed fresh-source candidate path, ProducerTable.sv now
+computes capture_ready per entry and reads one bit per source in parallel with raw
+index/lane/capability. No new stored table state. Decode.sv computes retained-source
+eligibility from raw snapshots independently, and refresh_ready selects old buffered
+writer eligibility bits instead of interpreting corrected metadata. New prospective
+writer priority/index-zero bypass logic and final operands_ready capture stay intact.
+Dispatch/Top.sv wires the new read outputs and divider configuration.
+
+Definitions.sv provides a shared producer_capture_ready helper: evaluate readiness
+after one saturated advancement using index >= ready_threshold-1 (threshold <=1
+always ready), with RF-after-capture handled independently of unknown capability.
+This avoids increment/saturation followed by capability evaluation. It assumes an
+advancing capture; no stall enters this computation because Decode holds on stall.
+Old buffered writers use current index zero -> capture position one. Prospective
+new writers still use index zero NEXT cycle with BYPASS_ENABLED && CAP_ALU.
+Integer-bank/write-valid matching is identical to metadata refresh, and buffer
+unique destinations permit parallel ready selection. False/true readiness overrides
+both remain possible; no OR-only shortcut loses a newer unready writer.
+
+Correctness invariant: helper equals source_usable(age_source(raw)) for supported
+producer positions/configurations, including RF, serial, multiply/divide thresholds.
+Full metadata/producer-table writes and issue policy are unchanged. Tradeoff:
+per-entry eligibility decode and a separate one-bit table-read mux add logic and
+fanout, but remove capability/position interpretation after late address selection.
+Expected timing benefit unmeasured. Current flow/Dispatch README updated. Static
+threshold algebra, parameter/wiring and diff inspection only; no tests/lint/synthesis.
+
+
+### 2026-11-16 - remove capability-selected threshold arithmetic
+
+User reports regression across metrics after per-entry capture eligibility; supplied
+report shows WNS -1.268 ns versus -1.163 ns, data delay 6.176 ns versus 6.105 ns.
+Numeric TNS was not supplied. Worst path now launches producer capability entry 23
+and ends at Decode operands_ready[1], with 13 levels including four CARRY4s before
+the capture-ready table read. Logic delay is 2.085 ns and routing 4.091 ns.
+
+Definitions.sv previously selected an int unsigned threshold by live capability,
+then subtracted one and compared. That expression is a likely source of the wide
+carry chain; this is an avoidable RTL arithmetic dependency, not merely routing
+variation. Replaced it with per-capability direct index comparisons against
+configuration-only constants. Divide/minimum/threshold subtraction now depend only
+on constant call-site configuration, never live capability. Preserves RF override,
+threshold <= 1 behavior, MUL/DIV limits and serial readiness; no state, interfaces,
+stall behavior or stage boundaries change. The speculative eligibility experiment
+and per-entry read remain in place. Expected carry-chain removal/timing benefit is
+unmeasured, and exact synthesized arithmetic identification needs netlist inspection.
+Validation: static threshold equivalence and diff review only; no tests, lint,
+synthesis or implementation run. Dispatch README updated to describe this form.

@@ -21,6 +21,7 @@ module Issuer
     input logic group_raw [ISSUE_WIDTH-1:0],
     input logic group_serial [ISSUE_WIDTH-1:0],
     input logic group_resource_bad [ISSUE_WIDTH-1:0],
+    input logic operands_ready [ISSUE_WIDTH-1:0],
     input logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0],
     input logic [ISSUE_WIDTH-1:0] rs2_buffer_match [ISSUE_WIDTH-1:0],
 
@@ -162,19 +163,10 @@ module Issuer
         initial $fatal(1, "Direct contract consumption requires an exact allocator for ISSUE_WIDTH > 2");
     end
 
-    // Buffered corrections feed both readiness and forwarding before absorption.
+    // Registered lookahead drives readiness; corrected producer metadata now feeds
+    // forwarding payload only, independently of acceptance.
     IssueContract #(
-        .ISSUE_WIDTH(ISSUE_WIDTH),
-        .EXECUTION_UNROLL(EXECUTION_UNROLL),
-        .DIVIDER_AUTO_PIPE(Parameters::DIVIDER_AUTO_PIPE),
-        .BYPASS_ENABLED(BYPASS_ENABLED),
-        .INTEGER_LANE_COUNT(Parameters::INTEGER_LANE_COUNT),
-        .MEMORY_LANE_COUNT(Parameters::MEMORY_LANE_COUNT),
-        .FLOATING_LANE_COUNT(Parameters::FLOATING_LANE_COUNT),
-        .SUPPORT_MUL(Parameters::SUPPORT_MUL),
-        .SUPPORT_DIV(Parameters::SUPPORT_DIV),
-        .SUPPORT_FLOAT(Parameters::SUPPORT_FLOAT),
-        .SUPPORT_ATOMIC(Parameters::SUPPORT_ATOMIC)
+        .ISSUE_WIDTH(ISSUE_WIDTH)
     ) issue_contract (
         .packets(packets_out),
         .lane_types(lane_types_out),
@@ -182,13 +174,8 @@ module Issuer
         .group_raw(group_raw),
         .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
+        .operands_ready(operands_ready),
         .serial_active(serial_active),
-        .rs1_index(rs1_index_corrected),
-        .rs2_index(rs2_index_corrected),
-        .rs1_lane(rs1_lane_corrected),
-        .rs2_lane(rs2_lane_corrected),
-        .rs1_capability(rs1_capability_corrected),
-        .rs2_capability(rs2_capability_corrected),
         .issue_good(issue_good)
     );
 

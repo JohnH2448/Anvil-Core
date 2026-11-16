@@ -4,7 +4,8 @@ module ProducerTable
     import Definitions::*;
 #(
     parameter unsigned ISSUE_WIDTH = 2,
-    parameter unsigned EXECUTION_UNROLL = 1
+    parameter unsigned EXECUTION_UNROLL = 1,
+    parameter unsigned DIVIDER_AUTO_PIPE = Parameters::DIVIDER_AUTO_PIPE
 )(
 
     // Standard Inputs
@@ -25,6 +26,10 @@ module ProducerTable
     output DecodeCapability_ rs1_capability [ISSUE_WIDTH-1:0],
     output DecodeCapability_ rs2_capability [ISSUE_WIDTH-1:0],
 
+    // Eligibility after an advancing capture, before buffered-write correction.
+    output logic rs1_capture_ready [ISSUE_WIDTH-1:0],
+    output logic rs2_capture_ready [ISSUE_WIDTH-1:0],
+
     // Register Destination Writes
     input logic [4:0] op_rd [ISSUE_WIDTH-1:0],
     input logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0],
@@ -42,6 +47,12 @@ module ProducerTable
     logic [UNROLLED_W-1:0] index_table [31:0];
     logic [LANE_WIDTH-1:0] lane_table [31:0];
     DecodeCapability_ capability_table [31:0];
+    logic capture_ready [31:0];
+    for (genvar regno = 0; regno < 32; regno++) begin : read_eligibility
+        assign capture_ready[regno] = producer_capture_ready(index_table[regno],
+            capability_table[regno], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
+    end
+
     // Issuer buffers writes and suppresses older duplicate destinations before capture.
     // Commit advances the buffered producer from index zero to index one.
     // op_age remains an interface tag, not a dynamic arbitration input.
@@ -94,6 +105,8 @@ module ProducerTable
     // Operand Serving
     always_comb begin
         for (int unsigned s = 0; s < ISSUE_WIDTH; s++) begin
+            rs1_capture_ready[s] = capture_ready[rs1[s]];
+            rs2_capture_ready[s] = capture_ready[rs2[s]];
             rs1_index[s] = index_table[rs1[s]];
             rs2_index[s] = index_table[rs2[s]];
             rs1_lane[s] = lane_table[rs1[s]];

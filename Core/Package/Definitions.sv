@@ -132,4 +132,41 @@ package Definitions;
     } IssuerPacket_;
 
 
+    // Eligibility after one advancing edge. Thresholds are shifted back by one
+    // so no incrementer or stall-controlled mux precedes the one-bit table read.
+    // This is not index-zero bypass eligibility for newly issued producers.
+    function automatic logic producer_capture_ready(
+        input logic [DerivedParameters::UNROLLED_W-1:0] index,
+        input Enumerations::DecodeCapability_ capability,
+        input int unsigned execution_unroll,
+        input int unsigned divider_auto_pipe
+    );
+        int unsigned div_ready;
+        // Configuration-only arithmetic folds to constants at each call site.
+        // Compare before capability selection: never subtract from a threshold
+        // selected by capability, which can infer a wide carry chain.
+        div_ready = (32 + divider_auto_pipe - 1) / divider_auto_pipe + 2;
+        if (index >= execution_unroll + 1) return 1'b1; // RF after capture
+        case (capability)
+            Enumerations::CAP_ALU,
+            Enumerations::CAP_BRU, Enumerations::CAP_MEMORY: return 1'b1;
+            Enumerations::CAP_MUL: begin
+                if (execution_unroll <= 1) return 1'b1;
+                return index >= 1;
+            end
+            Enumerations::CAP_DIV: begin
+                if (execution_unroll <= 1) return 1'b1;
+                if (execution_unroll < div_ready)
+                    return index >= execution_unroll - 1;
+                return index >= div_ready - 1;
+            end
+            Enumerations::CAP_SYSTEM, Enumerations::CAP_CSR:
+                return index >= execution_unroll;
+            default: begin
+                if (execution_unroll <= 1) return 1'b1;
+                return index >= execution_unroll - 1;
+            end
+        endcase
+    endfunction
+
 endpackage

@@ -47,6 +47,7 @@ module DispatchTop
     logic group_raw [ISSUE_WIDTH-1:0];
     logic group_serial [ISSUE_WIDTH-1:0];
     logic group_resource_bad [ISSUE_WIDTH-1:0];
+    logic operands_ready [ISSUE_WIDTH-1:0];
     logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0];
     logic [ISSUE_WIDTH-1:0] rs2_buffer_match [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_consumed;
@@ -62,6 +63,9 @@ module DispatchTop
     logic [LANE_WIDTH-1:0] rs2_lane [ISSUE_WIDTH-1:0];
     DecodeCapability_ rs1_capability [ISSUE_WIDTH-1:0];
     DecodeCapability_ rs2_capability [ISSUE_WIDTH-1:0];
+
+    logic rs1_capture_ready [ISSUE_WIDTH-1:0];
+    logic rs2_capture_ready [ISSUE_WIDTH-1:0];
 
     // Registered producer lookups from decode to issue
     logic [UNROLLED_W-1:0] rs1_index_out [ISSUE_WIDTH-1:0];
@@ -81,6 +85,8 @@ module DispatchTop
     DecodeStage #(
         .ISSUE_WIDTH(ISSUE_WIDTH),
         .EXECUTION_UNROLL(EXECUTION_UNROLL),
+        .BYPASS_ENABLED(BYPASS_ENABLED),
+        .DIVIDER_AUTO_PIPE(Parameters::DIVIDER_AUTO_PIPE),
         .SUPPORT_MUL(Parameters::SUPPORT_MUL),
         .SUPPORT_DIV(Parameters::SUPPORT_DIV),
         .SUPPORT_FLOAT(Parameters::SUPPORT_FLOAT),
@@ -115,6 +121,7 @@ module DispatchTop
         .group_raw(group_raw),
         .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
+        .operands_ready(operands_ready),
         .rs1_buffer_match(rs1_buffer_match),
         .rs2_buffer_match(rs2_buffer_match),
         .issue_select_count(issue_select_count),
@@ -127,6 +134,8 @@ module DispatchTop
         .op_type(op_type),
         .rs1(rs1),
         .rs2(rs2),
+        .rs1_capture_ready(rs1_capture_ready),
+        .rs2_capture_ready(rs2_capture_ready),
         .rs1_index(rs1_index),
         .rs2_index(rs2_index),
         .rs1_lane(rs1_lane),
@@ -157,6 +166,7 @@ module DispatchTop
         .group_raw(group_raw),
         .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
+        .operands_ready(operands_ready),
         .rs1_buffer_match(rs1_buffer_match),
         .rs2_buffer_match(rs2_buffer_match),
         .issue_consumed(issue_consumed),
@@ -181,7 +191,8 @@ module DispatchTop
 
     ProducerTable #(
         .ISSUE_WIDTH(ISSUE_WIDTH),
-        .EXECUTION_UNROLL(EXECUTION_UNROLL)
+        .EXECUTION_UNROLL(EXECUTION_UNROLL),
+        .DIVIDER_AUTO_PIPE(Parameters::DIVIDER_AUTO_PIPE)
     ) producer_table (
         .clk(clk),
         .reset(reset),
@@ -189,6 +200,8 @@ module DispatchTop
         .stall(stall),
         .rs1(rs1),
         .rs2(rs2),
+        .rs1_capture_ready(rs1_capture_ready),
+        .rs2_capture_ready(rs2_capture_ready),
         .rs1_index(rs1_index),
         .rs2_index(rs2_index),
         .rs1_lane(rs1_lane),
