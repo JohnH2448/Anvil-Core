@@ -79,7 +79,6 @@ The latest single-issue run (286.37 MHz) uses 2.500 ns maximum delay for stall, 
 | RV32IMAFC | 2 | 8 | 1 | 5 | 227.22 | 4.401 | 5,273 | 3,262 |
 | RV32IMC | 2 | 8 | 1 | 4 | 236.18 | 4.234 | 4,579 | 2,902 |
 | RV32IC | 2 | 8 | 1 | 4 | 230.52 | 4.338 | 4,482 | 2,890 |
-| RV32IC | 1 | 8 | 1 | 3 | 243.19 | 4.112 | 2,790 | 2,141 |
 | RV32IC | 1 | 8 | 1 | 3 | 286.37 | 3.492 | 2,828 | 2,141 |
 
 Note: These are representative, not guarentees.
