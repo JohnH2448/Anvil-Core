@@ -24,6 +24,25 @@ module FrontendTop
     output logic accept_vector [TOTAL_LANE_COUNT-1:0]
 );
 
+    // Shared packet widths come from Parameters; reject inconsistent overrides.
+    initial begin
+        if (ISSUE_WIDTH != Parameters::ISSUE_WIDTH || EXECUTION_UNROLL != Parameters::EXECUTION_UNROLL)
+            $fatal(1, "Configure issue width/unroll through Parameters to match shared packet widths");
+        if (ISSUE_WIDTH < 1 || ISSUE_WIDTH > 2 || EXECUTION_UNROLL < 1)
+            $fatal(1, "Frontend requires ISSUE_WIDTH 1..2 and EXECUTION_UNROLL >= 1");
+        if (count_integer_lanes(0) == 0 || count_integer_lanes(1) == 0 || count_memory_lanes(0) == 0)
+            $fatal(1, "Lane configuration must cover ALU, BRU and MEMORY; integer mask bits0/1 are ALU/BRU");
+        if ((Parameters::SUPPORT_MUL && count_integer_lanes(2) == 0) ||
+            (Parameters::SUPPORT_DIV && count_integer_lanes(3) == 0) ||
+            (Parameters::SUPPORT_ATOMIC && count_memory_lanes(1) == 0))
+            $fatal(1, "Enabled extension has no execution lane");
+        if (Parameters::SUPPORT_FLOAT && (count_floating_lanes(0) == 0 ||
+            count_floating_lanes(1) == 0 || count_memory_lanes(2) == 0))
+            $fatal(1, "Floating support requires FP, conversion and floating memory capabilities");
+        if (!Parameters::SUPPORT_FLOAT && Parameters::FLOATING_LANE_COUNT != 0)
+            $fatal(1, "Set FLOATING_LANE_COUNT=0 when floating support is disabled");
+    end
+
     // Raw frontend outputs terminate at representative backend input registers.
     DecoderPacket_ dispatch_packet [TOTAL_LANE_COUNT-1:0];
     IssuerPacket_ dispatch_issuer [TOTAL_LANE_COUNT-1:0];
@@ -42,6 +61,9 @@ module FrontendTop
     logic serve_rs2_used [ISSUE_WIDTH-1:0];
     logic serve_rd_written [ISSUE_WIDTH-1:0];
     logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0];
+    logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0];
+    logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0];
+    logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0];
     TrapType_ serve_trap [ISSUE_WIDTH-1:0];
     logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0];
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
@@ -75,6 +97,9 @@ module FrontendTop
         .serve_rs2_used(serve_rs2_used),
         .serve_rd_written(serve_rd_written),
         .serve_capability(serve_capability),
+        .serve_immediate_upper_select(serve_immediate_upper_select),
+        .serve_immediate_low(serve_immediate_low),
+        .serve_branch_operation(serve_branch_operation),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
@@ -107,6 +132,9 @@ module FrontendTop
         .serve_rs2_used(serve_rs2_used),
         .serve_rd_written(serve_rd_written),
         .serve_capability(serve_capability),
+        .serve_immediate_upper_select(serve_immediate_upper_select),
+        .serve_immediate_low(serve_immediate_low),
+        .serve_branch_operation(serve_branch_operation),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
@@ -139,7 +167,7 @@ module FrontendTop
                 consumed_packet.csr = dispatch_packet[lane].csr;
             end
         end else if (INTEGER_LANE) begin : integer_lane
-            localparam logic [3:0] CAPS = Parameters::INTEGER_LANE_CAPABILITIES[lane-1];
+            localparam logic [3:0] CAPS = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane-1];
             always_comb begin
                 consumed_packet = 'x;
                 consumed_packet.common = dispatch_packet[lane].common;
@@ -155,7 +183,7 @@ module FrontendTop
                     consumed_packet.div = dispatch_packet[lane].div;
             end
         end else if (MEMORY_LANE) begin : memory_lane
-            localparam logic [2:0] CAPS = Parameters::MEMORY_LANE_CAPABILITIES[
+            localparam logic [2:0] CAPS = DerivedParameters::EFFECTIVE_MEMORY_CAPS[
                 lane-1-Parameters::INTEGER_LANE_COUNT];
             always_comb begin
                 consumed_packet = 'x;
@@ -174,7 +202,7 @@ module FrontendTop
                 end
             end
         end else if (FLOATING_LANE) begin : floating_lane
-            localparam logic [1:0] CAPS = Parameters::FLOATING_LANE_CAPABILITIES[
+            localparam logic [1:0] CAPS = DerivedParameters::EFFECTIVE_FLOATING_CAPS[
                 lane-1-Parameters::INTEGER_LANE_COUNT-Parameters::MEMORY_LANE_COUNT];
             always_comb begin
                 consumed_packet = 'x;

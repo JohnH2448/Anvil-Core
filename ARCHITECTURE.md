@@ -42,3 +42,30 @@ Below are synthesis numbers for several selected configurations:
 | Radix-4 | 18 | 246.9 MHz | 4.050 ns | 1,863 | 1,477 |
 | Radix-8 | 13 | 220.3 MHz | 4.540 ns | 2,826 | 2,090 |
 | Radix-16 | 10 | 201.4 MHz | 4.966 ns | 4,627 | 3,526 |
+
+
+## Frontend timing across parameter sets
+
+Results use the I/O delay model below. Clock targets may vary to push frequency;
+record each target in the run notes. Frequency/period columns are slack-derived
+estimates, not necessarily the clock target met by that run. Delays are relative to the rising edge of frontend_clk;
+minimum delays model earliest external arrival, not inserted hardware delay.
+
+```tcl
+create_clock -name frontend_clk -period 2.500 [get_ports clk]
+set late_controls [get_ports {stall redirect_taken redirect_pc[*]}]
+set_input_delay -clock frontend_clk -max 3.250 $late_controls
+set_input_delay -clock frontend_clk -min 2.000 $late_controls
+set_input_delay -clock frontend_clk -max 1.000 [get_ports {reset serial_active}]
+set_input_delay -clock frontend_clk -min 1.000 [get_ports reset]
+set_input_delay -clock frontend_clk -min 0.500 [get_ports serial_active]
+set_output_delay -clock frontend_clk -max 0.000 [all_outputs]
+set_output_delay -clock frontend_clk -min 0.000 [all_outputs]
+```
+
+| ISA | Issue Width | FIFO Words | Cache Line Words | Lanes | Frequency (MHz) | Period (ns) | LUTs | FFs |
+|---|---|---|---|---|---|---|---|---|
+| RV32IMAFC | 2 | 8 | 1 | 5 | 218.10 | 4.585 | 4,989 | 3,268 |
+| RV32IMC | 2 | 8 | 1 | 4 | 205.80 | 4.859 | 4,524 | 2,946 |
+
+Note: These are representative, not theoretical limits.. They could be higher with more aggressive routing passes. They are also pre-fp.

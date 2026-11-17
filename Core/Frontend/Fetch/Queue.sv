@@ -45,6 +45,9 @@ module Queue
     output logic serve_rs2_used [SERVE_WORDS-1:0],
     output logic serve_rd_written [SERVE_WORDS-1:0],
     output logic [$bits(DecodeCapability_)-1:0] serve_capability [SERVE_WORDS-1:0],
+    output logic [13:0] serve_immediate_upper_select [SERVE_WORDS-1:0],
+    output logic [4:0] serve_immediate_low [SERVE_WORDS-1:0],
+    output logic [$bits(BranchOperation_)-1:0] serve_branch_operation [SERVE_WORDS-1:0],
     output TrapType_ serve_trap [SERVE_WORDS-1:0],
     output logic [31:0] serve_pc_reg [SERVE_WORDS-1:0],
     output logic serve_valid_reg [SERVE_WORDS-1:0],
@@ -181,6 +184,33 @@ module Queue
     logic fifo_rs1_used [FIFO_WORDS-1:0];
     logic fifo_rs2_used [FIFO_WORDS-1:0];
     logic fifo_rd_written [FIFO_WORDS-1:0];
+    BranchOperation_ prediction_branch_operation [FETCH_SLOTS-1:0];
+    logic [$bits(BranchOperation_)-1:0] fifo_branch_operation [FIFO_WORDS-1:0];
+    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : branch_operation_predecode
+        BranchOperationPredecode operation_decode (
+            .instruction(prediction_payload[lane].bp_instruction),
+            .is_compressed(prediction_payload[lane].bp_compressed),
+            .operation(prediction_branch_operation[lane])
+        );
+    end
+    logic [4:0] prediction_immediate_low [FETCH_SLOTS-1:0];
+    logic [4:0] fifo_immediate_low [FIFO_WORDS-1:0];
+    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : immediate_low_predecode
+        ImmediateLowPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) low_decode (
+            .instruction(prediction_payload[lane].bp_instruction),
+            .is_compressed(prediction_payload[lane].bp_compressed),
+            .immediate_low(prediction_immediate_low[lane])
+        );
+    end
+    logic [13:0] prediction_immediate_upper_select [FETCH_SLOTS-1:0];
+    logic [13:0] fifo_immediate_upper_select [FIFO_WORDS-1:0];
+    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : immediate_predecode
+        ImmediateUpperPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) format_decode (
+            .instruction(prediction_payload[lane].bp_instruction),
+            .is_compressed(prediction_payload[lane].bp_compressed),
+            .upper_select(prediction_immediate_upper_select[lane])
+        );
+    end
     logic [$bits(DecodeCapability_)-1:0] fifo_capability [FIFO_WORDS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : predecode_sources
         RegisterSlice #(
@@ -244,11 +274,16 @@ module Queue
     logic fifo_packet_room;
 
     // Each bank is the next state for one possible binary consumption count.
-    // The actual count is registered alongside all banks, not used to build them.
+    // The actual count selects wide banks after the edge, but selects the narrow
+    // source identities and instruction/c flag before their output registers.
     logic [SERVE_COUNT_W-1:0] prev_serve_consumed;
     localparam int unsigned TRAP_W = $bits(TrapType_);
-    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + $bits(DecodeCapability_) + TRAP_W;
+    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + 19 + $bits(BranchOperation_) + $bits(DecodeCapability_) + TRAP_W;
     logic [SERVE_ENTRY_W-1:0] serve_bank [SERVE_WORDS+1][SERVE_WORDS];
+    localparam int unsigned SOURCE_FLAGS_LSB = TRAP_W + $bits(DecodeCapability_) + 3;
+    // rs1, rs2 and their bank flags share the payload's exact outcome mapping.
+    logic [11:0] source_candidate [SERVE_WORDS][SERVE_WORDS+1];
+    logic [32:0] instruction_candidate [SERVE_WORDS][SERVE_WORDS+1];
 
     logic [FIFO_INDEX_W:0] head_bank [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] occupied_bank [SERVE_WORDS+1];
@@ -538,6 +573,9 @@ module Queue
                     fifo_rs1_used[index] <= prediction_rs1_used[i];
                     fifo_rs2_used[index] <= prediction_rs2_used[i];
                     fifo_rd_written[index] <= prediction_rd_written[i];
+                    fifo_branch_operation[index] <= prediction_branch_operation[i];
+                    fifo_immediate_low[index] <= prediction_immediate_low[i];
+                    fifo_immediate_upper_select[index] <= prediction_immediate_upper_select[i];
                     fifo_capability[index] <= prediction_capability[i];
                     fifo_rs2[index] <= prediction_rs2[i];
                     fifo_data[index] <= prediction_payload[i].bp_instruction;
@@ -572,15 +610,35 @@ module Queue
         logic [FIFO_INDEX_W-1:0] read_index;
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
-            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index],
+            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index], fifo_branch_operation[read_index], fifo_immediate_low[read_index], fifo_immediate_upper_select[read_index],
             fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index], fifo_trap[read_index]};
         assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
-            serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
+            serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane], serve_branch_operation[lane], serve_immediate_low[lane], serve_immediate_upper_select[lane],
             serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane], serve_trap[lane]};
-        // All fields, including validity, select the same registered outcome.
-        assign {serve_valid_reg[lane], serve_c_reg[lane], serve_taken_reg[lane],
-            serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane],
-            serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane]} =
+        // Source identities are selected before capture. The unused bank copies
+        // have no consumers and can be pruned along with their output muxes.
+        logic [11:0] unused_banked_sources;
+        logic [32:0] unused_banked_instruction;
+        // Select the same completed window as the sources, including retained
+        // entries and zero-consumption refill. Validity remains banked.
+        always_ff @(posedge clk) begin
+            if (reset || reset_reg || redirect_taken)
+                {serve_c_reg[lane], serve_data_reg[lane]} <= 'x;
+            else
+                {serve_c_reg[lane], serve_data_reg[lane]} <=
+                    instruction_candidate[lane][serve_consumed];
+        end
+        always_ff @(posedge clk) begin
+            if (reset || reset_reg || redirect_taken)
+                {serve_rs1[lane], serve_rs2[lane], serve_rs1_float[lane], serve_rs2_float[lane]} <= 'x;
+            else
+                {serve_rs1[lane], serve_rs2[lane], serve_rs1_float[lane], serve_rs2_float[lane]} <=
+                    source_candidate[lane][serve_consumed];
+        end
+        // The remaining fields select the same outcome after capture.
+        assign {serve_valid_reg[lane], unused_banked_instruction[32], serve_taken_reg[lane],
+            serve_branch_reg[lane], unused_banked_instruction[31:0], serve_pc_reg[lane], serve_branch_operation[lane], serve_immediate_low[lane], serve_immediate_upper_select[lane],
+            unused_banked_sources[11:7], unused_banked_sources[6:2], serve_rd[lane], serve_rs3[lane], unused_banked_sources[1], unused_banked_sources[0], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane]} =
             serve_bank[prev_serve_consumed][lane][SERVE_ENTRY_W-1:TRAP_W];
     end
 
@@ -603,6 +661,14 @@ module Queue
 
         for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : window_lanes
             logic [SERVE_ENTRY_W-1:0] retained;
+            // Packed prefix: valid, compressed, taken, branch, instruction[31:0].
+            assign instruction_candidate[lane][consumed] = {
+                next_window[lane][SERVE_ENTRY_W-2],
+                next_window[lane][SERVE_ENTRY_W-5 -: 32]};
+            assign source_candidate[lane][consumed] = {
+                next_window[lane][SOURCE_FLAGS_LSB+19 +: 5],
+                next_window[lane][SOURCE_FLAGS_LSB+14 +: 5],
+                next_window[lane][SOURCE_FLAGS_LSB+3 -: 2]};
             // Generate-time bounds keep every elaborated source index valid.
             if (lane + consumed < SERVE_WORDS) begin : retained_source
                 assign retained = retained_candidate[lane + consumed];
@@ -642,7 +708,8 @@ module Queue
         end
     end
 
-    // Late consumption only clocks the selector. Tail and admission do not
+    // Late consumption clocks the wide-bank selector and selects narrow sources.
+    // Tail and admission do not
     // depend on this cycle's pulls; admission deliberately gives no pop credit.
     always_ff @(posedge clk) begin
         if (reset || reset_reg || redirect_taken) begin

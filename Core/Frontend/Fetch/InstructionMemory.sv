@@ -36,18 +36,14 @@ module InstructionMemory #(
     always_ff @(posedge clk) begin
         logic [ADDR_W-1:0] word_address;
         word_address = req_address[ADDR_W+1:2];
-        if (reset) begin
-            fetch_valid <= 1'b0;
-            request_halfword <= 1'b0;
-            for (int unsigned i = 0; i <= FETCH_WORDS; i++) read_words[i] <= '0;
-        end else begin
-            // Reads One Extra Word for Halfword-Aligned Fetches
-            // Truncated Addresses Intentionally Wrap Within ROM Depth
-            for (int unsigned i = 0; i <= FETCH_WORDS; i++)
-                read_words[i] <= memory[ADDR_W'(word_address + ADDR_W'(i))];
-            request_halfword <= req_address[1];
-            fetch_valid <= 1'b1;
-        end
+        // Payload is irrelevant while invalid. Always read so reset does not
+        // drive BRAM data reset or a wide read-enable network.
+        // Reads One Extra Word for Halfword-Aligned Fetches
+        // Truncated Addresses Intentionally Wrap Within ROM Depth
+        for (int unsigned i = 0; i <= FETCH_WORDS; i++)
+            read_words[i] <= memory[ADDR_W'(word_address + ADDR_W'(i))];
+        request_halfword <= req_address[1];
+        fetch_valid <= !reset;
     end
 
     // Packs Registered Words and Selects the Requested Halfword Boundary

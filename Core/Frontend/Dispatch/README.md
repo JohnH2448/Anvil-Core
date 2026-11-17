@@ -553,3 +553,67 @@ are combinational summaries, not new table state; stall remains a register enabl
 Capture eligibility compares the index against constant per-capability thresholds
 before selecting the result. Threshold arithmetic depends only on configuration;
 no live capability-selected integer threshold is decremented before comparison.
+
+Fetch serve source identities (rs1/rs2 and bank flags) now select a completed
+consumption candidate before their output registers. Producer reads therefore use
+direct registered addresses. Wide instruction payload remains speculatively banked;
+both paths select the same consumption outcome and share retention/refill mapping.
+
+The main frontend OOC flow uses Default synthesis and RuntimeOptimized
+opt/place/route without physical optimization. Standard routed reports and
+frontend_routed.dcp are written directly after routing.
+
+frontend_retry.tcl retries an existing routed DCP single-threaded with aggressive
+routing followed by explicit hold repair and separate pin, routing, clock and
+restructure passes, another routing pass, and final aggressive hold repair.
+It saves each completed pass before reports, with last_saved.txt/progress.txt for
+crash recovery. Uses the checkpoint's RTL/constraints; native crashes cannot save
+partial progress within a pass. The main flow is unchanged.
+
+Retry Tcl-command failures reload the last saved checkpoint and continue to the
+next pass, recording failures.txt. Native crashes still require restarting Vivado.
+Compare all saved setup/hold reports; the last result is not necessarily best.
+
+Main OOC constraints model reset input arrival as min=max=1.000 ns. This is an
+external timing assumption, not inserted delay; serial_active retains min=0/max=1.
+
+InstructionMemory response words and halfword alignment capture without reset;
+reset clears only fetch_valid. Queue reset/validity prevents consuming invalid
+response payload. Valid reads retain their existing latency and alignment.
+
+Lane masks use integer bits0/1/2/3 = ALU/BRU/MUL/DIV. Shared effective masks
+combine these with global extension support before resource checks, allocation and
+OOC payload capture. Zero-count capability arrays retain one unused placeholder.
+FrontendTop checks base and enabled-extension coverage and global packet-width
+consistency; disable FP lanes by setting FLOATING_LANE_COUNT=0 with SUPPORT_FLOAT=0.
+
+Immediate encoding format is predecoded from prediction registers before FIFO
+check-in. Five selector bits travel with each instruction through FIFO/serve banks;
+DecoderSlice assembles immediate bits using that selector. FP formats honor support
+flags. Existing direct source identities keep their packed offsets.
+
+Branch operation is also predecoded before FIFO check-in as a four-bit enum and
+carried with serve payload. DecoderSlice applies final trap qualification to BR_NONE;
+branch prediction flags and immediate assembly remain independent.
+
+Immediate bits[4:0] are computed before FIFO check-in and carried as five payload
+bits. Decode assembles only bits[31:5] locally. Both paths use the same encoding
+layouts; unused values remain unspecified and metadata follows instruction motion.
+
+Upper immediate selection now carries14 direct layout enables rather than a5bit
+format code. I/S upper layouts share one enable and zero-upper formats need none.
+Decode uses masked wiring/OR for bits31:5; low5bits remain precomputed payload.
+This supersedes earlier descriptions of a carried encoded immediate format.
+
+
+Serve instruction words and compressed flags now select the completed next-window
+candidate before capture, like rs1/rs2, rather than passing through the registered
+consumption selector after capture. Other served metadata, PC and validity remain
+banked. Retained/refill mapping and pipeline latency are unchanged.
+
+
+FP/integer crossings require register-file readiness: FP-produced integer results
+are eligible only at RF position, and FP consumers wait for integer sources to
+reach RF. Decode applies this to fresh/retained and corrected producer readiness;
+new ALU bypass cannot release an FP consumer. These rules assume lockstep FP
+progress and generate out with FP disabled. No FP busy scoreboard is present.

@@ -33,6 +33,9 @@ module DecodeStage
     input logic serve_rs2_used [ISSUE_WIDTH-1:0],
     input logic serve_rd_written [ISSUE_WIDTH-1:0],
     input logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0],
+    input logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
+    input logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0],
+    input logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
@@ -117,6 +120,9 @@ module DecodeStage
             .rs3_float_in(serve_rs3_float[i]),
             .rd_float_in(serve_rd_float[i]),
             .capability_in(DecodeCapability_'(serve_capability[i])),
+            .immediate_upper_select_in(serve_immediate_upper_select[i]),
+            .immediate_low_in(serve_immediate_low[i]),
+            .branch_operation_in(serve_branch_operation[i]),
             .trap_in(serve_trap[i]),
             .rs1_used_in(serve_rs1_used[i]),
             .rs2_used_in(serve_rs2_used[i]),
@@ -264,10 +270,10 @@ module DecodeStage
                     for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
                         if (lane < Parameters::INTEGER_LANE_COUNT) begin
                             unique case (structural_sources[i].common.capability)
-                                CAP_ALU: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][0];
-                                CAP_BRU: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][1];
-                                CAP_MUL: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][2];
-                                CAP_DIV: compatible_lanes[i][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][3];
+                                CAP_ALU: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][0];
+                                CAP_BRU: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][1];
+                                CAP_MUL: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][2];
+                                CAP_DIV: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][3];
                             endcase
                         end
                     end
@@ -276,7 +282,7 @@ module DecodeStage
                     for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
                         if (lane < Parameters::MEMORY_LANE_COUNT) begin
                             compatible_lanes[i][MEMORY_LANE_BASE + lane] =
-                                Parameters::MEMORY_LANE_CAPABILITIES[lane][2'(structural_sources[i].common.capability == CAP_ATOMIC)];
+                                DerivedParameters::EFFECTIVE_MEMORY_CAPS[lane][2'(structural_sources[i].common.capability == CAP_ATOMIC)];
                         end
                     end
                 end
@@ -284,7 +290,7 @@ module DecodeStage
                     for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
                         if (lane < Parameters::FLOATING_LANE_COUNT) begin
                             compatible_lanes[i][FLOATING_LANE_BASE + lane] =
-                                Parameters::FLOATING_LANE_CAPABILITIES[lane][structural_sources[i].common.capability == CAP_FP_CONVERT];
+                                DerivedParameters::EFFECTIVE_FLOATING_CAPS[lane][structural_sources[i].common.capability == CAP_FP_CONVERT];
                         end
                     end
                 end
@@ -378,7 +384,8 @@ module DecodeStage
     function automatic logic refresh_ready(
         input logic snapshot_ready,
         input logic [4:0] source_register,
-        input logic source_float
+        input logic source_float,
+        input logic rf_only
     );
         logic hit, matched, selected;
         matched = 1'b0;
@@ -386,7 +393,7 @@ module DecodeStage
         for (int writer = 0; writer < ISSUE_WIDTH; writer++) begin
             hit = op_write[writer] && !source_float && op_rd[writer] == source_register;
             matched |= hit;
-            selected |= hit && buffered_capture_ready[writer];
+            selected |= hit && !rf_only && buffered_capture_ready[writer];
         end
         return matched ? selected : snapshot_ready;
     endfunction
@@ -405,19 +412,28 @@ module DecodeStage
     for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : readiness_sources
         logic snapshot_rs1_ready, snapshot_rs2_ready;
         logic base_rs1_ready, base_rs2_ready;
+        logic fp_consumer, rf_only_1, rf_only_2;
+        assign fp_consumer = SUPPORT_FLOAT &&
+            (structural_sources[source_slot].common.capability inside {CAP_FP_F, CAP_FP_CONVERT});
+        assign rf_only_1 = fp_consumer && !structural_sources[source_slot].common.rs1_float;
+        assign rf_only_2 = fp_consumer && !structural_sources[source_slot].common.rs2_float;
         if (source_slot < ISSUE_WIDTH) begin : retained
-            assign snapshot_rs1_ready = producer_capture_ready(rs1_index_out[source_slot],
+            assign snapshot_rs1_ready = rf_only_1 ?
+                (rs1_index_out[source_slot] >= EXECUTION_UNROLL+1) : producer_capture_ready(rs1_index_out[source_slot],
                 rs1_capability_out[source_slot], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
-            assign snapshot_rs2_ready = producer_capture_ready(rs2_index_out[source_slot],
+            assign snapshot_rs2_ready = rf_only_2 ?
+                (rs2_index_out[source_slot] >= EXECUTION_UNROLL+1) : producer_capture_ready(rs2_index_out[source_slot],
                 rs2_capability_out[source_slot], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
         end else begin : fresh
-            assign snapshot_rs1_ready = rs1_capture_ready[source_slot - ISSUE_WIDTH];
-            assign snapshot_rs2_ready = rs2_capture_ready[source_slot - ISSUE_WIDTH];
+            assign snapshot_rs1_ready = rf_only_1 ?
+                (rs1_index[source_slot - ISSUE_WIDTH] >= EXECUTION_UNROLL+1) : rs1_capture_ready[source_slot - ISSUE_WIDTH];
+            assign snapshot_rs2_ready = rf_only_2 ?
+                (rs2_index[source_slot - ISSUE_WIDTH] >= EXECUTION_UNROLL+1) : rs2_capture_ready[source_slot - ISSUE_WIDTH];
         end
         assign base_rs1_ready = refresh_ready(snapshot_rs1_ready,
-            structural_sources[source_slot].common.rs1, structural_sources[source_slot].common.rs1_float);
+            structural_sources[source_slot].common.rs1, structural_sources[source_slot].common.rs1_float, rf_only_1);
         assign base_rs2_ready = refresh_ready(snapshot_rs2_ready,
-            structural_sources[source_slot].common.rs2, structural_sources[source_slot].common.rs2_float);
+            structural_sources[source_slot].common.rs2, structural_sources[source_slot].common.rs2_float, rf_only_2);
         for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : outcome
             always_comb begin
                 logic ready_1, ready_2;
@@ -427,9 +443,9 @@ module DecodeStage
                 // reproduces youngest-writer dedup without live op_write gating.
                 for (int writer = 0; writer < consumed; writer++) begin
                     if (candidate_writes[writer] && next_rs1_match[source_slot][writer])
-                        ready_1 = candidate_bypass_ready[writer];
+                        ready_1 = !rf_only_1 && candidate_bypass_ready[writer];
                     if (candidate_writes[writer] && next_rs2_match[source_slot][writer])
-                        ready_2 = candidate_bypass_ready[writer];
+                        ready_2 = !rf_only_2 && candidate_bypass_ready[writer];
                 end
                 source_ready_by_pop[consumed][source_slot] =
                     (!structural_sources[source_slot].common.rs1_valid || ready_1) &&

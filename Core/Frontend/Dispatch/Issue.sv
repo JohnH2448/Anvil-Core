@@ -195,6 +195,7 @@ module Issuer
             issuer_packet_internal[i].read_reg_file_2 = rs2_index_corrected[i] >= (EXECUTION_UNROLL+1); // in reg file next cycle
             issuer_packet_internal[i].use_bypass_2 = (rs2_index_corrected[i] == 0); // already gated by issue contract on bad cases
 
+
         end
     end
 
@@ -228,23 +229,23 @@ module Issuer
                 CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV: begin
                     for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
                         case (packets_out[slot].common.capability)
-                            CAP_ALU: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][0];
-                            CAP_BRU: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][1];
-                            CAP_MUL: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][2];
-                            CAP_DIV: compatible[slot][lane+1] = Parameters::INTEGER_LANE_CAPABILITIES[lane][3];
+                            CAP_ALU: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][0];
+                            CAP_BRU: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][1];
+                            CAP_MUL: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][2];
+                            CAP_DIV: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][3];
                             default: ;
                         endcase
                     end
                 end
                 CAP_MEMORY, CAP_ATOMIC: begin
                     for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
-                        compatible[slot][INT_LANE_MAX+lane] = Parameters::MEMORY_LANE_CAPABILITIES[lane]
+                        compatible[slot][INT_LANE_MAX+lane] = DerivedParameters::EFFECTIVE_MEMORY_CAPS[lane]
                             [2'(packets_out[slot].common.capability == CAP_ATOMIC)];
                     end
                 end
                 CAP_FP_F, CAP_FP_CONVERT: begin
                     for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
-                        compatible[slot][MEM_LANE_MAX+lane] = Parameters::FLOATING_LANE_CAPABILITIES[lane]
+                        compatible[slot][MEM_LANE_MAX+lane] = DerivedParameters::EFFECTIVE_FLOATING_CAPS[lane]
                             [packets_out[slot].common.capability == CAP_FP_CONVERT];
                     end
                 end

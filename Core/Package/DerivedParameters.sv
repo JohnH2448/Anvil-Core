@@ -1,6 +1,36 @@
 // Shared constants only. Raw settings are deliberately not imported/re-exported.
 package DerivedParameters;
 
+    typedef logic [3:0] integer_caps_t [(Parameters::INTEGER_LANE_COUNT > 0 ? Parameters::INTEGER_LANE_COUNT : 1)];
+    function automatic integer_caps_t build_integer_caps();
+        integer_caps_t caps;
+        caps = '{default: '0};
+        for (int lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++)
+            caps[lane] = Parameters::INTEGER_LANE_CAPABILITIES[lane] & {(Parameters::SUPPORT_DIV != 0), (Parameters::SUPPORT_MUL != 0), 2'b11};
+        return caps;
+    endfunction
+    localparam integer_caps_t EFFECTIVE_INTEGER_CAPS = build_integer_caps();
+
+    typedef logic [2:0] memory_caps_t [(Parameters::MEMORY_LANE_COUNT > 0 ? Parameters::MEMORY_LANE_COUNT : 1)];
+    function automatic memory_caps_t build_memory_caps();
+        memory_caps_t caps;
+        caps = '{default: '0};
+        for (int lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++)
+            caps[lane] = Parameters::MEMORY_LANE_CAPABILITIES[lane] & {(Parameters::SUPPORT_FLOAT != 0), (Parameters::SUPPORT_ATOMIC != 0), 1'b1};
+        return caps;
+    endfunction
+    localparam memory_caps_t EFFECTIVE_MEMORY_CAPS = build_memory_caps();
+
+    typedef logic [1:0] floating_caps_t [(Parameters::FLOATING_LANE_COUNT > 0 ? Parameters::FLOATING_LANE_COUNT : 1)];
+    function automatic floating_caps_t build_floating_caps();
+        floating_caps_t caps;
+        caps = '{default: '0};
+        for (int lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++)
+            caps[lane] = Parameters::FLOATING_LANE_CAPABILITIES[lane] & {2{Parameters::SUPPORT_FLOAT != 0}};
+        return caps;
+    endfunction
+    localparam floating_caps_t EFFECTIVE_FLOATING_CAPS = build_floating_caps();
+
     // Shared derived configuration: compute once, consume with DerivedParameters::NAME.
     // Physical lane order: serial, integer, memory, floating.
     localparam int unsigned SERIAL_LANE_ID = 0;
@@ -17,7 +47,7 @@ package DerivedParameters;
         int unsigned count;
         count = 0;
         for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
-            count += int'(Parameters::INTEGER_LANE_CAPABILITIES[lane][capability_bit]);
+            count += int'(EFFECTIVE_INTEGER_CAPS[lane][capability_bit]);
         end
         return count;
     endfunction
@@ -26,7 +56,7 @@ package DerivedParameters;
         int unsigned count;
         count = 0;
         for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
-            count += int'(Parameters::MEMORY_LANE_CAPABILITIES[lane][capability_bit]);
+            count += int'(EFFECTIVE_MEMORY_CAPS[lane][capability_bit]);
         end
         return count;
     endfunction
@@ -35,7 +65,7 @@ package DerivedParameters;
         int unsigned count;
         count = 0;
         for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
-            count += int'(Parameters::FLOATING_LANE_CAPABILITIES[lane][capability_bit]);
+            count += int'(EFFECTIVE_FLOATING_CAPS[lane][capability_bit]);
         end
         return count;
     endfunction

@@ -19,6 +19,9 @@ module DecoderSlice
     input logic rs3_float_in,
     input logic rd_float_in,
     input DecodeCapability_ capability_in,
+    input logic [13:0] immediate_upper_select_in,
+    input logic [4:0] immediate_low_in,
+    input logic [$bits(BranchOperation_)-1:0] branch_operation_in,
     input TrapType_ trap_in,
     input logic rs1_used_in,
     input logic rs2_used_in,
@@ -36,84 +39,35 @@ module DecoderSlice
 
     // Queue supplies registered legality; payload formatting remains local.
     logic [15:0] c;
-    logic [20:1] c_jump;
-    logic [12:1] c_branch;
+    logic [20:1] c_jump_offset;
+    logic [12:1] c_branch_offset;
     assign c = instruction[15:0];
-    assign c_jump = {{9{c[12]}}, c[12], c[8], c[10:9], c[6], c[7],
+    assign c_jump_offset = {{9{c[12]}}, c[12], c[8], c[10:9], c[6], c[7],
         c[2], c[11], c[5:3]};
-    assign c_branch = {{4{c[12]}}, c[12], c[6:5], c[2], c[11:10], c[4:3]};
+    assign c_branch_offset = {{4{c[12]}}, c[12], c[6:5], c[2], c[11:10], c[4:3]};
     // Immediate payload depends only on encoding format. Legality/capability
     // are evaluated independently; trapped/unused payload is not consumed.
+    // Direct layout enables avoid decoding a format number after serve selection.
+    logic [31:0] upper_layout [14];
+    assign upper_layout[0] = {22'd0, c[10:7], c[12:11], c[5], c[6], 2'd0};
+    assign upper_layout[1] = {25'd0, c[5], c[12:10], c[6], 2'd0};
+    assign upper_layout[2] = {{26{c[12]}}, c[12], c[6:2]};
+    assign upper_layout[3] = {{11{c_jump_offset[20]}}, c_jump_offset, 1'b0};
+    assign upper_layout[4] = {{22{c[12]}}, c[12], c[4:3], c[5], c[2], c[6], 4'd0};
+    assign upper_layout[5] = {{14{c[12]}}, c[12], c[6:2], 12'd0};
+    assign upper_layout[6] = {21'd0, c[10], 5'd0, c[6:2]};
+    assign upper_layout[7] = {{19{c_branch_offset[12]}}, c_branch_offset, 1'b0};
+    assign upper_layout[8] = {24'd0, c[3:2], c[12], c[6:4], 2'd0};
+    assign upper_layout[9] = {24'd0, c[8:7], c[12:9], 2'd0};
+    assign upper_layout[10] = {{20{instruction[31]}}, instruction[31:20]};
+    assign upper_layout[11] = {{19{instruction[31]}}, instruction[31], instruction[7], instruction[30:25], instruction[11:8], 1'b0};
+    assign upper_layout[12] = {instruction[31:12], 12'b0};
+    assign upper_layout[13] = {{11{instruction[31]}}, instruction[31], instruction[19:12], instruction[20], instruction[30:21], 1'b0};
     logic [31:0] immediate_direct;
     always_comb begin
-        immediate_direct = 'x;
-        if (is_compressed) begin
-            case (c[1:0])
-                2'b00: begin
-                    case (c[15:13])
-                        3'b000: immediate_direct = {22'd0, c[10:7], c[12:11], c[5], c[6], 2'd0};
-                        3'b010, 3'b110: immediate_direct = {25'd0, c[5], c[12:10], c[6], 2'd0};
-                        3'b011, 3'b111: if (SUPPORT_FLOAT)
-                            immediate_direct = {25'd0, c[5], c[12:10], c[6], 2'd0};
-                        default: ;
-                    endcase
-                end
-                2'b01: begin
-                    case (c[15:13])
-                        3'b000, 3'b010: immediate_direct = {{26{c[12]}}, c[12], c[6:2]};
-                        3'b001, 3'b101: immediate_direct = {{11{c_jump[20]}}, c_jump, 1'b0};
-                        3'b011: begin
-                            if (c[11:7] == 5'd2)
-                                immediate_direct = {{22{c[12]}}, c[12], c[4:3], c[5], c[2], c[6], 4'd0};
-                            else immediate_direct = {{14{c[12]}}, c[12], c[6:2], 12'd0};
-                        end
-                        3'b100: begin
-                            case (c[11:10])
-                                2'b00, 2'b01: immediate_direct = {21'd0, c[10], 5'd0, c[6:2]};
-                                2'b10: immediate_direct = {{26{c[12]}}, c[12], c[6:2]};
-                                default: ;
-                            endcase
-                        end
-                        3'b110, 3'b111: immediate_direct = {{19{c_branch[12]}}, c_branch, 1'b0};
-                    endcase
-                end
-                2'b10: begin
-                    case (c[15:13])
-                        3'b000: immediate_direct = {27'd0, c[6:2]};
-                        3'b010: immediate_direct = {24'd0, c[3:2], c[12], c[6:4], 2'd0};
-                        3'b011: if (SUPPORT_FLOAT)
-                            immediate_direct = {24'd0, c[3:2], c[12], c[6:4], 2'd0};
-                        3'b100: if (c[6:2] == 0) immediate_direct = '0; // JR/JALR offset
-                        3'b110: immediate_direct = {24'd0, c[8:7], c[12:9], 2'd0};
-                        3'b111: if (SUPPORT_FLOAT)
-                            immediate_direct = {24'd0, c[8:7], c[12:9], 2'd0};
-                        default: ;
-                    endcase
-                end
-                default: ;
-            endcase
-        end else begin
-            case (instruction[6:0])
-                7'b0010011, 7'b0000011, 7'b1100111:
-                    immediate_direct = {{20{instruction[31]}}, instruction[31:20]};
-                7'b0000111: if (SUPPORT_FLOAT)
-                    immediate_direct = {{20{instruction[31]}}, instruction[31:20]};
-                7'b0100011:
-                    immediate_direct = {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
-                7'b0100111: if (SUPPORT_FLOAT)
-                    immediate_direct = {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
-                7'b1100011:
-                    immediate_direct = {{19{instruction[31]}}, instruction[31], instruction[7],
-                        instruction[30:25], instruction[11:8], 1'b0};
-                7'b0110111, 7'b0010111: immediate_direct = {instruction[31:12], 12'b0};
-                7'b1101111:
-                    immediate_direct = {{11{instruction[31]}}, instruction[31], instruction[19:12],
-                        instruction[20], instruction[30:21], 1'b0};
-                7'b1110011: if (instruction[14])
-                    immediate_direct[4:0] = instruction[19:15]; // CSR zimm
-                default: ;
-            endcase
-        end
+        immediate_direct = '0;
+        for (int layout = 0; layout < 14; layout++)
+            immediate_direct[31:5] |= {27{immediate_upper_select_in[layout]}} & upper_layout[layout][31:5];
     end
 
     logic [6:0] op;
@@ -156,7 +110,7 @@ module DecoderSlice
     wire c_store = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 6 || (SUPPORT_FLOAT && c[15:13] == 7));
     assign packet.common.pc = pc;
     assign packet.common.trap_type = trap;
-    assign packet.common.immediate = immediate_direct;
+    assign packet.common.immediate = {immediate_direct[31:5], immediate_low_in};
     // Reserved packet field; execution derives fall-through locally.
     assign packet.common.next_pc = 'x;
     assign packet.common.rs1 = rs1_in;
@@ -223,24 +177,8 @@ module DecoderSlice
         endcase
     end
 
-    // bru.operation
-    always_comb begin
-        packet.bru.operation = BR_NONE;
-        if (ok) begin
-            case (1'b1)
-                jal || c_jump: packet.bru.operation = BR_JAL;
-                jalr || (c_cr && c[6:2] == 0): packet.bru.operation = BR_JALR;
-                c_branch: packet.bru.operation = c[13] ? BR_NE : BR_EQ;
-                branch_op && f3 == 3'd0: packet.bru.operation = BR_EQ;
-                branch_op && f3 == 3'd1: packet.bru.operation = BR_NE;
-                branch_op && f3 == 3'd4: packet.bru.operation = BR_LT;
-                branch_op && f3 == 3'd5: packet.bru.operation = BR_GE;
-                branch_op && f3 == 3'd6: packet.bru.operation = BR_LTU;
-                branch_op && f3 == 3'd7: packet.bru.operation = BR_GEU;
-                default: ;
-            endcase
-        end
-    end
+    // Encoding operation comes from FIFO metadata; legality remains authoritative.
+    assign packet.bru.operation = ok ? BranchOperation_'(branch_operation_in) : BR_NONE;
     assign packet.bru.is_branch = is_branch;
     assign packet.bru.is_compressed = is_compressed;
     assign packet.bru.predicted_taken = predicted_taken;

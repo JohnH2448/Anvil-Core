@@ -14,6 +14,15 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
+InstructionMemory reads and captures halfword alignment every edge without payload
+reset; reset clears only response validity. Queue reset/validity gates consumption.
+
+Main implementation uses Default synthesis and RuntimeOptimized opt/place/route,
+without physical optimization. Standard routed reports/checkpoint are written directly
+after routing. frontend_retry.tcl remains a separate optional checkpoint experiment.
+
+
+
 ProducerTable precomputes one-bit capture-edge eligibility per entry before source
 address lookup. Decode corrects these ready bits independently of full metadata,
 then applies prospective new writers for its registered operand lookahead.
@@ -48,7 +57,7 @@ Earlier refill-during-stall descriptions below are superseded by this policy.
 
 1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd, their register-bank flags, encoding-only operand-use bits and capability alongside branch prediction, using the same extension support parameters as decoding.
 2. Source addresses are latched with prediction results, compacted into the instruction FIFO, and carried through speculative serve windows with instruction, PC, validity, and prediction flags.
-3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects all payload fields and FIFO state combinationally, including rs1/rs2 and their bank flags. Dual issue has three outcomes: 0, 1, 2.
+3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects the wide payload and FIFO state combinationally. rs1/rs2 and their bank flags instead select the matching completed candidate before a single output register, directly driving next-cycle producer reads. The instruction word and compressed flag likewise select before capture, directly driving next-cycle decoding; all other payload fields remain banked. Dual issue has three outcomes: 0, 1, 2.
 4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, on advancing captures; Decode holds all packet-related state during global stall. Table reads expose raw indices; Decode ages fresh reads, retained snapshots and buffered corrections locally before their correction mux.
 5. Issuer registers accepted integer writes in a one-advancing-cycle buffer, suppressing older duplicate destinations before capture. Buffered rd/source matches correct both readiness and forwarding; all buffered writers precede all current Decode packets.
 6. Decode absorbs buffered corrections into retained and refill metadata. Candidates are independently aged before correction selection, equivalent to aging the selected producer; the producer table commits the same buffer at index one. Stall holds buffer/table progress and all Decode packet-related state; corrections and refills resume on the first advancing edge. Reset/redirect clears buffer validity. No live Issue write reaches Decode refresh or table inputs combinationally.
@@ -1479,3 +1488,716 @@ and per-entry read remain in place. Expected carry-chain removal/timing benefit 
 unmeasured, and exact synthesized arithmetic identification needs netlist inspection.
 Validation: static threshold equivalence and diff review only; no tests, lint,
 synthesis or implementation run. Dispatch README updated to describe this form.
+
+
+### 2026-11-16 - capture selected serve source identities before the edge
+
+User reports WNS -0.784 ns and TNS -28.817 ns after constant-threshold readiness
+comparisons, versus prior WNS -1.268 ns. New worst path is prev_serve_consumed ->
+serve source selection -> producer lookup/correction -> Decode rs1_index snapshot.
+Data delay is 6.940 - 1.251 = 5.689 ns; launch through source selection is about
+2.381 ns, including a decoded selector with 157 loads. Readiness is no longer the
+reported worst endpoint.
+
+With a clean user Git snapshot, Fetch/Queue.sv now extracts a 12-bit source tuple
+(rs1, rs2, integer/FP bank flags) from every existing completed next_window candidate.
+Current serve_consumed selects this tuple directly into one register per serve lane.
+Wide payload and FIFO state keep speculative banks selected by prev_serve_consumed.
+Unused source fields in those packed banks have no consumers and may be pruned.
+No new decode work or FIFO head arithmetic follows the late consumption selector.
+
+Invariant: at each nonflush edge, source registers capture next_window[count] while
+prev_serve_consumed captures that same count and wide banks capture all next_window
+values. Retention/refill mapping, partial occupancy, FIFO wrap, and no same-edge
+push bypass are shared rather than reimplemented. Source registers update on every
+nonflush queue edge, including zero consumption: empty serve positions can refill
+while Decode stalls. Flush makes source payload don't-care while bank validity
+clears. No extra stage or change to accepted instruction ordering.
+
+Tradeoff: removes post-register source bank selection from producer-read launch,
+but restores late consumption -> narrow source mux -> register timing. Benefit is
+unmeasured; next implementation must check that new endpoint as well as table reads.
+Validation: static packed-field offsets, selection/flush/refill alignment and diff
+review only. No tests, lint, synthesis or implementation run. Current flow and
+Dispatch README updated; no unrelated RTL changes.
+
+
+### 2026-11-16 - direct serve source capture timing result
+
+User reports WNS -0.453 ns and TNS -13.164 ns, versus -0.784/-28.817
+after direct source-register capture: WNS improves 0.331 ns, TNS magnitude
+falls about 54.3%. Worst reported path has moved to redirect_taken ->
+stage_transfer -> admission count selection/comparison -> fifo_packet_room/D.
+Input delay is 3.750 ns, internal data delay 2.863 ns (0.388 logic, 2.475
+routing), four LUTs. stage_transfer has 497 loads and 0.909 ns routing.
+The single report does not establish the remaining register-to-register slack.
+Queue already overrides fifo_packet_room to one on redirect. A possible next
+experiment is a redirect-independent admission decision with redirect applied
+only at final state capture; stage_transfer must remain flush-qualified for
+actual transfers. No such RTL change made here. Report and RTL inspection only;
+no tests or synthesis run. Existing correctness invariants unchanged.
+
+
+### 2026-11-16 - keep redirect out of normal admission calculation
+
+Following the -0.453 ns WNS / -13.164 ns TNS report, Fetch/Queue.sv splits
+stage_transfer_candidate (normal staging-to-prediction decision) from stage_transfer
+(candidate AND !redirect_taken). fifo_packet_room uses the candidate to select
+stage_push_count versus packet_push_count. Its existing reset/delayed-reset/redirect
+priority still forces room to one. All actual transfer consumers retain the masked
+stage_transfer signal; fetch acceptance and prediction capture are unchanged.
+
+Invariant: without redirect the candidate equals the old transfer signal. With
+redirect, the admission calculation is ignored by the existing register override.
+Taken-packet handling, FIFO capacity accounting, and no-pop-credit admission remain
+unchanged. No new state or latency. Intended benefit is removing redirect ->
+497-load stage_transfer -> count selection/comparison from admission capture;
+physical timing improvement is unmeasured. Static equation/priority review and
+diff check only; no tests, lint, synthesis or implementation run. README updated.
+
+
+### 2026-11-16 - register packet-level branch summary with prediction
+
+After admission-control separation, user reports WNS -0.561 ns (0.108 ns worse);
+TNS was not supplied. Worst path launches prediction_lane_valid[1] and ends at
+instruction-memory BRAM address. Data delay 5.144 ns includes 4.415 ns routing,
+four LUTs and a 1.633 ns final address route. This does not measure the remaining
+admission path independently.
+
+Fetch/Queue.sv now computes stage_taken and first-taken stage_redirect_pc alongside
+stage_push_count from reconstructed packet validity, branch classification and
+branch_output. Both capture with the prediction packet on stage_transfer and hold
+while it waits. Prefetch uses the registered summary/target instead of qualifying
+lanes and selecting their target after prediction capture. Removed unused old
+combinational target/selected-lane intermediates. FIFO keep/taken calculations still
+use registered per-lane predictions, preserving truncation and stored branch flags.
+
+Invariant: only the first valid classified branch with valid taken prediction wins.
+The summary shares payload capture and flush priority. Reset/delayed reset/external
+redirect/committed taken prediction clear summary validity; target is don't-care.
+On drain without refill prediction_stage_valid clears and masks the held summary;
+on ordinary drain/refill the new packet and summary replace the old together.
+No extra pipeline stage; redirect/reset prefetch priority unchanged. Cost is up to
+33 summary bits and first-target selection before prediction capture, with possible
+pruning of now-unused target fields. New prediction-stage timing must be measured.
+Static priority, hold/flush, count equivalence and diff review only; no tests, lint,
+synthesis or implementation run. Current flow and Dispatch README updated.
+
+
+### 2026-11-16 - revert later experiments to best direct-source-capture version
+
+At user request, restored the first RTL experiment after 11ae379 (Prototype 2.6):
+direct registered serve rs1/rs2 and bank flags, with wide speculative payload banks.
+This is the version measured at WNS -0.453 ns and TNS -13.164 ns. Removed the later
+redirect-independent admission candidate and registered first-taken summary/target.
+Queue admission again uses redirect-qualified stage_transfer, and packet taken/target
+selection again derives combinationally from registered per-lane predictions.
+Source candidate mapping, source capture, flush and zero-pop refill remain intact.
+
+The admission experiment measured WNS -0.561 ns; adding the branch summary produced
+-0.499 ns and user-reported notably worse TNS (no numeric TNS supplied). Its worst
+path was redirect -> staging capture CE, with 399/198-load intermediate control
+nets. Both experiments remain documented above as reverted, not established wins.
+No proposed staging payload-enable change was implemented.
+
+Validation: restored affected sections from HEAD, inspected remaining RTL diff to
+confirm only the original source-capture experiment remains; git diff --check.
+No tests, lint, synthesis or implementation run. Historical best timing is not a
+new measurement. Current description/README no longer claim the reverted behavior.
+
+
+### 2026-11-16 - aggressive pre-route and post-route physical optimization
+
+User requested stronger phys_opt to attempt closure from restored best RTL
+(previously measured WNS -0.453 ns / TNS -13.164 ns). frontend_ooc.tcl previously
+had no phys_opt_design calls. Added AggressiveExplore after placement and after
+routing. Default synthesis, RuntimeOptimized opt/place/route and all constraints
+remain unchanged. Original placed outputs remain pre-physopt; placed_physopt and
+routed_pre_physopt outputs preserve intermediate results. Existing frontend_routed
+checkpoint and routed reports now describe the final post-route physopt result.
+
+Tradeoff: more implementation time and potentially different placement/replication;
+closure or improvement is not guaranteed. No RTL/stage/interface changes. No false
+paths or relaxed constraints added. This is a new implementation-flow baseline;
+pre/post-route-pass comparison is available without discarding the earlier result.
+Reviewed AMD physical optimization directive documentation, script ordering and
+diff formatting only. No synthesis/implementation/tests run. README updated.
+
+
+### 2026-11-16 - standalone routed-checkpoint retry flow
+
+Added frontend_retry.tcl at user request. Defaults to opening
+build/frontend_ooc/frontend_routed.dcp, or accepts an explicit DCP and output directory.
+Runs post-route AggressiveExplore phys_opt, AggressiveExplore route_design, then
+another AggressiveExplore phys_opt. Does not rerun synthesis or placement and uses
+the checkpoint netlist/device/constraints, not any newer working-tree RTL.
+
+Saves baseline, physopt, rerouted and final checkpoints plus setup/hold, utilization
+and route-status reports. Timestamped default output directory is separate from
+main flow; existing output directories are rejected. Input checkpoint is never
+written. All stages are preserved because later passes can regress timing or hold.
+No automatic claim that the final stage is best. Tradeoff is longer routing effort;
+benefit remains unmeasured. No RTL/functional/constraint changes. Reviewed AMD routing
+and physical optimization docs and script text; no Vivado, synthesis or tests run.
+
+
+### 2026-11-16 - restore main flow without physical optimization
+
+At user request removed both added AggressiveExplore phys_opt passes and their
+intermediate output stages from frontend_ooc.tcl. Main flow again writes
+frontend_routed.dcp and routed_* reports directly after RuntimeOptimized routing.
+Default synthesis, RuntimeOptimized opt/place, constraints and RTL are unchanged.
+Standalone frontend_retry.tcl remains untouched; existing output files are retained.
+
+The user's standalone retry crashed during its first post-route AggressiveExplore
+pass. Log showed original setup WNS/TNS -0.453/-13.164 and transient WNS -0.311,
+but no optimized checkpoint was saved. Hold WHS/THS were -1.126/-100.429.
+Crash cause was not established. This reversion restores the lighter main flow;
+no new timing result claimed. Static script/output-path checks and diff check only;
+no Vivado, synthesis or tests run. Current description and README updated.
+
+
+### 2026-11-16 - predecode CSR and FP legality alongside prediction
+
+User supplied worst path from prediction instruction bit 27 to fifo_trap[5][0],
+5.165 ns data delay, eight LUTs (1.271 ns cell, 3.894 ns route). Exact mapped
+operation was not established. At user request, split two encoding checks ahead
+of prediction capture rather than moving the entire trap decoder.
+
+New Fetch/LegalityPredecode.sv computes CSR address legal/read-only classification
+and the OP-FP suboperation illegal predicate. Queue.sv captures these three bits
+per lane with prediction payload on stage_transfer, holds them with waiting packets,
+and makes them don't-care on the same flush branch as payload. InstructionLegality.sv
+consumes the summaries; opcode selection, CSR write qualification, compressed checks,
+other extension checks and final ECALL/EBREAK/ILLEGAL encoding stay after capture.
+FP check hardware is generate-disabled with SUPPORT_FLOAT=0; FP CSR address support
+uses the same parameter. MUL/DIV/atomic checks remain unchanged in the final stage.
+
+Invariant: the extracted predicates preserve the prior address whitelist/read-only
+policy, first-level FP operation cases, rs2 restrictions, format and rounding checks.
+Summaries travel with the same instruction across hold, flush and drain/refill;
+invalid payload cannot commit. No extra stage or FIFO fields: summaries are consumed
+before FIFO insertion. Cost is up to three prediction bits per lane and added
+combinational work beside the predictor. Benefit and prediction-stage margin are
+unmeasured. Main Tcl glob includes the new Fetch source automatically.
+Validation: static extracted-condition comparison, single instantiation wiring,
+capture/flush review and diff check only. No tests, lint or synthesis run.
+
+
+### 2026-11-16 - fix legality-summary elaboration name collision
+
+User synthesis failed with Synth 8-8891: new prediction_legality array collided
+with the existing prediction_legality generate-block name in Fetch/Queue.sv.
+Renamed only the array and all its references to prediction_legality_bits.
+No logic, timing structure or behavior change. Static reference inspection and
+diff check only; no synthesis/tests run. Prior static review missed this collision.
+
+
+### 2026-11-16 - split retry passes after native phys-opt crash
+
+User reports recurring retry crashes without saved optimization progress. Earlier
+log identified native failure inside first AggressiveExplore post-route critical
+path optimization; current vivado.log is a newer normal implementation, so it does
+not establish an additional crash cause. frontend_retry.tcl now uses one thread,
+runs AggressiveExplore routing first, then explicit placement_opt, fanout_opt and
+routing_opt physical passes separately. Removes both combined AggressiveExplore
+physical passes. Each completed pass saves its own checkpoint before reports.
+last_saved.txt records the completed checkpoint, progress.txt identifies the running
+pass. Ordinary Tcl command errors stop without saving uncertain modified state;
+native access violations cannot be caught or saved mid-command. These changes are
+a workaround attempt, not a confirmed vendor-crash fix. Input and older checkpoints
+remain untouched; all reports retain setup, hold and route status. Main Tcl and RTL
+unchanged. Resume by passing a saved DCP and fresh output directory. Static script
+review and AMD supported-pass documentation check only; no Vivado/tests run.
+
+
+### 2026-11-16 - complete requested reversion of extra legality predecode
+
+User clarified target is RTL immediately before the CSR/FP predecode experiment,
+recalling roughly -0.2 ns WNS. That exact timing report has not been verified.
+Latest supplied report is -0.535 ns, 5.475 ns data, capability -> issue_select_any
+-> serve_rs2 capture; working tree still contained predecode because the earlier
+reversion turn was interrupted before edits. Completed that pending reversion now.
+
+Restored InstructionLegality.sv to its original post-prediction checks, removed
+Queue's three summary bits/capture/wiring and deleted LegalityPredecode.sv. Kept
+direct serve source-register capture and all Tcl changes. This restores the RTL
+immediately preceding extra predecode, without claiming reproducible -0.2 timing.
+Historical experiments remain documented. Static diff/reference checks only;
+no synthesis/tests run. Existing routed DCP/reports are not rebuilt by this edit.
+
+
+### 2026-11-16 - retry achieves setup closure; remove unsupported fanout pass
+
+User log shows AggressiveExplore routing completed with WNS +0.034 ns / TNS 0,
+WHS -1.127 ns / THS -102.561 ns, no failed/unrouted/overlapping nets. Setup
+closure only: hold remains failing. Saved 01_rerouted.dcp and 02_placement.dcp
+in build/frontend_retry/20261116_152348. Placement optimization skipped because
+setup slack was nonnegative. Then explicit fanout_opt failed with Vivado_Tcl 4-265:
+not supported for post-route physical synthesis in this flow. This was a Tcl error,
+not the earlier native crash, and completed checkpoints survived. Removed fanout
+step from frontend_retry.tcl and renumbered routing pass to 03. Main flow/RTL and
+constraints unchanged. Previous documentation-based assumption of support was
+incorrect for this tool/device flow. Static script/diff review only; not rerun.
+
+
+### 2026-11-16 - bounded setup and hold retry sweep
+
+User requested hold optimization and broader efforts. frontend_retry.tcl now runs
+aggressive routing, explicit hold_fix and aggressive_hold_fix, critical-pin, routing,
+clock, and restructure optimization, then NoTimingRelaxation routing and final
+aggressive hold repair. Removed placement-only pass: AMD 2025.2 post-route table
+limits it to UltraScale families, and on this Artix run it had merely skipped with
+setup closed. Fanout and combined crashing AggressiveExplore phys-opt remain absent.
+Checked AMD UG904 Available Physical Optimizations for post-route applicability.
+
+Each completed command is checkpointed before reporting. Ordinary Tcl failures log
+to failures.txt, reload last_saved checkpoint and continue; native crashes cannot
+be caught. Restructure is late to preserve earlier progress if its algorithms crash.
+All stages keep setup/hold and route-status reports; no assumption final is best.
+Hold insertion may consume LUTs and reduce setup slack. Input checkpoint, main flow,
+RTL and constraints unchanged; no relaxation of min delays to hide violations.
+Static script review/diff check only; this extended sweep has not been executed.
+
+
+### 2026-11-16 - standalone worst hold path report
+
+Added worst_hold_path.tcl: opens main routed DCP by default or a supplied checkpoint,
+queries delay_type min, and writes/prints one worst hold path with expanded clock
+paths and input pins. Report defaults beside the selected DCP; optional report path
+overrides it. Includes checkpoint provenance and timestamp, avoids deprecated -nets
+and the incompatible -of_objects formatting combination. No optimization, RTL or
+constraint changes. Static script review only; no Vivado run.
+
+
+### 2026-11-16 - model reset earliest arrival at 1 ns
+
+User requested 1 ns reset input delay after observing reset-dominated hold paths.
+frontend_ooc.tcl already had reset max=1.000 ns; changed reset min from 0.000 to
+1.000 ns. serial_active remains min=0/max=1; existing late-control constraints
+(including current user max=3.250 ns) are untouched. This changes the assumed
+external reset arrival, not hardware delay: valid only if the reset source meets
+that minimum arrival. Existing DCPs retain their embedded old constraints until
+updated/rebuilt. No RTL change, synthesis or timing run; static edit review only.
+
+
+### 2026-11-16 - remove instruction-memory response payload reset
+
+User reported reset -> RAMB18E1 RSTRAMARSTRAM as worst hold path and requested
+removing payload reset. Fetch/InstructionMemory.sv now reads read_words and captures
+request_halfword on every edge; only fetch_valid depends on reset (<= !reset).
+This removes reset from inferred BRAM read-data reset and payload capture enables.
+ROM initialization, address wrapping, read latency and valid-response data unchanged.
+
+Invariant: read words, alignment and fetch_valid describe the same sampled request.
+On reset edges validity is zero; Queue's reset/delayed-reset branch also clears
+staging validity and ignores payload. First nonreset read supplies matching data
+and alignment when validity rises; Queue accepts it at a later edge under its
+existing fetch_valid gate. Invalid reset-cycle payload is no longer zero and must
+not be consumed. No pipeline stage added. Tradeoff: reads toggle during reset;
+expected reset hold-path removal requires synthesis confirmation. Static consumer,
+startup alignment and diff review only; no tests/lint/synthesis run. README updated.
+
+
+### 2026-11-16 - establish parameter-set timing table in main architecture doc
+
+Added root ARCHITECTURE.md frontend comparison series, prefaced by exact current
+Tcl clock/min/max I/O constraints and OOC clock/implementation assumptions. F01
+records current parameter set (issue2, unroll1, bypass1, all extensions, fetch2/FIFO8,
+divider3, integer masks1111/0011, memory111, FP11). Verified final retry report
+20261116_163543/09_hold_final matches user: WNS +0.060/TNS0, WHS +0.084/THS0,
+WPWS2/TPWS0, setup and hold 0/7097, pulse width0/3422. No functional or full-chip
+closure claim. Added AGENTS instruction to maintain comparison tables with fixed
+constraints, parameter snapshots and report provenance. Documentation only; read
+parameters/current generated XDC/report and checked diff. No implementation run.
+
+
+### 2026-11-16 - simplify main frontend comparison table
+
+At user request replaced separate configuration/timing tables with one row per run
+and ISA, issue width, FIFO/cache-line words, total lanes, tested frequency/period,
+LUTs and FFs. Common Tcl constraints remain before it. Matching final utilization
+report gives 6784 Slice LUTs and 3417 FFs; tested clock is 200 MHz/5 ns. Detailed
+configuration, provenance and passing slack stay in prose. AGENTS updated to the
+single-table format. Documentation only; static report/diff inspection, no runs.
+
+
+### 2026-11-16 - append 500 MHz target frequency experiment
+
+Main architecture single table gains same-parameter run with user-reported 2 ns
+target, WNS -2.580/TNS -7877.691, estimated period4.580 ns/frequency218.34 MHz.
+LUT/FF absent from supplied summary and not inferred from earlier run. Existing
+row preserved. Clock targets now explicitly vary per row notes while I/O model
+remains common. Current script reads2.5 ns; user specifies2 ns for this run, so
+that provenance distinction is recorded. No RTL/Tcl change or implementation run.
+
+
+### 2026-11-16 - verify utilization and correct measured clock target
+
+Matched routed report dated17:01:08 to WNS-2.580/TNS-7877.691. Utilization6780
+LUTs/3417FFs filled in main table. Report clock summary and generated XDC both
+confirm2.500ns/400MHz, contrary to earlier user-described500MHz. Corrected estimate
+to5.080ns/196.85MHz; earlier218.34 estimate depended on incorrect2ns assumption.
+Read reports only; no implementation run.
+
+
+### 2026-11-16 - record no-F/no-A frontend run
+
+Matched current routed timing/utilization reports:2.500ns target, WNS-2.779,
+TNS-6805.158, WHS+0.069/THS0;6005LUTs/3093FFs. Appended RV32IMC row with
+estimated5.279ns/189.43MHz, issue2/FIFO8/cacheline2. User requested3 lanes
+(two integer plus memory); RTL additionally has fixed serial lane, so physical
+total including serial is4. Table retains user-specified3 for this run. No RTL
+or flow changes, report read and documentation update only.
+
+
+### 2026-11-16 - record single-issue one-word frontend run
+
+User supplies issue1/cacheline1, RV32IMC, FIFO8, unroll1/bypass1/divider3,
+two integer and one memory lanes, no FP lane. Current routed reports give
+2.500ns target/WNS-1.698/TNS-2937.586, WHS+0.114/THS0,2487LUTs/1957FFs.
+Appended main table estimate4.198ns/238.21MHz using same lane-count convention
+as previous no-F/no-A row (3 excluding fixed serial lane). Report inspection
+and documentation only; no implementation or RTL changes.
+
+
+### 2026-11-16 - corrected parameter series, minimal frontend
+
+User invalidated previous no-F/no-A and single-issue rows due to bad parameter
+sets and removed them from main table; only original196.85MHz dual-issue row
+remains valid. Preserve older history as superseded measurements, not valid
+configuration comparisons. Fresh supplied configuration: issue1/cacheline1/FIFO8,
+unroll1/bypass1, MUL/DIV/FP/atomic disabled, integer count1 mask1100, memory
+count1 mask111, FP count0. Total3 includes fixed serial lane. Added RV32IC row
+from current reports: target2.5ns, WNS-1.908/TNS-2919.949, WHS+0.040/THS0,
+2435LUTs/1911FFs; estimated4.408ns/226.86MHz. No hardware parameterization
+changes or implementation run performed; this task records supplied run only.
+
+
+### 2026-11-16 - static parameter/pruning audit
+
+Added PARAMETER_AUDIT.md with source-level findings across decode/fetch/issuer,
+OOC lane sinks, derived widths and backend generation. Found current mask1100
+selects MUL/DIV, not ALU/BRU; both extensions disabled leaves no ALU/BRU coverage.
+Thus latest2435LUT/226.86MHz RV32IC row is not a valid functioning configuration
+comparison. No table or user parameter edits made pending corrected run.
+No synthesis/elaboration tests; mapped pruning remains unverified.
+
+
+### 2026-11-16 - fix lane-mask and feature parameter boundaries
+
+Corrected current integer mask1100 to0011 (ALU/BRU). Parameters capability arrays
+now use at least one placeholder element for count0; loops still honor actual count.
+DerivedParameters builds constant effective masks combining raw masks with global
+MUL/DIV/FP/atomic support. Lane counters, Decode resource checks, Issue allocation
+and FrontendTop payload sinks all consume these effective masks. Top rejects
+missing base/extension lane coverage, disabled FP with nonzero FP lane count,
+unsupported issue/unroll values and local overrides inconsistent with global packet
+widths. This prevents silently benchmarking an unusable lane set. Counts and lane
+IDs are preserved; no automatic renumbering. Common/issuer payload pruning remains
+conservative pending implemented backend consumer contracts. Backend IntegerLane
+continues to gate execution units with IS_*; no integrated backend generator exists
+to change. No guessed field removals or narrowed producer sentinels introduced.
+Static edits/reference/diff review only, no elaboration/synthesis/tests. New mapped
+area/timing must be measured; previous minimal row remains historical invalid data.
+
+
+### 2026-11-16 - corrected mask/effective capability run result
+
+Routed reports18:26:54 show WNS-1.709/TNS-3069.483 at2.5ns, WHS+0.083/THS0,
+2491LUTs/1953FFs. Estimated4.209ns/237.59MHz. Current parameters confirm0011
+integer mask with M/D/F/A off, issue1/cacheline1/FIFO8/3total lanes. Replaced
+invalid1100-mask minimal row in main comparison table, preserving original
+measurement here. Change from invalid run:+56LUT/+42FF, WNS improves0.199ns;
+TNS worsens149.534ns. Worst path is producer capability -> operands_ready,
+4.178ns data/seven logic levels. Vivado completes; existing duplicate c_branch
+and c_jump declarations still generate critical warnings and were not changed
+in this report task. Report review only, no synthesis or RTL edits.
+
+
+### 2026-11-16 - record corrected single-issue RV32IMC run
+
+Current parameters M/D on,F/A off,issue1,cacheline1,FIFO8,unroll1,bypass1,
+divider3,integer mask1111,one integer/one memory/no FP plus serial=3lanes.
+Latest routed summary target2.5ns,WNS-1.813/TNS-3059.157,WHS+0.018/THS0;
+utilization2484LUTs/1955FFs. Appended single table row estimated4.313ns/231.86MHz.
+Preserved user prose/table edits; report inspection only, no implementation run.
+
+
+### 2026-11-16 - predecode compact immediate format before FIFO check-in
+
+Added ImmediateFormatPredecode from registered prediction payload, parallel to
+legality. Five format bits capture with FIFO instruction under identical keep,
+commit and write index, then travel with retained/fresh speculative serve payload.
+Queue/FetchTop/FrontendTop/DispatchTop/Decode carry the selector to DecoderSlice.
+Immediate assembly is now a flat selector case over original bit layouts; nested
+opcode/compressed format recognition moved before FIFO insertion. FP memory
+formats retain SUPPORT_FLOAT guards. No extra stage or32-bit immediate storage.
+Added metadata above existing low fields so direct-source packed offsets remain
+unchanged. Flush validity and existing queue movement govern metadata lifetime.
+Also renamed compressed jump/branch offset vectors to avoid their preexisting
+collision with scalar predicates, preserving intended layouts and predicate names.
+Tradeoff:5bits per FIFO/serve entry and added pre-check-in work; synthesis must
+measure benefit and new bottlenecks. Static layout/wiring/diff review only; no
+tests, elaboration or synthesis run.
+
+
+### 2026-11-16 - predecode branch operation before FIFO check-in
+
+User report after immediate-format change ends at BRU operation,4.996ns data,
+seven levels, WNS-2.539 at2.5ns; instruction bank selection feeds branch encoding
+interpretation. Added BranchOperationPredecode from registered prediction payload
+parallel to legality/immediate format. Four-bit BranchOperation selector captures
+under FIFO commit/keep/index, travels with payload through all interfaces and
+speculative serve outcomes. DecoderSlice now only applies ok ? operation : BR_NONE.
+Original JAL/JALR, compressed CR/jump/conditional and funct3 branch priority copied
+verbatim. Trap gate preserved; no extension-specific hardware required for base
+branch operations. New bits inserted above existing metadata to preserve source
+packed offsets. Adds4bits/entry, no stage. Static condition/wiring/packed-layout and
+diff review only; no tests/elaboration/synthesis. New stage timing unmeasured.
+
+
+### 2026-11-16 - precompute five low immediate payload bits
+
+New report WNS-2.407/data4.814ns returns to immediate[4], launching registered
+serve selector through immediate format mux. Added ImmediateLowPredecode alongside
+format predecode before FIFO check-in. It reuses the same encoding-format selection
+and original bit-layout expressions, exposing only low5bits so upper combinational
+outputs prune. Queue captures5bits under identical instruction commit/keep/index
+and carries them through retained/refill serve candidates and module interfaces.
+Decoder common.immediate concatenates locally assembled upper27bits with carried
+low5bits. Added fields above prior low metadata preserve source extraction offsets.
+CSR upper bits remain unspecified as before, compressed/FP guards preserved. No
+stage added;5additional FIFO/serve bits trade area for removal of late low-bit
+assembly. Prediction-to-FIFO path may become limiting; benefit unmeasured. Static
+expression/wiring/diff review only; no tests/elaboration/synthesis.
+
+
+### 2026-11-16 - replace encoded upper-immediate format with layout enables
+
+User report data4.877ns/seven levels returns to immediate[8] through served format
+bit4. Replaced carried5bit format number with14 direct upper-layout enables.
+ImmediateUpperPredecode evaluates these before FIFO check-in from prediction
+payload. I/S formats share one upper layout; zero-upper shift/JR formats and
+CSR require no upper enable. Other compressed/full layouts retain original
+source wiring. Decoder masked-ORs upper27bits from enables, no downstream format
+comparison. Low5bit predecode remains. Bundle grows9bits, not32bit immediate.
+Unconsumed CSR/unused upper bits become zero, a permitted refinement of previous
+don't-care. Enables are mutually exclusive for defined encodings, captured and
+moved under existing instruction protocol. Original lower packed metadata offsets
+unchanged. FP format guards remain in shared predecode. Tradeoff is more stored
+control/fanout and possible OR-tree depth; mapped timing gain unmeasured.
+Static I/S upper equivalence, zero-upper exclusions, wiring and diff check only;
+no tests/elaboration/synthesis.
+
+
+### 2026-11-16 - directly capture serve instruction and compressed flag
+
+Latest user report: WNS -2.437ns at 2.5ns, data delay 4.846ns, seven LUT
+levels, from prev_serve_consumed to decoded system.operation. Selection through
+instruction bit23 takes 2.146ns including launch; remaining logic takes 2.700ns.
+Queue.sv now selects only the instruction word and compressed flag from the same
+completed next_window candidates as rs1/rs2 before capture. Existing direct source
+registers are unchanged; PC, validity, predecoded controls and all other fields
+remain speculative/banked. Unused banked instruction/c copies have no consumers
+and can prune. Retained candidates use the new direct outputs. No stage added.
+Correctness relies on identical consumption selection and candidate refill mapping;
+zero-consumption refill remains enabled, same-edge pushes remain unavailable, and
+reset/delayed-reset/redirect invalidate the banked window while direct payload is
+don't-care. Tradeoff: 33 more selected bits per serve lane load late consumption,
+with potential issue-to-serve timing cost in exchange for removing the next-cycle
+instruction bank mux. Benefit unmeasured. Validation: static packed-offset,
+retained/refill and driver review plus git diff --check; no tests or synthesis.
+
+
+### 2026-11-16 - consolidate registered issue structural eligibility
+
+Decode now combines candidate validity, same-group RAW, serial-pair conflict and
+lane-resource feasibility into structural_ok before the late consumption mux.
+A separate is_serial bit classifies the matching candidate capability before
+capture. These two registers replace the three exposed structural hazard flags.
+Dispatch/Top.sv and Issue.sv carry the new interface; IssueContract.sv now only
+combines structural_ok, operands_ready and !(serial_active && is_serial), then
+applies oldest-first prefix acceptance. Packet/capability/lane/valid inputs are
+removed from the contract. Packet validity remains separately available elsewhere.
+Each candidate uses the same retained-suffix/refill source mapping as packet
+selection, including the full-pop result. Both bits hold on stall and clear on
+reset/delayed-reset/redirect, matching packet validity. Existing RAW/resource/
+serial-pair predicates and producer readiness logic are unchanged. No stage added.
+Tradeoff: added pre-capture combination/serial classification in Decode removes
+post-capture capability interpretation and structural reduction; timing impact
+is unmeasured. Static interface, source-index, flush/hold and diff review only;
+no tests, elaboration or synthesis run.
+
+
+### 2026-11-16 - revert consolidated issue structural eligibility
+
+Reverted only the structural_ok/is_serial experiment in Decode, Dispatch Top,
+Issuer and IssueContract. Restored separate registered RAW, serial-pair and
+resource flags, explicit packet validity and live capability classification in
+the contract. Direct serve instruction/compressed capture remains unchanged.
+User report after consolidation: WNS -2.552ns at 2.5ns, data 4.921ns, eight
+levels, producer capability entry30 to Decode operands_ready. Prior direct-pop
+run: WNS -2.272ns, data 4.687ns, six levels, serve selector to direct rs1 capture.
+Worst slack regressed 0.280ns; different paths mean this does not establish a
+longer contract cone. Reversion preserves original prefix acceptance and packet
+flush/hold alignment; removes the experimental pre-capture reduction and serial
+classification. Static reverse-edit/interface and diff review only; no tests or
+synthesis. Post-reversion timing has not been measured.
+
+
+### 2026-11-16 - first current comparison row from post-route retry
+
+Recorded latest completed 03_hold_aggressive checkpoint in main architecture
+comparison table: RV32IMAFC, issue2, FIFO8, cacheline1, five total lanes;
+2.5ns target, WNS -2.085ns, TNS -6910.226ns, WHS +0.147ns. Slack-derived
+estimated period 4.585ns / 218.10MHz; 4989 slice LUTs and 3268 FFs. Source:
+build/frontend_retry/20261116_202929/03_hold_aggressive reports. Later retry
+passes were still in progress when recorded; this row describes that checkpoint
+only. Documentation update; no RTL change, tests or synthesis.
+
+
+### 2026-11-16 - record second current post-route configuration
+
+Added RV32IMC issue2/FIFO8/cacheline1/four total lanes (two integer, one
+memory, one serial) to main table from retry 20261116_204001 checkpoint
+09_hold_final. At 2.5ns target, WNS -2.359ns, TNS -6878.249ns, WHS
++0.071ns; estimated period 4.859ns / 205.80MHz. Utilization 4524 slice
+LUTs and 2946 FFs. Compared with preceding RV32IMAFC row, F/A and floating
+lane are disabled. Documentation only; no RTL, tests or synthesis.
+
+
+### 2026-11-16 - FP register-file-only operand scheduling
+
+User confirmed FP follows lockstep progress/stall semantics. Definitions now
+requires RF-after-capture index for FP-produced integer destinations, covering
+CAP_FP_F and CAP_FP_CONVERT. Decode selects RF-only integer readiness for FP
+consumers, including retained/fresh reads, old-buffer refresh and prospective
+writers (no new ALU bypass). FP sources bypass integer readiness altogether.
+Issuer uses a generated 32-bit FP busy scoreboard, checking used rs1/rs2/rs3
+and FP destinations directly. Same-group FP RAW and WAW are checked without
+acceptance feedback. FP loads set bits and stores check FP source data; f0 is
+ordinary. At most one writer per FP register; actual RF writeback clears and
+new accepted writes set, with set priority. Clears work during stalls/redirect;
+sets require actual advancing acceptance. Reset initializes empty scoreboard.
+No data forwarding for FP operands or integer sources going to FP units.
+
+Parameters adds FP_WB_PORTS (default floating+memory lane counts, override for
+retirement aggregation) and FP_WB_ISSUE_BYPASS=0. Frontend/Dispatch/Issuer expose
+fp_wb_valid and fp_wb_rd. Optional bypass releases issue on actual same-cycle
+RF writeback only, adding a completion-control path but no data bypass. Default
+waits for registered clear, intentionally losing a cycle. All scoreboard logic
+generates out when F disabled. frontend_ooc.tcl constrains notifications to
+3.000ns maximum / 1.500ns minimum input arrival. Existing recorded table runs
+predate these new ports and RTL.
+
+IMPORTANT integration limitation: redirect alone does not identify canceled
+FP writers. Backend recovery must reconcile canceled outstanding writes before
+resuming dependent FP issue; otherwise a canceled writer leaves a stuck bit.
+This task does not implement backend retirement/cancellation or real RF units.
+Never assert a false RF writeback notification to cancel an operation.
+
+Static interface/priority/candidate readiness review and git diff --check only;
+no tests, elaboration or synthesis. Timing impact and functionality unmeasured.
+
+
+### 2026-11-16 - correct enabled-FP lane configuration
+
+User synthesis stopped at FrontendTop's FP coverage assertion: SUPPORT_FLOAT=1
+but FLOATING_LANE_COUNT=0. Set count to one, using the existing 2'b11 FP/conversion
+capability entry. Memory FP support was already enabled. FP_WB_PORTS consequently
+defaults to two. Kept the coverage assertion. Later unresolved-parameter errors
+appear secondary to the fatal elaboration error. Static configuration review
+and diff check only; synthesis not rerun.
+
+
+### 2026-11-16 - derive FP writeback port count from lane capabilities
+
+Removed raw FP_WB_PORTS setting from Parameters. DerivedParameters counts
+effective memory capability bit2 and each floating lane with any effective
+capability once. Disabled F therefore yields zero logical ports; declaration
+width stays at least one to avoid invalid arrays, with unused logic pruned.
+Issuer loops/checks use the derived logical count. Interface port order is
+FP-capable memory lanes then active floating lanes. This removes unnecessary
+writeback inputs for integer-only memory lanes. Current configuration still
+has two ports. README updated; static reference and diff checks only, no synth
+or tests. Earlier configurable-port descriptions are superseded.
+
+
+### 2026-11-16 - local FP busy entry updates
+
+User routed report: WNS -3.028ns at 2.5ns, data 5.498ns, seven LUTs,
+81.449% routing; busy31 through acceptance to busy20. Replaced dynamic bit
+assignment for scoreboard sets/clears in Issue.sv with generated per-register
+constant destination comparisons and parallel hit reductions. Destination
+qualification precedes acceptance; issue_good only gates a predecoded hit.
+Each busy register owns its local hold/clear/set expression. No added stage,
+no speculation and no delayed busy set. Reset wins, accepted new set wins
+over clear, stall/redirect block sets only, actual writebacks still clear.
+Read logic, same-group hazards and optional writeback release are unchanged.
+Expectation is less shared write-selection logic on late acceptance; physical
+benefit is unmeasured and synthesis may still share equivalent gates. Static
+priority/interface review and diff check only; no tests or synthesis.
+
+
+### 2026-11-16 - revert local FP busy update experiment
+
+Latest user report regressed WNS from -3.028 to -3.465ns, data delay from
+5.498 to 5.913ns. New path starts at busy31, crosses FP readiness/acceptance
+and serve consumption, and ends at direct serve rs2[4] capture. Seven levels,
+81.870% routing. Endpoint changed, so this does not prove busy-write logic
+itself slowed down; the read/acceptance cone and routing remain limiting.
+Reverted only per-entry update experiment to prior vector set/clear masks in
+Issue.sv. Derived capability-based port count and all FP semantics preserved.
+README updated. Static reverse-edit/diff review only; no tests or synthesis.
+
+
+### 2026-11-16 - register FP eligibility in Decode
+
+Moved default FP scoreboard reads from Issue acceptance into Decode candidate
+lookahead. Issuer exports busy with actual same-edge RF clears applied, without
+live accepted-write feedback. Decode reads used rs1/rs2/rs3 and destination
+busy, adds hypothetical prefix writers per consumption outcome, and checks
+same-group RAW/WAW for each resulting packet pair. Only one ready bit per slot
+is captured with the matching packet. IssueContract consumes this bit directly.
+No producer index/lane/capability copies or extra instruction stage added.
+
+New accepted writers override clears logically through prospective conflicts;
+retained and refill packets both get matching updates. Stall refreshes held
+packet readiness from actual clears without moving packets or inventing writes.
+Flush clears readiness; scoreboard recovery requirements remain unchanged.
+FP_WB_ISSUE_BYPASS=1 retains the original live read/actual-writeback release
+path, and default lookahead generates out in that mode or with F disabled.
+Affected Decode.sv, Issue.sv, Dispatch/Top.sv. Tradeoff: extra candidate conflict
+logic and writeback-to-Decode capture paths; removes busy lookup from default
+issue/consumption chain. Timing benefit unmeasured. Static source mapping,
+set/clear priority, hold/flush and interface review plus diff check only; no
+tests, elaboration or synthesis.
+
+
+### 2026-11-16 - remove entire FP scoreboard experiment
+
+User chose to pursue dynamic operand search among FP lanes instead. Removed
+FP busy scoreboard, live/Decode readiness modes, prospective FP hazards,
+RF-only cross-domain restrictions, writeback inputs and derived port counts,
+FP_WB_ISSUE_BYPASS parameter, and associated Tcl input constraints. Restored
+pre-experiment Decode/Issuer readiness and forwarding behavior. Updated README
+and current information flow; all experiment history and measured regressions
+remain above. Earlier predecode/direct serve capture and current user ISA/lane
+configuration are preserved. Dynamic FP lane search is not implemented by this
+reversion. Static reverse-edit/reference and diff review only; no tests/synthesis.
+
+
+### 2026-11-16 - restore only FP/integer RF readiness restrictions
+
+User requests only cross-domain readiness rules. Definitions producer_capture_ready
+now permits FP-produced integer destinations (CAP_FP_F or CAP_FP_CONVERT) only
+at RF-after-capture position. Existing integer producer write already preserves
+those capabilities. Decode requires RF-after-capture indices for integer sources
+of FP consumers, covering retained and fresh snapshots. Buffered new writers and
+prospective ALU writers cannot grant bypass eligibility to these sources.
+The threshold is EXECUTION_UNROLL+1 before capture, becoming RF index unroll+2
+after the advancing edge. Assumes confirmed lockstep FP pipeline/stall semantics.
+Checks are guarded by FP support and integer source bank. No FP busy table,
+writeback ports, extra state, or live Issue comparisons added. Static readiness
+case/diff review only; no tests or synthesis. Timing impact unmeasured.

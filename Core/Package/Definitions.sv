@@ -147,6 +147,10 @@ package Definitions;
         // selected by capability, which can infer a wide carry chain.
         div_ready = (32 + divider_auto_pipe - 1) / divider_auto_pipe + 2;
         if (index >= execution_unroll + 1) return 1'b1; // RF after capture
+        // FP-produced integer results are usable only once captured into RF.
+        if (Parameters::SUPPORT_FLOAT &&
+            capability inside {Enumerations::CAP_FP_F, Enumerations::CAP_FP_CONVERT})
+            return 1'b0;
         case (capability)
             Enumerations::CAP_ALU,
             Enumerations::CAP_BRU, Enumerations::CAP_MEMORY: return 1'b1;
