@@ -2404,3 +2404,33 @@ clears on flush, stall selects zero and vacant slots may refill. No stage change
 Adds six late-selector loads per lane while removing bank mux from destination
 side of RAW compares. Benefit unmeasured. README updated; static packed-offset,
 sole-driver and candidate-alignment review plus diff check only, no synth/tests.
+
+
+## 2026-11-17 â€” Latest aggressive implementation result recorded
+
+Added one run to the main architecture timing table from build/frontend_retry/20261117_133514/09_hold_final. Current configuration: RV32IMAFC, issue width 2, FIFO 8 words, cache line 1 word, five total lanes. Target period 2.500 ns; final WNS -1.901 ns, TNS -6407.891 ns, WHS +0.101 ns, THS zero. Slack-derived period 4.401 ns / estimated 227.22 MHz; utilization 5,273 Slice LUTs and 3,262 Slice Registers. This records the completed final aggressive rerun, not a new implementation setting or RTL change. Validation: read final timing/utilization reports and current Parameters.sv; no synthesis or tests run.
+
+
+## 2026-11-17 — Correct memory-lane configuration and mask labels
+
+Changed Core/Package/Parameters.sv memory mask from 110 to 001 for the current M/D-enabled, F/A-disabled dual-issue configuration. Bit zero must remain set to cover baseline memory operations; disabled extensions mask off bits one and two. Added explicit bit-order labels and accurate enabled-capability comments for integer, memory and floating masks; marked the zero-count FP entry as a placeholder and replaced the obsolete coverage-check TODO. No stage or timing structure changed. Validation: static comparison with DerivedParameters mask interpretation; no synthesis or tests run.
+
+
+## 2026-11-17 - RV32IMC aggressive retry intermediate result
+
+Recorded latest completed stage build/frontend_retry/20261117_135542/06_clock in the main timing table: issue 2, FIFO 8, cache line 1, four total lanes. Target 2.500 ns; WNS -1.734 ns, TNS -5154.756 ns, WHS +0.117 ns, THS zero; estimated period 4.234 ns / 236.18 MHz; 4,579 LUTs and 2,902 FFs. Retry progress reports 07_restructure, so this is an intermediate completed checkpoint, not final retry output. Validation: read saved stage reports and current parameters; no synthesis/tests run.
+
+
+## 2026-11-17 - RV32IC completed aggressive retry recorded
+
+Added the final build/frontend_retry/20261117_140558/09_hold_final result to the main timing table. RV32IC, issue width 2, FIFO 8, cache line 1, two integer lanes plus memory and serial (four total); all optional M/D/F/A disabled. Target 2.500 ns; WNS -1.838 ns, TNS -5250.970 ns, WHS +0.088 ns, THS zero. Estimated period 4.338 ns / 230.52 MHz; 4,482 LUTs and 2,890 FFs. Validation: final saved timing/utilization reports, completed retry progress and current parameters inspected. No RTL changes, tests or synthesis run.
+
+
+## 2026-11-17 - Single-issue RV32IC retry result recorded
+
+Recorded latest completed build/frontend_retry/20261117_144222/03_hold_aggressive stage: RV32IC, issue 1, FIFO 8, cache line 1, three total lanes (integer, memory, serial). Target 2.500 ns; WNS -1.612 ns, TNS -3460.126 ns, WHS +0.102 ns, THS zero. Slack-derived period 4.112 ns / estimated 243.19 MHz; 2,790 LUTs and 2,141 FFs. Retry is at 04_pins, so this row is intermediate rather than final. Validation: saved reports and current parameters read; no synthesis or tests run.
+
+
+## 2026-11-17 - Single-issue adjusted I/O model completed retry
+
+Recorded build/frontend_retry/20261117_151642/09_hold_final: RV32IC issue 1, FIFO 8, cache line 1, three lanes, 2,828 LUTs and 2,141 FFs. Target 2.500 ns; WNS -0.992 ns, TNS -1032.770 ns, WHS +0.098 ns, THS zero; estimated 3.492 ns / 286.37 MHz. Stages 08 and 09 tie for best setup and TNS. Late-control maximum input delay is now 2.500 ns instead of 3.250 ns, minimum remains 2.000 ns; main table preface distinguishes the models. Worst setup is instruction BRAM output to fetch branch staging, not redirect. Validation: completed retry reports, parameters and Tcl inspected; no implementation or tests launched.

@@ -2,12 +2,12 @@ package Parameters;
 
     parameter unsigned EXECUTION_UNROLL = 1;
     parameter unsigned BYPASS_ENABLED = 1;
-    parameter unsigned ISSUE_WIDTH = 2;
+    parameter unsigned ISSUE_WIDTH = 1;
 
-    parameter unsigned SUPPORT_MUL = 1;
-    parameter unsigned SUPPORT_DIV = 1;
-    parameter unsigned SUPPORT_FLOAT = 1;
-    parameter unsigned SUPPORT_ATOMIC = 1;
+    parameter unsigned SUPPORT_MUL = 0;
+    parameter unsigned SUPPORT_DIV = 0;
+    parameter unsigned SUPPORT_FLOAT = 0;
+    parameter unsigned SUPPORT_ATOMIC = 0;
 
     parameter unsigned CACHE_LINE_WORDS = 1;
     parameter unsigned FETCH_FIFO_WORDS = 8;
@@ -15,23 +15,25 @@ package Parameters;
 
     parameter unsigned DIVIDER_AUTO_PIPE = 3;
 
-    // TODO: Add a compile-time check that the configured lanes cover all RV32I instructions.
-    parameter unsigned INTEGER_LANE_COUNT = 2;
+    // FrontendTop checks baseline and enabled-extension lane coverage.
+    // Integer mask [3:0] = {DIV, MUL, BRU, ALU}.
+    parameter unsigned INTEGER_LANE_COUNT = 1;
     parameter logic [3:0] INTEGER_LANE_CAPABILITIES [(INTEGER_LANE_COUNT > 0 ? INTEGER_LANE_COUNT : 1)] = '{
-        4'b1111, // Lane 0: ALU, BRU; bits [3:0] = DIV, MUL, BRU, ALU
         4'b0011
     };
 
+    // Memory mask [2:0] = {FLOAT, ATOMIC, MEMORY}.
     parameter unsigned MEMORY_LANE_COUNT = 1; 
     parameter logic [2:0] MEMORY_LANE_CAPABILITIES [(MEMORY_LANE_COUNT > 0 ? MEMORY_LANE_COUNT : 1)] = '{
-        3'b111 // Lane 0: MEMORY, ATOMIC, FLOAT
+        3'b001 // Memory lane 0: MEMORY only
     };
 
-    parameter unsigned FLOATING_LANE_COUNT = 1;
+    // Floating mask [1:0] = {CONVERSION, FLOAT}.
+    parameter unsigned FLOATING_LANE_COUNT = 0;
     parameter logic [1:0] FLOATING_LANE_CAPABILITIES [(FLOATING_LANE_COUNT > 0 ? FLOATING_LANE_COUNT : 1)] = '{
-        2'b11 // Lane 0: FLOAT, CONVERSION
+        2'b00 // Placeholder only; no floating lanes are generated
     };
-
+  
 endpackage
 
 // very real possibility for same cycle RAW legality here

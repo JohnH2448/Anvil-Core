@@ -62,13 +62,24 @@ set_input_delay -clock frontend_clk -min 2.000 $late_controls
 set_input_delay -clock frontend_clk -max 1.000 [get_ports {reset serial_active}]
 set_input_delay -clock frontend_clk -min 1.000 [get_ports reset]
 set_input_delay -clock frontend_clk -min 0.500 [get_ports serial_active]
+# FP writeback ports added after the currently recorded runs:
+set fp_writebacks [get_ports -quiet {fp_wb_valid* fp_wb_rd*}]
+if {[llength $fp_writebacks]} {
+    set_input_delay -clock frontend_clk -max 3.000 $fp_writebacks
+    set_input_delay -clock frontend_clk -min 1.500 $fp_writebacks
+}
 set_output_delay -clock frontend_clk -max 0.000 [all_outputs]
 set_output_delay -clock frontend_clk -min 0.000 [all_outputs]
 ```
 
+The latest single-issue run (286.37 MHz) uses 2.500 ns maximum delay for stall, redirect_taken and redirect_pc, rather than the 3.250 ns model above; minimum delay remains 2.000 ns.
+
 | ISA | Issue Width | FIFO Words | Cache Line Words | Lanes | Frequency (MHz) | Period (ns) | LUTs | FFs |
 |---|---|---|---|---|---|---|---|---|
-| RV32IMAFC | 2 | 8 | 1 | 5 | 218.10 | 4.585 | 4,989 | 3,268 |
-| RV32IMC | 2 | 8 | 1 | 4 | 205.80 | 4.859 | 4,524 | 2,946 |
+| RV32IMAFC | 2 | 8 | 1 | 5 | 227.22 | 4.401 | 5,273 | 3,262 |
+| RV32IMC | 2 | 8 | 1 | 4 | 236.18 | 4.234 | 4,579 | 2,902 |
+| RV32IC | 2 | 8 | 1 | 4 | 230.52 | 4.338 | 4,482 | 2,890 |
+| RV32IC | 1 | 8 | 1 | 3 | 243.19 | 4.112 | 2,790 | 2,141 |
+| RV32IC | 1 | 8 | 1 | 3 | 286.37 | 3.492 | 2,828 | 2,141 |
 
-Note: These are representative, not theoretical limits.. They could be higher with more aggressive routing passes. They are also pre-fp.
+Note: These are representative, not guarentees.
