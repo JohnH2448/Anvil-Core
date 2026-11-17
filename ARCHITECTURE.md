@@ -1,5 +1,8 @@
 ## Lane Model
-Anvil-Core opts for a highly parameterizable backend, the crux of which being the concept of heterogenous "lane" instantiation at compile time.
+Anvil-Core opts for a highly parameterizable backend, the crux of which being the concept of heterogenous "lane" instantiation at compile time. Long story short:
+FP lanes only forward to other FP lanes, they dynamically search for operands. No integer forwarding goes to them nor integer outputs come from them.
+Integer and memory lanes are served static tags to fetch operands from at issue time. Memory lanes broadcast ready bits, integer lanes are guarenteed ready.
+Serial lanes back stall all other serial operations and run one at a time. All dependencies generally are also back stalled.
 
 ## Memory Lanes
 Memory operations, in particular loads, must be handled differently than most other instructions due to their variable latency nature. Given that the pipeline design is strictly in order, an instruction dependent on load data MUST stall itself and everything younger to prevent correctness issues. There is no replay mechanism to otherwise repair an instruction if it were to continue past its operand selection stage missing its dependency data. Additionally, even in the case where a load does not have any immediate dependencies on its result, it still must stall the pipeline to maintain in-order semantics before it commits to the register file. No younger instruction may commit to the register file until the load has completed and commit entirely. Without this, unintentional WAW among other correctness issues are possible, corrupting the register file state and breaking flush recovery. Given these invariants, the memory architecture must satisfy them in a way that preserves correctness while also minimizing backend stall cycles.
