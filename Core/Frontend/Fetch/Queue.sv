@@ -48,6 +48,7 @@ module Queue
     output logic [13:0] serve_immediate_upper_select [SERVE_WORDS-1:0],
     output logic [4:0] serve_immediate_low [SERVE_WORDS-1:0],
     output logic [$bits(BranchOperation_)-1:0] serve_branch_operation [SERVE_WORDS-1:0],
+    output logic serve_fp_consumer [SERVE_WORDS-1:0],
     output TrapType_ serve_trap [SERVE_WORDS-1:0],
     output logic [31:0] serve_pc_reg [SERVE_WORDS-1:0],
     output logic serve_valid_reg [SERVE_WORDS-1:0],
@@ -60,7 +61,8 @@ module Queue
     input BranchOutput_ branch_output [FETCH_WORDS*2-1:0],
 
     // Number of consecutive serve lanes consumed, starting at lane zero
-    input logic [$clog2(SERVE_WORDS+1)-1:0] serve_consumed
+    input logic [$clog2(SERVE_WORDS+1)-1:0] serve_consumed,
+    input logic [$clog2(SERVE_WORDS+1)-1:0] serve_select_count
 );
 
     // Do not rely on redirect propagating through upstream consumption logic.
@@ -184,6 +186,7 @@ module Queue
     logic fifo_rs1_used [FIFO_WORDS-1:0];
     logic fifo_rs2_used [FIFO_WORDS-1:0];
     logic fifo_rd_written [FIFO_WORDS-1:0];
+    logic fifo_fp_consumer [FIFO_WORDS-1:0];
     BranchOperation_ prediction_branch_operation [FETCH_SLOTS-1:0];
     logic [$bits(BranchOperation_)-1:0] fifo_branch_operation [FIFO_WORDS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : branch_operation_predecode
@@ -241,6 +244,14 @@ module Queue
     logic prediction_lane_valid [FETCH_SLOTS-1:0];
     logic [31:0] prediction_pc;
     BranchInput_ prediction_payload [FETCH_SLOTS-1:0];
+    TrapType_ packet_system_trap [FETCH_SLOTS-1:0];
+    TrapType_ prediction_system_trap [FETCH_SLOTS-1:0];
+    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : system_trap_predecode
+        SystemTrapPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) system_decode (
+            .instruction(branch_input[lane].bp_instruction),
+            .trap(packet_system_trap[lane])
+        );
+    end
     BranchOutput_ prediction_result [FETCH_SLOTS-1:0];
     logic [PUSH_COUNT_W-1:0] packet_push_count;
 
@@ -278,12 +289,19 @@ module Queue
     // source identities and instruction/c flag before their output registers.
     logic [SERVE_COUNT_W-1:0] prev_serve_consumed;
     localparam int unsigned TRAP_W = $bits(TrapType_);
-    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + 19 + $bits(BranchOperation_) + $bits(DecodeCapability_) + TRAP_W;
+    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + 20 + $bits(BranchOperation_) + $bits(DecodeCapability_) + TRAP_W;
     logic [SERVE_ENTRY_W-1:0] serve_bank [SERVE_WORDS+1][SERVE_WORDS];
     localparam int unsigned SOURCE_FLAGS_LSB = TRAP_W + $bits(DecodeCapability_) + 3;
     // rs1, rs2 and their bank flags share the payload's exact outcome mapping.
     logic [11:0] source_candidate [SERVE_WORDS][SERVE_WORDS+1];
+    logic [5:0] destination_candidate [SERVE_WORDS][SERVE_WORDS+1];
     logic [32:0] instruction_candidate [SERVE_WORDS][SERVE_WORDS+1];
+    TrapType_ trap_candidate [SERVE_WORDS][SERVE_WORDS+1];
+    logic [$bits(DecodeCapability_)-1:0] capability_candidate [SERVE_WORDS][SERVE_WORDS+1];
+    logic fp_consumer_candidate [SERVE_WORDS][SERVE_WORDS+1];
+    logic valid_candidate [SERVE_WORDS][SERVE_WORDS+1];
+    // Below upper layout: four 5-bit registers, four bank flags, use bits, capability, trap.
+    localparam int unsigned UPPER_SELECT_LSB = SOURCE_FLAGS_LSB + 24;
 
     logic [FIFO_INDEX_W:0] head_bank [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] occupied_bank [SERVE_WORDS+1];
@@ -492,6 +510,7 @@ module Queue
                 prediction_capability[i] <= 'x;
                 prediction_rs2[i] <= 'x;
                 prediction_payload[i] <= 'x;
+                prediction_system_trap[i] <= TrapType_'('x);
                 prediction_result[i] <= 'x;
                 prediction_lane_valid[i] <= 1'b0;
             end
@@ -519,6 +538,7 @@ module Queue
                     prediction_capability[i] <= packet_capability[i];
                     prediction_rs2[i] <= packet_rs2[i];
                     prediction_payload[i] <= branch_input[i];
+                    prediction_system_trap[i] <= packet_system_trap[i];
                     prediction_result[i] <= branch_output[i];
                     prediction_lane_valid[i] <= packet_valid[i];
                 end
@@ -550,6 +570,7 @@ module Queue
         ) legality (
             .instruction(prediction_payload[lane].bp_instruction),
             .is_compressed(prediction_payload[lane].bp_compressed),
+            .system_trap_in(prediction_system_trap[lane]),
             .trap(prediction_trap[lane])
         );
     end
@@ -574,6 +595,8 @@ module Queue
                     fifo_rs2_used[index] <= prediction_rs2_used[i];
                     fifo_rd_written[index] <= prediction_rd_written[i];
                     fifo_branch_operation[index] <= prediction_branch_operation[i];
+                    fifo_fp_consumer[index] <= SUPPORT_FLOAT &&
+                        (prediction_capability[i] inside {CAP_FP_F, CAP_FP_CONVERT});
                     fifo_immediate_low[index] <= prediction_immediate_low[i];
                     fifo_immediate_upper_select[index] <= prediction_immediate_upper_select[i];
                     fifo_capability[index] <= prediction_capability[i];
@@ -606,39 +629,62 @@ module Queue
     assign fifo_empty = fifo_occipied_slots == '0;
 
     for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : serve_lanes
-        assign serve_trap[lane] = TrapType_'(serve_bank[prev_serve_consumed][lane][TRAP_W-1:0]);
+        logic unused_banked_valid;
+        // Same outcome as direct payload; flush must explicitly invalidate it.
+        // Stall selects outcome zero but still allows filling vacant serve slots.
+        always_ff @(posedge clk) begin
+            if (reset || reset_reg || redirect_taken)
+                serve_valid_reg[lane] <= 1'b0;
+            else
+                serve_valid_reg[lane] <= valid_candidate[lane][serve_select_count];
+        end
+        // Trap travels through the same pre-capture selection as instruction.
+        always_ff @(posedge clk) begin
+                serve_trap[lane] <= trap_candidate[lane][serve_select_count];
+        end
         logic [FIFO_INDEX_W-1:0] read_index;
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
-            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index], fifo_branch_operation[read_index], fifo_immediate_low[read_index], fifo_immediate_upper_select[read_index],
+            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index], fifo_branch_operation[read_index], fifo_fp_consumer[read_index], fifo_immediate_low[read_index], fifo_immediate_upper_select[read_index],
             fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index], fifo_trap[read_index]};
         assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
-            serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane], serve_branch_operation[lane], serve_immediate_low[lane], serve_immediate_upper_select[lane],
+            serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane], serve_branch_operation[lane], serve_fp_consumer[lane], serve_immediate_low[lane], serve_immediate_upper_select[lane],
             serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane], serve_trap[lane]};
         // Source identities are selected before capture. The unused bank copies
         // have no consumers and can be pruned along with their output muxes.
         logic [11:0] unused_banked_sources;
-        logic [32:0] unused_banked_instruction;
-        // Select the same completed window as the sources, including retained
-        // entries and zero-consumption refill. Validity remains banked.
+        logic [5:0] unused_banked_destination;
         always_ff @(posedge clk) begin
-            if (reset || reset_reg || redirect_taken)
-                {serve_c_reg[lane], serve_data_reg[lane]} <= 'x;
-            else
+            {serve_rd[lane], serve_rd_float[lane]} <=
+                destination_candidate[lane][serve_select_count];
+        end
+        logic [32:0] unused_banked_instruction;
+        logic unused_banked_fp_consumer;
+        logic [$bits(DecodeCapability_)-1:0] unused_banked_capability;
+        always_ff @(posedge clk) begin
+                serve_capability[lane] <= capability_candidate[lane][serve_select_count];
+        end
+        if (SUPPORT_FLOAT) begin : direct_fp_consumer
+            always_ff @(posedge clk) begin
+                    serve_fp_consumer[lane] <= fp_consumer_candidate[lane][serve_select_count];
+            end
+        end else begin : no_fp_consumer
+            assign serve_fp_consumer[lane] = 1'b0;
+        end
+        // Select the same completed window as the sources, including retained
+        // entries and zero-consumption refill. Validity captures the same outcome.
+        always_ff @(posedge clk) begin
                 {serve_c_reg[lane], serve_data_reg[lane]} <=
-                    instruction_candidate[lane][serve_consumed];
+                    instruction_candidate[lane][serve_select_count];
         end
         always_ff @(posedge clk) begin
-            if (reset || reset_reg || redirect_taken)
-                {serve_rs1[lane], serve_rs2[lane], serve_rs1_float[lane], serve_rs2_float[lane]} <= 'x;
-            else
                 {serve_rs1[lane], serve_rs2[lane], serve_rs1_float[lane], serve_rs2_float[lane]} <=
-                    source_candidate[lane][serve_consumed];
+                    source_candidate[lane][serve_select_count];
         end
         // The remaining fields select the same outcome after capture.
-        assign {serve_valid_reg[lane], unused_banked_instruction[32], serve_taken_reg[lane],
-            serve_branch_reg[lane], unused_banked_instruction[31:0], serve_pc_reg[lane], serve_branch_operation[lane], serve_immediate_low[lane], serve_immediate_upper_select[lane],
-            unused_banked_sources[11:7], unused_banked_sources[6:2], serve_rd[lane], serve_rs3[lane], unused_banked_sources[1], unused_banked_sources[0], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane]} =
+        assign {unused_banked_valid, unused_banked_instruction[32], serve_taken_reg[lane],
+            serve_branch_reg[lane], unused_banked_instruction[31:0], serve_pc_reg[lane], serve_branch_operation[lane], unused_banked_fp_consumer, serve_immediate_low[lane], serve_immediate_upper_select[lane],
+            unused_banked_sources[11:7], unused_banked_sources[6:2], unused_banked_destination[5:1], serve_rs3[lane], unused_banked_sources[1], unused_banked_sources[0], serve_rs3_float[lane], unused_banked_destination[0], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], unused_banked_capability} =
             serve_bank[prev_serve_consumed][lane][SERVE_ENTRY_W-1:TRAP_W];
     end
 
@@ -661,10 +707,18 @@ module Queue
 
         for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : window_lanes
             logic [SERVE_ENTRY_W-1:0] retained;
+            // FP-consumer bit is above upper-layout[13:0] and immediate-low[4:0].
+            assign fp_consumer_candidate[lane][consumed] = next_window[lane][UPPER_SELECT_LSB+19];
+            assign capability_candidate[lane][consumed] = next_window[lane][TRAP_W +: $bits(DecodeCapability_)];
+            assign valid_candidate[lane][consumed] = next_window[lane][SERVE_ENTRY_W-1];
+            assign trap_candidate[lane][consumed] = TrapType_'(next_window[lane][TRAP_W-1:0]);
             // Packed prefix: valid, compressed, taken, branch, instruction[31:0].
             assign instruction_candidate[lane][consumed] = {
                 next_window[lane][SERVE_ENTRY_W-2],
                 next_window[lane][SERVE_ENTRY_W-5 -: 32]};
+            assign destination_candidate[lane][consumed] = {
+                next_window[lane][SOURCE_FLAGS_LSB+9 +: 5],
+                next_window[lane][SOURCE_FLAGS_LSB]};
             assign source_candidate[lane][consumed] = {
                 next_window[lane][SOURCE_FLAGS_LSB+19 +: 5],
                 next_window[lane][SOURCE_FLAGS_LSB+14 +: 5],

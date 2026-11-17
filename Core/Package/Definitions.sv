@@ -28,6 +28,7 @@ package Definitions;
         logic rs1_float;
         logic rs2_float;
         logic rd_float;
+        logic fp_consumer; // Predecoded FP execution consumer; integer sources require RF.
         Enumerations::DecodeCapability_ capability;
         logic [31:0] next_pc; // pc + 4, or pc + 2 for compressed instructions
         logic [31:0] immediate; // Shared ALU/BRU/memory immediate; CSR zimm in bits [4:0]

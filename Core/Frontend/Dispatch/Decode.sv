@@ -36,6 +36,7 @@ module DecodeStage
     input logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
     input logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0],
     input logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0],
+    input logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
@@ -68,6 +69,7 @@ module DecodeStage
 
     // Acceptance Signals to Fetch
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed,
+    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count,
 
     // Producer Table Reads
     output logic [4:0] rs1 [ISSUE_WIDTH-1:0],
@@ -123,6 +125,7 @@ module DecodeStage
             .immediate_upper_select_in(serve_immediate_upper_select[i]),
             .immediate_low_in(serve_immediate_low[i]),
             .branch_operation_in(serve_branch_operation[i]),
+            .fp_consumer_in(serve_fp_consumer[i]),
             .trap_in(serve_trap[i]),
             .rs1_used_in(serve_rs1_used[i]),
             .rs2_used_in(serve_rs2_used[i]),
@@ -158,6 +161,9 @@ module DecodeStage
     assign available_slots = empty_slots + issue_select_count;
     assign serve_consumed_normal = valid_inputs < available_slots ? valid_inputs : available_slots;
     assign next_empty_slots = available_slots - serve_consumed_normal;
+    // Payload selector ignores flush; queue validity handles invalidation.
+    // Stall still selects zero so held packets/refill retain their alignment.
+    assign serve_select_count = stall ? '0 : serve_consumed_normal;
     assign serve_consumed = (reset || reset_reg || redirect_taken || stall) ? '0 : serve_consumed_normal;
 
     always_ff @(posedge clk) begin
@@ -192,19 +198,20 @@ module DecodeStage
 
     // Update each fixed source slot before the late FIFO-selection signal.
     // Candidates assume an advancing capture edge; stall holds snapshot registers.
-    // Prepare metadata even for unused operands; issue ignores it when rs*_valid
+    // Retained sources reuse registered matches against the current write buffer.
+    // Fresh arrivals compare addresses before correction. Prepare metadata even
+    // for unused operands; issue ignores it when rs*_valid
     // is low. Full instruction legality must not gate producer-write matching.
     function automatic SourceProducer_ refresh_source(
         input SourceProducer_ aged_current,
-        input logic [4:0] source_register,
-        input logic source_is_integer
+        input logic [ISSUE_WIDTH-1:0] source_matches
     );
         SourceProducer_ selected;
         logic hit, matched;
         selected = '0;
         matched = 1'b0;
         for (int j = 0; j < ISSUE_WIDTH; j++) begin
-            hit = op_write[j] && source_is_integer && op_rd[j] == source_register;
+            hit = op_write[j] && source_matches[j];
             selected |= {$bits(SourceProducer_){hit}} &
                 write_producer[j];
             matched |= hit;
@@ -218,6 +225,13 @@ module DecodeStage
     OperandProducers_ refill_producers [ISSUE_WIDTH];
     for (genvar source_slot = 0; source_slot < ISSUE_WIDTH; source_slot++) begin : producer_candidates
         SourceProducer_ old_1, old_2, fresh_1, fresh_2;
+        logic [ISSUE_WIDTH-1:0] fresh_matches_1, fresh_matches_2;
+        for (genvar writer = 0; writer < ISSUE_WIDTH; writer++) begin : fresh_matches
+            assign fresh_matches_1[writer] = !serve_rs1_float[source_slot] &&
+                op_rd[writer] == serve_rs1[source_slot];
+            assign fresh_matches_2[writer] = !serve_rs2_float[source_slot] &&
+                op_rd[writer] == serve_rs2[source_slot];
+        end
         assign old_1 = {rs1_index_out[source_slot], rs1_lane_out[source_slot], rs1_capability_out[source_slot]};
         assign old_2 = {rs2_index_out[source_slot], rs2_lane_out[source_slot], rs2_capability_out[source_slot]};
         // Raw table reads receive the same local capture-edge aging as retained sources.
@@ -225,17 +239,13 @@ module DecodeStage
         assign fresh_2 = {rs2_index[source_slot], rs2_lane[source_slot], rs2_capability[source_slot]};
         always_comb begin
             retained_producers[source_slot].rs1 = refresh_source(age_source(old_1),
-                packets_out[source_slot].common.rs1,
-                !packets_out[source_slot].common.rs1_float);
+                rs1_buffer_match[source_slot]);
             retained_producers[source_slot].rs2 = refresh_source(age_source(old_2),
-                packets_out[source_slot].common.rs2,
-                !packets_out[source_slot].common.rs2_float);
+                rs2_buffer_match[source_slot]);
             refill_producers[source_slot].rs1 = refresh_source(age_source(fresh_1),
-                serve_rs1[source_slot],
-                !serve_rs1_float[source_slot]);
+                fresh_matches_1);
             refill_producers[source_slot].rs2 = refresh_source(age_source(fresh_2),
-                serve_rs2[source_slot],
-                !serve_rs2_float[source_slot]);
+                fresh_matches_2);
         end
     end
 
@@ -414,7 +424,7 @@ module DecodeStage
         logic base_rs1_ready, base_rs2_ready;
         logic fp_consumer, rf_only_1, rf_only_2;
         assign fp_consumer = SUPPORT_FLOAT &&
-            (structural_sources[source_slot].common.capability inside {CAP_FP_F, CAP_FP_CONVERT});
+            structural_sources[source_slot].common.fp_consumer;
         assign rf_only_1 = fp_consumer && !structural_sources[source_slot].common.rs1_float;
         assign rf_only_2 = fp_consumer && !structural_sources[source_slot].common.rs2_float;
         if (source_slot < ISSUE_WIDTH) begin : retained
@@ -540,12 +550,8 @@ module DecodeStage
             retained_rs1_match = 1'b0;
             retained_rs2_match = 1'b0;
             for (int writer = 0; writer < ISSUE_WIDTH; writer++) begin
-                retained_rs1_match |= op_write[writer] &&
-                    !packets_out[destination].common.rs1_float &&
-                    op_rd[writer] == packets_out[destination].common.rs1;
-                retained_rs2_match |= op_write[writer] &&
-                    !packets_out[destination].common.rs2_float &&
-                    op_rd[writer] == packets_out[destination].common.rs2;
+                retained_rs1_match |= op_write[writer] && rs1_buffer_match[destination][writer];
+                retained_rs2_match |= op_write[writer] && rs2_buffer_match[destination][writer];
             end
         end
         // Any pop permits replacement; empty slots permit refill. Deliberately

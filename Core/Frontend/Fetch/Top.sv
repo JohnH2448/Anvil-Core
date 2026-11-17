@@ -38,6 +38,7 @@ module FetchTop
     output logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
     output logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0],
     output logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0],
+    output logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     output TrapType_ serve_trap [ISSUE_WIDTH-1:0],
     output logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     output logic serve_valid_reg [ISSUE_WIDTH-1:0],
@@ -46,7 +47,8 @@ module FetchTop
     output logic serve_branch_reg [ISSUE_WIDTH-1:0],
 
     // Consumption from Decode Stage
-    input logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed
+    input logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed,
+    input logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count
 );
 
     Definitions::BranchInput_ branch_input [FETCH_WORDS*2-1:0];
@@ -99,6 +101,7 @@ module FetchTop
         .serve_immediate_upper_select(serve_immediate_upper_select),
         .serve_immediate_low(serve_immediate_low),
         .serve_branch_operation(serve_branch_operation),
+        .serve_fp_consumer(serve_fp_consumer),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
@@ -109,7 +112,8 @@ module FetchTop
         .branch_input(branch_input),
         .branch_output(branch_output),
 
-        .serve_consumed(serve_consumed)
+        .serve_consumed(serve_consumed),
+        .serve_select_count(serve_select_count)
     );
 
     for (genvar i = 0; i < FETCH_WORDS*2; i++) begin : predictors

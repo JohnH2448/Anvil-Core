@@ -30,6 +30,7 @@ module DispatchTop
     input logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
     input logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0],
     input logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0],
+    input logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
     input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
@@ -37,6 +38,7 @@ module DispatchTop
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed,
+    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count,
 
     // Issuer outputs to the backend
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
@@ -115,6 +117,7 @@ module DispatchTop
         .serve_immediate_upper_select(serve_immediate_upper_select),
         .serve_immediate_low(serve_immediate_low),
         .serve_branch_operation(serve_branch_operation),
+        .serve_fp_consumer(serve_fp_consumer),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
@@ -134,6 +137,7 @@ module DispatchTop
         .issue_select_any(issue_select_any),
         .issue_select_two(issue_select_two),
         .serve_consumed(serve_consumed),
+        .serve_select_count(serve_select_count),
         .op_rd(op_rd),
         .op_lane(op_lane),
         .op_write(op_write),

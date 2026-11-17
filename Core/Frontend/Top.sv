@@ -64,6 +64,7 @@ module FrontendTop
     logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0];
     logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0];
     logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0];
+    logic serve_fp_consumer [ISSUE_WIDTH-1:0];
     TrapType_ serve_trap [ISSUE_WIDTH-1:0];
     logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0];
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
@@ -71,6 +72,7 @@ module FrontendTop
     logic serve_taken_reg [ISSUE_WIDTH-1:0];
     logic serve_branch_reg [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed;
+    logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count;
 
     FetchTop #(
         .FETCH_WORDS(FETCH_WORDS),
@@ -100,13 +102,15 @@ module FrontendTop
         .serve_immediate_upper_select(serve_immediate_upper_select),
         .serve_immediate_low(serve_immediate_low),
         .serve_branch_operation(serve_branch_operation),
+        .serve_fp_consumer(serve_fp_consumer),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
-        .serve_consumed(serve_consumed)
+        .serve_consumed(serve_consumed),
+        .serve_select_count(serve_select_count)
     );
 
     DispatchTop #(
@@ -135,6 +139,7 @@ module FrontendTop
         .serve_immediate_upper_select(serve_immediate_upper_select),
         .serve_immediate_low(serve_immediate_low),
         .serve_branch_operation(serve_branch_operation),
+        .serve_fp_consumer(serve_fp_consumer),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
         .serve_valid_reg(serve_valid_reg),
@@ -142,6 +147,7 @@ module FrontendTop
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
         .serve_consumed(serve_consumed),
+        .serve_select_count(serve_select_count),
         .decoder_packet(dispatch_packet),
         .issuer_packet(dispatch_issuer),
         .accept_vector(dispatch_accept)

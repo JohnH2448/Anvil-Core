@@ -23,8 +23,8 @@ after routing. frontend_retry.tcl remains a separate optional checkpoint experim
 
 
 
-ProducerTable precomputes one-bit capture-edge eligibility per entry before source
-address lookup. Decode corrects these ready bits independently of full metadata,
+ProducerTable registers one-bit capture-edge eligibility per entry alongside
+index/capability, then source addresses select those registered bits. Decode corrects these ready bits independently of full metadata,
 then applies prospective new writers for its registered operand lookahead.
 
 
@@ -38,11 +38,13 @@ and live serial occupancy. Full buffered correction still builds forwarding payl
 Decode precomputes source matches against current issue-candidate destinations and
 registers them with the next packets. Issuer qualifies these bits with next-cycle
 buffered op_write rather than comparing addresses in its correction path. Decode's
-own current-buffer absorption still uses direct address matching.
+current-buffer absorption reuses these matches for retained packets; fresh
+arrivals still compare addresses directly.
 
 
-Queue owns encoding legality: InstructionLegality evaluates registered prediction
-payloads before FIFO insertion. Four trap bits are stored with each FIFO entry and
+Queue owns encoding legality: system/CSR trap results are precomputed alongside
+prediction and captured with its payload; InstructionLegality evaluates remaining
+checks and selects that result before FIFO insertion. Four trap bits are stored with each FIFO entry and
 carried through the same speculative serve selection as the instruction.
 DecoderSlice consumes the carried result without repeating legality decoding.
 
@@ -57,7 +59,7 @@ Earlier refill-during-stall descriptions below are superseded by this policy.
 
 1. Fetch reconstructs complete instruction words. RegisterSlice extracts rs1/rs2/rs3/rd, their register-bank flags, encoding-only operand-use bits and capability alongside branch prediction, using the same extension support parameters as decoding.
 2. Source addresses are latched with prediction results, compacted into the instruction FIFO, and carried through speculative serve windows with instruction, PC, validity, and prediction flags.
-3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects the wide payload and FIFO state combinationally. rs1/rs2 and their bank flags instead select the matching completed candidate before a single output register, directly driving next-cycle producer reads. The instruction word and compressed flag likewise select before capture, directly driving next-cycle decoding; all other payload fields remain banked. Dual issue has three outcomes: 0, 1, 2.
+3. For every possible consumption count, Fetch registers a candidate next serve window and matching FIFO head, occupancy, and free-space state. A registered binary consumption count selects the remaining banked payload and FIFO state combinationally. Serve validity instead directly captures the selected next-window valid bits, with explicit flush clearing. rs1/rs2/rd and their bank flags instead select the matching completed candidate before a single output register, directly driving next-cycle producer reads. The instruction word, compressed flag, trap bits, capability and FP-consumer flag likewise select before capture, directly driving next-cycle decoding; all other payload fields remain banked. Dual issue has three outcomes: 0, 1, 2.
 4. Decode directly uses the carried source addresses for producer-table reads and DecoderSlice packet source fields. It counts validity from the selected serve window, decodes instructions through independent per-field logic, and latches source metadata with packets. Metadata ages while retained and on the capture edge of a fresh table read, on advancing captures; Decode holds all packet-related state during global stall. Table reads expose raw indices; Decode ages fresh reads, retained snapshots and buffered corrections locally before their correction mux.
 5. Issuer registers accepted integer writes in a one-advancing-cycle buffer, suppressing older duplicate destinations before capture. Buffered rd/source matches correct both readiness and forwarding; all buffered writers precede all current Decode packets.
 6. Decode absorbs buffered corrections into retained and refill metadata. Candidates are independently aged before correction selection, equivalent to aging the selected producer; the producer table commits the same buffer at index one. Stall holds buffer/table progress and all Decode packet-related state; corrections and refills resume on the first advancing edge. Reset/redirect clears buffer validity. No live Issue write reaches Decode refresh or table inputs combinationally.
@@ -2201,3 +2203,204 @@ after the advancing edge. Assumes confirmed lockstep FP pipeline/stall semantics
 Checks are guarded by FP support and integer source bank. No FP busy table,
 writeback ports, extra state, or live Issue comparisons added. Static readiness
 case/diff review only; no tests or synthesis. Timing impact unmeasured.
+
+
+### 2026-11-17 - predecode FP consumer classification before FIFO capture
+
+Latest path selects served metadata then classifies rf_only before readiness
+capture (4.841ns data). Queue now computes one FP-consumer bit from registered
+prediction capability before FIFO insertion, gated by SUPPORT_FLOAT. Carries
+through existing FIFO/serve motion, Fetch/Dispatch interfaces and DecoderSlice
+into common.fp_consumer. Decode consumes this bit instead of comparing
+capabilities late, retaining separate integer-source qualification and existing
+producer corrections. Stored bit is above lower source metadata; instruction
+remains at the same MSB-relative position. No stage change. Classification
+matches prior CAP_FP_F/CAP_FP_CONVERT test, including illegal encodings; disabled
+F ties it low. Adds one payload bit but removes downstream classification;
+benefit unmeasured. Static packed layout/interface and diff checks only, no synth
+or tests.
+
+
+### 2026-11-17 - directly capture serve trap bits
+
+Latest path is bank selection -> served trap -> rs1_valid -> registered operand
+readiness, 4.788ns data / WNS -2.374ns. Queue.sv now selects trap_candidate
+from each completed next_window before capture, exactly like instruction/c
+and sources. Existing low TRAP_W layout and every other field stay unchanged.
+Retained candidates consume the direct trap register; unconsumed banked trap
+copies can prune. Reset/delayed-reset/redirect make trap payload don't-care
+while bank validity clears. Zero-consumption refill stays enabled. No new stage.
+Tradeoff: TRAP_W additional direct-pop selector loads per lane, removing the
+post-register trap bank mux. Timing benefit unmeasured. Static packed-offset,
+sole-driver and retained/refill review plus diff check; no tests or synthesis.
+
+
+### 2026-11-17 - directly capture upper-immediate layout enables
+
+User report shows 4.827ns data from registered consumption through banked
+upper-immediate select[2] to Decode immediate[29]. Queue now selects all14
+upper-layout enables from completed next_window candidates before capture,
+aligned with instruction/c, trap and sources. Retained windows use the direct
+register; unused speculative copies can prune. Low immediate bits and other
+metadata keep existing selection. No stage or packed-layout change. Extract
+offset is SOURCE_FLAGS_LSB+24 (four bank flags plus four5-bit identities).
+Reset/redirect invalidation and zero-consumption refill behavior match other
+direct fields. Tradeoff:14more late-consumption selector loads per serve lane;
+benefit unmeasured. Static packed-offset, sole-driver and movement review plus
+diff check only; no tests or synthesis.
+
+
+### 2026-11-17 - directly capture FP consumer flag
+
+Latest report: WNS -2.683ns, data5.089ns, bank selection through rf_only to
+operands_ready[1]. Queue now directly selects the one-bit FP-consumer flag
+from the same completed next-window outcome before capture. Retained candidates
+use that direct register; banked copies are unused. Offset UPPER_SELECT_LSB+19
+is above fourteen upper-layout bits and five immediate-low bits. F-disabled
+generate ties output low without a register. Flush payload is don't-care while
+validity clears; zero-consumption refill and packet alignment are preserved.
+Adds one late-pop selector load per lane, removes post-capture bank mux for
+this control. Timing benefit unmeasured. README/current flow updated; static
+packed-offset/driver review and diff check only, no tests or synthesis.
+
+
+### 2026-11-17 - directly capture serve capability
+
+Latest report WNS -2.503ns/data4.998ns launches serve selection through
+capability bit0 to group_resource_bad[1]. Queue now captures capability from
+the completed next-window candidate selected by current consumption, alongside
+other direct fields. Extraction is TRAP_W +: $bits(DecodeCapability_); packed
+layout is unchanged. Retained windows use direct output; unused banked copies
+can prune. Flush payload is don't-care with validity cleared; zero-consumption
+refill and all existing parameterized capability encoding are preserved.
+Tradeoff is capability-width extra late selector loads per lane in exchange
+for removing the post-capture capability mux. No stage added; timing unmeasured.
+README updated; static driver/offset/movement review and diff check only, no
+tests or synthesis.
+
+
+### 2026-11-17 - reuse registered matches for retained producer refresh
+
+Latest report: WNS -2.509ns/data5.002ns, buffered op_write0 through refresh
+to Decode rs2 lane capture. Decode already registers source matches against
+prospective writer destinations alongside packet motion; those destinations
+become the current Issuer buffer on the same edge. Reuse these rs1/rs2_buffer_match
+bits for retained producer refresh and identity capture enables instead of
+repeating address/bank comparisons. Fresh arrivals retain live comparisons.
+refresh_source now accepts a match vector qualified by current op_write.
+No additional state/stage or acceptance dependency. Matches and buffer payload
+freeze together on stall; invalid/flush state is protected by write validity and
+packet validity. Existing youngest-writer dedup makes masked OR unambiguous.
+Expected reduction in retained correction-control depth is unmeasured. Static
+match lifecycle/interface review and diff check only; no tests or synthesis.
+
+
+### 2026-11-17 - register producer-table capture readiness
+
+Latest report WNS -2.461ns/data4.927ns starts at capability27 through entry
+readiness and table read mux to Decode operands_ready. ProducerTable.sv now
+registers capture_ready per entry instead of deriving it on the read path.
+Invariant after reset and every update: capture_ready equals the existing helper
+evaluated on the current registered index/capability. Reset sets ready with RF
+index; no-write advancement uses the same saturated aged_index for index and
+ready evaluation; buffered writes use index1 and incoming capability. Write
+readiness is computed per buffered writer before destination selection, using
+existing deduplicated hit masks. Stall/redirect hold ready with the table.
+x0 cannot be written, remains RF/ready despite unspecified capability. Helper's
+existing subsequent-Decode-capture lookahead is preserved without extra aging.
+Decode retained readiness, corrections and prospective writers are unchanged.
+Tradeoff: up to32 redundant state bits and update logic, shorter table-read
+launch path; timing unmeasured. Static reset/write/age/hold invariant review
+and diff check only; no tests, elaboration or synthesis.
+
+
+### 2026-11-17 - remove flush masking from direct serve payload selection
+
+Latest path redirect input -> masked consumption -> direct source-bank register
+has WNS -2.699ns, 3.095ns internal delay after3.250ns input delay. Decode now
+exports serve_select_count = stall ? 0 : serve_consumed_normal independently
+of flush-masked serve_consumed. Dispatch/Frontend/Fetch interfaces carry this
+internal selector to all direct payload captures. Queue direct registers capture
+unconditionally; reset/delayed-reset/redirect still clear bank validity and queue
+state, making their payload immaterial. External consumption remains zero on
+flush/stall. Normal cycles selectors agree; stalled cycles select zero preserving
+retained/refill mapping. Flush discards arbitrary captured payload; subsequent
+refill uses cleared validity. FIFO bookkeeping continues using masked consumption.
+No stage change. Timing benefit unmeasured; static interface/flush/refill review
+and diff check only, no synthesis/tests.
+
+
+### 2026-11-17 - precompute system/CSR trap result alongside prediction
+
+Latest report WNS -2.125ns/data4.585ns, prediction instruction17 through legality
+to FIFO trap. Moved system instruction exact encoding and CSR address/write
+policy into SystemTrapPredecode, parallel to prediction. Queue captures its
+TrapType result with prediction_payload under identical reset/transfer enables.
+InstructionLegality selects the captured result only for full SYSTEM opcode;
+compressed legality/traps and all other opcode checks remain after prediction.
+Original CSR policy, FP CSR gating, ECALL/EBREAK and legal MRET/WFI preserved.
+Four-bit enum has constant top bit (only NONE/ILLEGAL/ECALL/EBREAK), so three
+varying bits per prediction slot, with no FIFO payload expansion or new stage.
+Tradeoff is earlier CSR decode work; may move bottleneck into prediction stage.
+Static extracted-case/metadata-lifetime review and diff check only; no tests
+or synthesis. Timing impact unmeasured.
+
+
+### 2026-11-17 - direct low-immediate equations
+
+Latest prediction-to-FIFO immediate-low path WNS -2.251ns/data4.747ns crosses
+encoded format then payload selection. ImmediateLowPredecode now uses disjoint
+raw encoding predicates and explicit per-bit cases, removing its format-number
+encoder/decoder and unused32-bit assembly. Compressed ADDI/LI/ANDI/shifts share
+low wiring; remaining layouts copy original low5bits, including ADDI4SPN,
+ADDI16SP, branch/jump and stack loads/stores. FP predicates remain parameter
+gated; unsupported encodings remain don't-care. No extra prediction registers
+or stage move in this change; first measure the flattened function before
+adding pressure alongside the just-moved system/CSR predecode. Static original
+format-to-low-bit mapping review and diff check only; no tests or synthesis.
+Timing impact unmeasured.
+
+
+### 2026-11-17 - trim direct capture selector load
+
+Latest WNS -2.153ns/data4.602ns is banked validity through high-fanout controls
+to direct upper-layout capture. Returned fourteen upper-immediate layout enables
+per lane to speculative bank storage/post-edge selection. This removes28 direct
+payload bits in dual issue from late consumption capture. Kept instruction/c,
+sources/bank flags, trap, capability and FP-consumer direct because they feed
+multiple deep readiness/structural calculations. Immediate decode may become
+critical again; this is a measured tradeoff experiment, not proven improvement.
+No mapping, flush or latency changes; retained data uses selected bank output.
+Discussed targeted routing options without changing Tcl implementation settings.
+Static sole-driver/movement and diff check only; no synthesis/tests.
+
+
+### 2026-11-17 - directly capture serve validity
+
+Latest WNS -2.229ns/data4.640ns starts at previous consumption through banked
+validity to direct instruction capture. Queue now selects next_window MSB
+(valid) before capture using serve_select_count, aligned with direct payload.
+Reset/delayed-reset/redirect explicitly clear valid independent of selector.
+Retained candidates and keep_count read direct validity; unused banked valid
+outputs can prune. Normal-cycle internal selector equals protocol consumption;
+stall selects zero, retaining valid entries while allowing vacant-slot refill.
+During flush all serve banks/state reset and direct validity clears, so arbitrary
+payload capture cannot escape. FIFO head/occupancy/free banks retain existing
+selection and stay aligned. No stage or occupancy-policy change. Expected to
+remove bank-selection delay ahead of validity-driven feedback, at cost of one
+late capture load per lane. Timing unmeasured. Static state/flush/hold/refill
+review and diff check only; no tests or synthesis.
+
+
+### 2026-11-17 - directly capture destination identity
+
+Latest WNS -2.176ns/data4.631ns starts at bank selector through served rd[2]
+to registered group_raw[1]. Queue now directly captures rd plus rd_float
+(six bits per lane) from completed next_window selected by serve_select_count.
+Extraction uses SOURCE_FLAGS_LSB+9 +:5 for rd and SOURCE_FLAGS_LSB for bank.
+Packed layout unchanged; retained windows use direct outputs and unused banked
+copies prune. Capture is unconditional like other payload; validity explicitly
+clears on flush, stall selects zero and vacant slots may refill. No stage change.
+Adds six late-selector loads per lane while removing bank mux from destination
+side of RAW compares. Benefit unmeasured. README updated; static packed-offset,
+sole-driver and candidate-alignment review plus diff check only, no synth/tests.

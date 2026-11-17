@@ -10,6 +10,7 @@ module InstructionLegality
 )(
     input logic [31:0] instruction,
     input logic is_compressed,
+    input TrapType_ system_trap_in,
     output TrapType_ trap
 );
     wire [15:0] c = instruction[15:0];
@@ -50,30 +51,12 @@ module InstructionLegality
         logic [6:0] opcode, funct7;
         logic [2:0] funct3;
         logic [4:0] rs2;
-        logic [11:0] address;
-        logic csr_legal, csr_read_only, writes_csr, rounding;
+        logic rounding;
         opcode = insn[6:0];
         funct3 = insn[14:12];
         funct7 = insn[31:25];
         rs2 = insn[24:20];
-        address = insn[31:20];
-        csr_legal = 1'b1;
-        csr_read_only = 1'b0;
-        writes_csr = funct3[1:0] == 1 || insn[19:15] != 0;
         rounding = 1'b0;
-        case (address)
-            MSTATUS, MTVEC, MIP, MIE, MCYCLE, MCYCLEH, MINSTRET,
-            MINSTRETH, MSCRATCH, MEPC, MCAUSE, MISA: ;
-            12'h001, 12'h002, 12'h003: csr_legal = SUPPORT_FLOAT != 0;
-            MVENDORID, MARCHID, MIMPID, MHARTID, MCONFIGPTR,
-            MEDELEG, MIDELEG, MCOUNTEREN, MSTATUSH, MTVAL: csr_read_only = 1'b1;
-            default: begin
-                csr_read_only = 1'b1;
-                csr_legal = (address >= 12'hB03 && address <= 12'hB1F) ||
-                    (address >= 12'hB83 && address <= 12'hB9F) ||
-                    (address >= 12'h323 && address <= 12'h33F);
-            end
-        endcase
         full_trap = NONE;
         case (opcode)
             7'b0110011: begin
@@ -136,18 +119,7 @@ module InstructionLegality
                 if (rounding && (funct3 == 5 || funct3 == 6)) full_trap = ILLEGAL;
             end
             7'b0001111: if (funct3 > 1) full_trap = ILLEGAL;
-            7'b1110011: begin
-                if (funct3 == 0) begin
-                    case (insn)
-                        32'h00000073: full_trap = ECALL;
-                        32'h00100073: full_trap = EBREAK;
-                        32'h30200073,32'h10500073: ;
-                        default: full_trap = ILLEGAL;
-                    endcase
-                end else begin
-                    if (funct3 == 4 || !csr_legal || (csr_read_only && writes_csr)) full_trap = ILLEGAL;
-                end
-            end
+            7'b1110011: full_trap = system_trap_in;
             default: full_trap = ILLEGAL;
         endcase
     endfunction

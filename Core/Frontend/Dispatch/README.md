@@ -617,3 +617,69 @@ are eligible only at RF position, and FP consumers wait for integer sources to
 reach RF. Decode applies this to fresh/retained and corrected producer readiness;
 new ALU bypass cannot release an FP consumer. These rules assume lockstep FP
 progress and generate out with FP disabled. No FP busy scoreboard is present.
+
+
+FP-consumer classification is computed before FIFO capture and carried as
+common.fp_consumer. Decode uses this bit with integer source-bank flags to
+select RF-only readiness, avoiding late capability decoding. F-disabled ties it low.
+
+
+Serve trap bits now also use direct capture from the completed next-window
+candidate, aligned with instruction/c and source identities. Other banked
+metadata and validity retain their existing selection. No pipeline stage added.
+
+
+The14 upper-immediate layout enables also select before serve capture, aligned
+with the direct instruction/trap registers. Low immediate bits remain banked.
+
+
+The FP-consumer flag also selects before serve capture. It is tied low with no
+output register when SUPPORT_FLOAT=0; retained/refill alignment matches the
+other directly captured fields.
+
+
+Serve capability now also uses direct capture from the selected completed
+next-window candidate, removing bank selection ahead of resource feasibility.
+Its encoding, instruction alignment and pipeline latency are unchanged.
+
+
+Retained producer refresh and identity capture enables reuse the registered
+rs1/rs2 buffer-match vectors already carried for Issuer correction. Fresh refill
+operands still compare against current buffered destinations. No new state added.
+
+
+ProducerTable capture readiness is registered alongside each entry. Reset,
+buffered writes and saturated aging keep it equal to producer_capture_ready
+of the current index/capability; stall and redirect hold both. Reads select the
+stored ready bit directly, with Decode correction/lookahead semantics unchanged.
+
+
+Direct serve payload registers use serve_select_count, masked only by stall.
+Flush clears queue validity/state independently; outward serve_consumed remains
+zero on reset/redirect/stall. Direct payload captures during flush are invalid.
+
+
+System/CSR trap decoding now runs alongside branch prediction and captures with
+the prediction payload. Final InstructionLegality selects this result for SYSTEM
+opcode; compressed and other instruction legality remain before FIFO insertion.
+
+
+Low-immediate predecode now directly selects each of five bits from raw encoding
+predicates, without an intermediate format-number encoder/decoder. Its capture
+stage and FIFO/serve interface are unchanged.
+
+
+Upper-immediate layout enables have returned to speculative bank capture to
+reduce late-pop fanout. Earlier direct-upper-layout descriptions are superseded;
+instruction/c, sources, trap, FP-consumer and capability remain directly captured.
+
+
+Serve validity now directly captures the selected next-window valid bit alongside
+direct payload, with explicit reset/delayed-reset/redirect clearing. Zero-pop
+stall behavior still retains entries and permits filling vacant serve slots.
+FIFO head/occupancy/free state remain speculatively banked.
+
+
+Destination rd and rd_float now use direct serve capture alongside rs1/rs2.
+Destination write-use qualification remains banked. Packet alignment and flush
+validity follow the existing direct-payload protocol.

@@ -22,6 +22,7 @@ module DecoderSlice
     input logic [13:0] immediate_upper_select_in,
     input logic [4:0] immediate_low_in,
     input logic [$bits(BranchOperation_)-1:0] branch_operation_in,
+    input logic fp_consumer_in,
     input TrapType_ trap_in,
     input logic rs1_used_in,
     input logic rs2_used_in,
@@ -114,6 +115,7 @@ module DecoderSlice
     // Reserved packet field; execution derives fall-through locally.
     assign packet.common.next_pc = 'x;
     assign packet.common.rs1 = rs1_in;
+    assign packet.common.fp_consumer = SUPPORT_FLOAT && fp_consumer_in;
     assign packet.common.rs1_float = rs1_float_in;
     assign packet.common.rs2 = rs2_in;
     assign packet.common.rs2_float = rs2_float_in;

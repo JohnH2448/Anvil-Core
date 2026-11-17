@@ -48,9 +48,13 @@ module ProducerTable
     logic [LANE_WIDTH-1:0] lane_table [31:0];
     DecodeCapability_ capability_table [31:0];
     logic capture_ready [31:0];
-    for (genvar regno = 0; regno < 32; regno++) begin : read_eligibility
-        assign capture_ready[regno] = producer_capture_ready(index_table[regno],
-            capability_table[regno], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
+    // Invariant after each edge: capture_ready[r] equals the helper evaluated
+    // on the CURRENT registered index/capability. The helper itself already
+    // accounts for the following advancing Decode capture edge.
+    logic write_capture_ready [ISSUE_WIDTH];
+    for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : write_eligibility
+        assign write_capture_ready[slot] = producer_capture_ready(UNROLLED_W'(1),
+            op_type[slot], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
     end
 
     // Issuer buffers writes and suppresses older duplicate destinations before capture.
@@ -60,6 +64,10 @@ module ProducerTable
         logic candidate [ISSUE_WIDTH];
         logic hit [ISSUE_WIDTH];
         logic write_valid;
+        logic write_ready;
+        logic [UNROLLED_W-1:0] aged_index;
+        assign aged_index = index_table[regno] < RF_INDEX ?
+            index_table[regno] + UNROLLED_W'(1) : index_table[regno];
         logic [LANE_WIDTH-1:0] write_lane;
         DecodeCapability_ write_capability;
 
@@ -74,11 +82,13 @@ module ProducerTable
         end
         always_comb begin
             write_valid = 1'b0;
+            write_ready = 1'b0;
             write_lane = '0;
             write_capability = DecodeCapability_'('0);
             // Destinations were deduplicated before buffer capture: parallel mux.
             for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
                 write_valid |= hit[slot];
+                write_ready |= hit[slot] && write_capture_ready[slot];
                 write_lane |= {LANE_WIDTH{hit[slot]}} & op_lane[slot];
                 write_capability = DecodeCapability_'(write_capability |
                     ({$bits(DecodeCapability_){hit[slot]}} & op_type[slot]));
@@ -89,14 +99,17 @@ module ProducerTable
         always_ff @(posedge clk) begin
             if (reset) begin
                 index_table[regno] <= RF_INDEX;
+                capture_ready[regno] <= 1'b1;
             end else if (!stall && !redirect_taken) begin
                 if (write_valid) begin
                     index_table[regno] <= UNROLLED_W'(1);
+                    capture_ready[regno] <= write_ready;
                     lane_table[regno] <= write_lane;
                     capability_table[regno] <= write_capability;
                 end else begin
-                    if (index_table[regno] < RF_INDEX)
-                        index_table[regno] <= index_table[regno] + UNROLLED_W'(1);
+                    index_table[regno] <= aged_index;
+                    capture_ready[regno] <= producer_capture_ready(aged_index,
+                        capability_table[regno], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
                 end
             end
         end
