@@ -14,6 +14,8 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
+Fetch now selects every serve payload field and FIFO head/occupied/free outcome before one register set. The speculative registered banks and prev_serve_consumed are removed. Combinational retain/refill outcomes remain to prepare values before the late serve_select_count. All fields and bookkeeping select the same outcome. Flush clears validity and queue state, while payload is irrelevant. Stall selects zero and permits vacancy refill. Same-edge FIFO pushes are still unavailable to refill, and admission still gives no pop credit.
+
 Decode relies on elaboration-time lane coverage for individual instructions. The distinct-lane check covers same-group serial conflicts because SYSTEM and CSR share lane zero. IssueContract checks live serial occupancy. The frontend lane model consumes only input age from the serial issuer packet because CSR integer operands require RF readiness and SYSTEM has no integer sources. FP-consumer classification ends at Decode readiness.
 
 InstructionMemory reads and captures halfword alignment every edge without payload
@@ -2461,3 +2463,8 @@ Decode relies on elaboration-time lane coverage for individual instructions. The
 ## 2026-11-18 - Bounded instruction PCs
 
 Parameters.MAX_MEMORY_ADDRESS is the inclusive byte limit (default 0x7ff). Fetch carries the address bits plus one overflow bit, capped at RV32 width, through prediction, FIFO and serve. Full redirect and PC-relative target inputs fold discarded bits into the guard before capture. Queue checks the last byte of each reconstructed instruction and carries instruction access faults through FIFO check-in. Out-of-range targets can lose their original high bits in the reported PC. Decode ties unused architectural PC bits low through lane capture. Static field and selector review only. Area and timing are unmeasured.
+
+
+## 2026-11-18 - Full direct serve capture
+
+Fetch now selects every serve payload field and FIFO head/occupied/free outcome before one register set. The speculative registered banks and prev_serve_consumed are removed. Combinational retain/refill outcomes remain to prepare values before the late serve_select_count. All fields and bookkeeping select the same outcome. Flush clears validity and queue state, while payload is irrelevant. Stall selects zero and permits vacancy refill. Same-edge FIFO pushes are still unavailable to refill, and admission still gives no pop credit. This removes the post-register head and payload muxes at the cost of wider late-selector loading. Queue.sv was changed. Static packing, selection and flush review performed. Timing is unmeasured.
