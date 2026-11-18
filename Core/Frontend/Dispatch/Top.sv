@@ -59,8 +59,6 @@ module DispatchTop
     logic issue_select_any, issue_select_two;
 
     // ProducerTable lookups
-    logic [4:0] rs1 [ISSUE_WIDTH-1:0];
-    logic [4:0] rs2 [ISSUE_WIDTH-1:0];
     logic [UNROLLED_W-1:0] rs1_index [ISSUE_WIDTH-1:0];
     logic [UNROLLED_W-1:0] rs2_index [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] rs1_lane [ISSUE_WIDTH-1:0];
@@ -140,8 +138,6 @@ module DispatchTop
         .op_lane(op_lane),
         .op_write(op_write),
         .op_type(op_type),
-        .rs1(rs1),
-        .rs2(rs2),
         .rs1_capture_ready(rs1_capture_ready),
         .rs2_capture_ready(rs2_capture_ready),
         .rs1_index(rs1_index),
@@ -205,8 +201,8 @@ module DispatchTop
         .reset(reset),
         .redirect_taken(redirect_taken),
         .stall(stall),
-        .rs1(rs1),
-        .rs2(rs2),
+        .rs1(serve_rs1),
+        .rs2(serve_rs2),
         .rs1_capture_ready(rs1_capture_ready),
         .rs2_capture_ready(rs2_capture_ready),
         .rs1_index(rs1_index),

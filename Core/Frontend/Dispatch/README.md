@@ -710,3 +710,8 @@ Parameters.MAX_MEMORY_ADDRESS is the inclusive byte limit (default 0x7ff). Fetch
 ## 2026-11-18 - Full direct serve capture
 
 Fetch now selects every serve payload field and FIFO head/occupied/free outcome before one register set. The speculative registered banks and prev_serve_consumed are removed. Combinational retain/refill outcomes remain to prepare values before the late serve_select_count. All fields and bookkeeping select the same outcome. Flush clears validity and queue state, while payload is irrelevant. Stall selects zero and permits vacancy refill. Same-edge FIFO pushes are still unavailable to refill, and admission still gives no pop credit. This removes the post-register head and payload muxes at the cost of wider late-selector loading. Queue.sv was changed. Static packing, selection and flush review performed. Timing is unmeasured.
+
+
+## 2026-11-18 - Direct serve-register producer addresses
+
+DispatchTop wires Fetch serve_rs1/serve_rs2 registers directly to ProducerTable read addresses. Decode consumes the same served identities and returned producer metadata, with its address pass-through outputs removed. Table ownership, capture-edge aging and correction timing retain their existing alignment. This wiring simplification may affect synthesis locality but has no measured timing result. Affected RTL is Dispatch/Top.sv and Dispatch/Decode.sv. Validation was static port/reference inspection and diff checking. No tests or synthesis run.

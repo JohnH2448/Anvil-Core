@@ -14,6 +14,8 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 ## Current information flow
 
+DispatchTop wires Fetch serve_rs1/serve_rs2 registers directly to ProducerTable read addresses. Decode consumes the same served identities and returned producer metadata, with its address pass-through outputs removed. Table ownership, capture-edge aging and correction timing retain their existing alignment. This wiring simplification may affect synthesis locality but has no measured timing result.
+
 Fetch now selects every serve payload field and FIFO head/occupied/free outcome before one register set. The speculative registered banks and prev_serve_consumed are removed. Combinational retain/refill outcomes remain to prepare values before the late serve_select_count. All fields and bookkeeping select the same outcome. Flush clears validity and queue state, while payload is irrelevant. Stall selects zero and permits vacancy refill. Same-edge FIFO pushes are still unavailable to refill, and admission still gives no pop credit.
 
 Decode relies on elaboration-time lane coverage for individual instructions. The distinct-lane check covers same-group serial conflicts because SYSTEM and CSR share lane zero. IssueContract checks live serial occupancy. The frontend lane model consumes only input age from the serial issuer packet because CSR integer operands require RF readiness and SYSTEM has no integer sources. FP-consumer classification ends at Decode readiness.
@@ -2468,3 +2470,14 @@ Parameters.MAX_MEMORY_ADDRESS is the inclusive byte limit (default 0x7ff). Fetch
 ## 2026-11-18 - Full direct serve capture
 
 Fetch now selects every serve payload field and FIFO head/occupied/free outcome before one register set. The speculative registered banks and prev_serve_consumed are removed. Combinational retain/refill outcomes remain to prepare values before the late serve_select_count. All fields and bookkeeping select the same outcome. Flush clears validity and queue state, while payload is irrelevant. Stall selects zero and permits vacancy refill. Same-edge FIFO pushes are still unavailable to refill, and admission still gives no pop credit. This removes the post-register head and payload muxes at the cost of wider late-selector loading. Queue.sv was changed. Static packing, selection and flush review performed. Timing is unmeasured.
+
+
+## 2026-11-18 - Direct serve-register producer addresses
+
+DispatchTop wires Fetch serve_rs1/serve_rs2 registers directly to ProducerTable read addresses. Decode consumes the same served identities and returned producer metadata, with its address pass-through outputs removed. Table ownership, capture-edge aging and correction timing retain their existing alignment. This wiring simplification may affect synthesis locality but has no measured timing result. Affected RTL is Dispatch/Top.sv and Dispatch/Decode.sv. Validation was static port/reference inspection and diff checking. No tests or synthesis run.
+
+## 2026-11-18 - Deferred producer readiness encoding
+
+Revisit once operation completion and forwarding times are settled. The candidate is to encode producers with identical readiness behavior into a compact class at issue and carry it through the write buffer, producer table and Decode FIFO. Three bits cover the current rules. Keep the instruction capability for lane selection and the cached capture_ready bit for fresh table reads.
+
+Before choosing an encoding, verify that producers sharing a class become usable on the same cycle for every supported execution unroll and divider configuration, including index zero in the write buffer and later indices as waiting Decode packets age. Reassess whether a static class is sufficient for variable-latency results. The expected benefit is narrower metadata muxes. Area and routed timing are unmeasured. Proposal only.

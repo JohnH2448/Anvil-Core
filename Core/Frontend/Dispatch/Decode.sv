@@ -71,8 +71,6 @@ module DecodeStage
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count,
 
     // Producer Table Reads
-    output logic [4:0] rs1 [ISSUE_WIDTH-1:0],
-    output logic [4:0] rs2 [ISSUE_WIDTH-1:0],
 
     input logic rs1_capture_ready [ISSUE_WIDTH-1:0],
     input logic rs2_capture_ready [ISSUE_WIDTH-1:0],
@@ -138,9 +136,6 @@ module DecodeStage
         );
     end
 
-    // Predecoded source addresses travel with the selected fetch window.
-    assign rs1 = serve_rs1;
-    assign rs2 = serve_rs2;
     // Fetch selects a registered speculative window after the clock edge.
     // Count that window's validity directly so metadata cannot lag its payload.
     logic [$clog2(ISSUE_WIDTH+1)-1:0] valid_inputs;
