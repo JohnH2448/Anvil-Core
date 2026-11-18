@@ -72,14 +72,16 @@ set_output_delay -clock frontend_clk -max 0.000 [all_outputs]
 set_output_delay -clock frontend_clk -min 0.000 [all_outputs]
 ```
 
-The latest single-issue run (286.37 MHz) uses 2.500 ns maximum delay for stall, redirect_taken and redirect_pc, rather than the 3.250 ns model above; minimum delay remains 2.000 ns.
+Series A uses the 3.250 ns late-control maximum above. Series B uses a 2.500 ns maximum for stall, redirect_taken and redirect_pc, with the same 2.000 ns minimum.
 
-| ISA | Issue Width | FIFO Words | Cache Line Words | Lanes | Frequency (MHz) | Period (ns) | LUTs | FFs |
-|---|---|---|---|---|---|---|---|---|
-| RV32IMAFC | 2 | 8 | 1 | 5 | 227.22 | 4.401 | 5,273 | 3,262 |
-| RV32IMC | 2 | 8 | 1 | 4 | 236.18 | 4.234 | 4,579 | 2,902 |
-| RV32IC | 2 | 8 | 1 | 4 | 230.52 | 4.338 | 4,482 | 2,890 |
-| RV32IC | 1 | 8 | 1 | 3 | 243.19 | 4.112 | 2,790 | 2,141 |
-| RV32IC | 1 | 8 | 1 | 3 | 286.37 | 3.492 | 2,828 | 2,141 |
+| Run ID | Series | ISA | Issue Width | FIFO Words | Cache Line Words | Lanes | Frequency (MHz) | Period (ns) | LUTs | FFs |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 20261116_202929 | A | RV32IMAFC | 2 | 8 | 1 | 5 | 227.22 | 4.401 | 5,273 | 3,262 |
+| 20261117_135542 | A | RV32IMC | 2 | 8 | 1 | 4 | 236.18 | 4.234 | 4,579 | 2,902 |
+| 20261117_140558 | A | RV32IC | 2 | 8 | 1 | 4 | 230.52 | 4.338 | 4,482 | 2,890 |
+| 20261117_151642 | B | RV32IC | 1 | 8 | 1 | 3 | 286.37 | 3.492 | 2,828 | 2,141 |
+| 20261118_143803 | B | RV32IMAFC | 2 | 8 | 2 | 5 | 216.17 | 4.626 | 8,028 | 3,623 |
+
+Run 20261118_143803 uses the final aggressive retry stage, `09_hold_final`, for timing and utilization. At the 2.500 ns target, WNS was −2.126 ns, TNS was −5896.822 ns, and WHS was +0.075 ns. The run uses two integer lanes, one memory lane, one floating lane, and one serial lane.
 
 Note: These are representative, not guarentees.

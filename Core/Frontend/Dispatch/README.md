@@ -683,3 +683,23 @@ FIFO head/occupancy/free state remain speculatively banked.
 Destination rd and rd_float now use direct serve capture alongside rs1/rs2.
 Destination write-use qualification remains banked. Packet alignment and flush
 validity follow the existing direct-payload protocol.
+
+
+## 2026-11-18 - Serial consumers use register-file-only operands
+
+Decode readiness now includes CAP_SYSTEM and CAP_CSR in the existing RF-only consumer classification, alongside FP consumers of integer sources. Integer sources must reach the existing capture-edge RF threshold; current buffered and prospective new writers cannot satisfy them by forwarding or bypass. The existing source-valid checks keep unused and immediate operands from blocking issue. No packet state, stage, or issuer path was added; serial occupancy and pair checks are unchanged. This allows serial consumers to omit incoming forwarding ports at the cost of waiting for RF. Validation: static review of retained/fresh readiness and both writer override paths only; no synthesis or tests run. Timing impact is unmeasured.
+
+
+## 2026-11-18 - Narrow serial RF-only qualification to CSR
+
+Removed CAP_SYSTEM from Decode RF-only consumer classification; only CAP_CSR and the existing FP integer-source consumers qualify. Current RegisterSlice marks SYSTEM operations as having no integer source operands, so the broader classification was unnecessary. CSR register sources still wait for RF across snapshot, buffered and prospective-writer readiness; immediate/unused sources remain nonblocking. No state or stage changes. Validation: static source-use and classification inspection; no tests or synthesis run. Timing impact unmeasured.
+
+
+## 2026-11-18 - Remove redundant issue checks and sink fields
+
+Decode relies on elaboration-time lane coverage for individual instructions. The distinct-lane check covers same-group serial conflicts because SYSTEM and CSR share lane zero. IssueContract checks live serial occupancy. The frontend lane model consumes only input age from the serial issuer packet because CSR integer operands require RF readiness and SYSTEM has no integer sources. FP-consumer classification ends at Decode readiness. Decode, Issue, IssueContract and both Top modules were reviewed statically. Area and timing effects are unmeasured.
+
+
+## 2026-11-18 - Bounded instruction PCs
+
+Parameters.MAX_MEMORY_ADDRESS is the inclusive byte limit (default 0x7ff). Fetch carries the address bits plus one overflow bit, capped at RV32 width, through prediction, FIFO and serve. Full redirect and PC-relative target inputs fold discarded bits into the guard before capture. Queue checks the last byte of each reconstructed instruction and carries instruction access faults through FIFO check-in. Out-of-range targets can lose their original high bits in the reported PC. Decode ties unused architectural PC bits low through lane capture. Static field and selector review only. Area and timing are unmeasured.

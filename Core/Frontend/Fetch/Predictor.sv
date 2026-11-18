@@ -50,5 +50,5 @@ module Predictor (
     end
 
     // Calculates PC-Relative Branch Target
-    assign branch_output.bp_redirect_pc = branch_input.bp_pc + displacement;
+    assign branch_output.bp_redirect_pc = DerivedParameters::bound_fetch_pc(32'(branch_input.bp_pc) + displacement);
 endmodule

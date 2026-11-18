@@ -2,7 +2,7 @@ package Definitions;
 
     // Branch Predictor Inputs
     typedef struct packed {
-        logic [31:0] bp_pc;
+        DerivedParameters::fetch_pc_t bp_pc;
         logic [31:0] bp_instruction;
         logic bp_compressed;
         logic bp_branch;
@@ -10,7 +10,7 @@ package Definitions;
 
     // Branch Predictor Outputs
     typedef struct packed {
-        logic [31:0] bp_redirect_pc;
+        DerivedParameters::fetch_pc_t bp_redirect_pc;
         logic bp_taken;
         logic bp_valid;
     } BranchOutput_;

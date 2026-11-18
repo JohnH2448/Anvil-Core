@@ -66,7 +66,7 @@ module FrontendTop
     logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0];
     logic serve_fp_consumer [ISSUE_WIDTH-1:0];
     TrapType_ serve_trap [ISSUE_WIDTH-1:0];
-    logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0];
+    DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0];
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
     logic serve_c_reg [ISSUE_WIDTH-1:0];
     logic serve_taken_reg [ISSUE_WIDTH-1:0];
@@ -168,6 +168,7 @@ module FrontendTop
             always_comb begin
                 consumed_packet = 'x;
                 consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.fp_consumer = 'x;
                 consumed_packet.common.next_pc = 'x;
                 consumed_packet.system = dispatch_packet[lane].system;
                 consumed_packet.csr = dispatch_packet[lane].csr;
@@ -177,6 +178,7 @@ module FrontendTop
             always_comb begin
                 consumed_packet = 'x;
                 consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.fp_consumer = 'x;
                 consumed_packet.common.next_pc = 'x;
                 consumed_packet.common.rs1_float = 'x;
                 consumed_packet.common.rs2_float = 'x;
@@ -194,6 +196,7 @@ module FrontendTop
             always_comb begin
                 consumed_packet = 'x;
                 consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.fp_consumer = 'x;
                 consumed_packet.common.next_pc = 'x;
                 if (CAPS[0] || (CAPS[2] && Parameters::SUPPORT_FLOAT))
                     consumed_packet.memory = dispatch_packet[lane].memory;
@@ -213,6 +216,7 @@ module FrontendTop
             always_comb begin
                 consumed_packet = 'x;
                 consumed_packet.common = dispatch_packet[lane].common;
+                consumed_packet.common.fp_consumer = 'x;
                 consumed_packet.common.next_pc = 'x;
                 consumed_packet.common.immediate = 'x;
                 if (CAPS[0] && Parameters::SUPPORT_FLOAT)
@@ -223,7 +227,10 @@ module FrontendTop
         end
         always_comb begin
             consumed_issuer = dispatch_issuer[lane];
-            if (!BYPASS_ENABLED) begin
+            if (SERIAL) begin
+                consumed_issuer = 'x;
+                consumed_issuer.input_age = dispatch_issuer[lane].input_age;
+            end else if (!BYPASS_ENABLED) begin
                 consumed_issuer.use_bypass_1 = 'x;
                 consumed_issuer.use_bypass_2 = 'x;
             end

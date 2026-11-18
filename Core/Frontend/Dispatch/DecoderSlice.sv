@@ -27,7 +27,7 @@ module DecoderSlice
     input logic rs1_used_in,
     input logic rs2_used_in,
     input logic rd_written_in,
-    input logic [31:0] pc,
+    input DerivedParameters::fetch_pc_t pc,
     input logic is_branch,
     input logic is_compressed,
     input logic predicted_taken,
@@ -109,7 +109,7 @@ module DecoderSlice
     wire c_cr = is_compressed && c[1:0] == 2 && c[15:13] == 4;
     wire c_load = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 2 || (SUPPORT_FLOAT && c[15:13] == 3));
     wire c_store = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 6 || (SUPPORT_FLOAT && c[15:13] == 7));
-    assign packet.common.pc = pc;
+    assign packet.common.pc = 32'(pc); // Upper bits are constant through Decode, Issue and lane capture.
     assign packet.common.trap_type = trap;
     assign packet.common.immediate = {immediate_direct[31:5], immediate_low_in};
     // Reserved packet field; execution derives fall-through locally.

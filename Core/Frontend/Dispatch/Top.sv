@@ -32,7 +32,7 @@ module DispatchTop
     input logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0],
     input logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
-    input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
+    input DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
@@ -50,7 +50,6 @@ module DispatchTop
     LaneType_ lane_types_out [ISSUE_WIDTH-1:0];
     logic packets_valid [ISSUE_WIDTH-1:0];
     logic group_raw [ISSUE_WIDTH-1:0];
-    logic group_serial [ISSUE_WIDTH-1:0];
     logic group_resource_bad [ISSUE_WIDTH-1:0];
     logic operands_ready [ISSUE_WIDTH-1:0];
     logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0];
@@ -128,7 +127,6 @@ module DispatchTop
         .lane_types_out(lane_types_out),
         .packets_valid(packets_valid),
         .group_raw(group_raw),
-        .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
         .operands_ready(operands_ready),
         .rs1_buffer_match(rs1_buffer_match),
@@ -174,7 +172,6 @@ module DispatchTop
         .lane_types_out(lane_types_out),
         .packets_valid(packets_valid),
         .group_raw(group_raw),
-        .group_serial(group_serial),
         .group_resource_bad(group_resource_bad),
         .operands_ready(operands_ready),
         .rs1_buffer_match(rs1_buffer_match),

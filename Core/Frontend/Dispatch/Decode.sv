@@ -39,7 +39,7 @@ module DecodeStage
     input logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
-    input logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
+    input DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
@@ -49,7 +49,6 @@ module DecodeStage
     output LaneType_ lane_types_out [ISSUE_WIDTH-1:0],
     output logic packets_valid [ISSUE_WIDTH-1:0],
     output logic group_raw [ISSUE_WIDTH-1:0],
-    output logic group_serial [ISSUE_WIDTH-1:0],
     output logic group_resource_bad [ISSUE_WIDTH-1:0],
     output logic operands_ready [ISSUE_WIDTH-1:0],
     output logic [ISSUE_WIDTH-1:0] rs1_buffer_match [ISSUE_WIDTH-1:0],
@@ -258,7 +257,6 @@ module DecodeStage
     logic [2:0] retained_usage [ISSUE_WIDTH];
     logic [2:0] structural_usage [SOURCE_COUNT];
     logic pair_raw [SOURCE_COUNT][SOURCE_COUNT];
-    logic pair_serial [SOURCE_COUNT][SOURCE_COUNT];
     for (genvar source_slot = 0; source_slot < ISSUE_WIDTH; source_slot++) begin : structural_sources_gen
         assign structural_usage[source_slot] = retained_usage[source_slot];
         assign structural_usage[ISSUE_WIDTH + source_slot] =
@@ -320,11 +318,7 @@ module DecodeStage
         end
     end
 
-    logic single_resource_bad [SOURCE_COUNT];
     logic pair_resource_bad [SOURCE_COUNT][SOURCE_COUNT];
-    for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : single_resource
-        assign single_resource_bad[source_slot] = !(|compatible_lanes[source_slot]);
-    end
     // Issuer's allocator supports one or two instructions, not wider groups.
     initial begin
         if (ISSUE_WIDTH > 2) $fatal(1, "Decode resource precomputation supports ISSUE_WIDTH <= 2");
@@ -345,9 +339,8 @@ module DecodeStage
                         seen |= lane_union[lane];
                     end
                 end
-                // Oldest feasibility is checked separately by the issue prefix.
-                assign pair_resource_bad[older][younger] =
-                    single_resource_bad[younger] || !multiple_lanes;
+                // Each enabled capability has a lane. A pair needs two distinct lanes.
+                assign pair_resource_bad[older][younger] = !multiple_lanes;
                 assign pair_raw[older][younger] = structural_usage[older][2] &&
                     ((structural_usage[younger][0] &&
                       structural_sources[older].common.rd == structural_sources[younger].common.rs1 &&
@@ -355,13 +348,9 @@ module DecodeStage
                      (structural_usage[younger][1] &&
                       structural_sources[older].common.rd == structural_sources[younger].common.rs2 &&
                       structural_sources[older].common.rd_float == structural_sources[younger].common.rs2_float));
-                assign pair_serial[older][younger] =
-                    (structural_sources[older].common.capability inside {CAP_SYSTEM, CAP_CSR}) &&
-                    (structural_sources[younger].common.capability inside {CAP_SYSTEM, CAP_CSR});
             end else begin : unordered_pair
                 assign pair_resource_bad[older][younger] = 1'b0;
                 assign pair_raw[older][younger] = 1'b0;
-                assign pair_serial[older][younger] = 1'b0;
             end
         end
     end
@@ -422,11 +411,12 @@ module DecodeStage
     for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : readiness_sources
         logic snapshot_rs1_ready, snapshot_rs2_ready;
         logic base_rs1_ready, base_rs2_ready;
-        logic fp_consumer, rf_only_1, rf_only_2;
-        assign fp_consumer = SUPPORT_FLOAT &&
-            structural_sources[source_slot].common.fp_consumer;
-        assign rf_only_1 = fp_consumer && !structural_sources[source_slot].common.rs1_float;
-        assign rf_only_2 = fp_consumer && !structural_sources[source_slot].common.rs2_float;
+        logic rf_only_consumer, rf_only_1, rf_only_2;
+        assign rf_only_consumer =
+            (SUPPORT_FLOAT && structural_sources[source_slot].common.fp_consumer) ||
+            (structural_sources[source_slot].common.capability == CAP_CSR);
+        assign rf_only_1 = rf_only_consumer && !structural_sources[source_slot].common.rs1_float;
+        assign rf_only_2 = rf_only_consumer && !structural_sources[source_slot].common.rs2_float;
         if (source_slot < ISSUE_WIDTH) begin : retained
             assign snapshot_rs1_ready = rf_only_1 ?
                 (rs1_index_out[source_slot] >= EXECUTION_UNROLL+1) : producer_capture_ready(rs1_index_out[source_slot],
@@ -478,7 +468,7 @@ module DecodeStage
         PacketChoice_ packet_outcomes [2];
         PacketChoice_ early_packet, selected_packet;
         OperandProducers_ producer_outcomes [ISSUE_WIDTH+1];
-        logic [ISSUE_WIDTH:0] raw_candidates, serial_candidates, resource_candidates;
+        logic [ISSUE_WIDTH:0] raw_candidates, resource_candidates;
         logic [ISSUE_WIDTH:0] ready_candidates;
 
         // Combinational source choices only; no candidate packet bank is stored.
@@ -581,18 +571,8 @@ module DecodeStage
         for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : structural_outcomes
             always_comb begin
                 raw_candidates[consumed] = 1'b0;
-                serial_candidates[consumed] = 1'b0;
                 resource_candidates[consumed] = 1'b0;
                 for (int empty = 0; empty <= ISSUE_WIDTH - consumed; empty++) begin
-                    // Oldest needs one compatible lane. Younger needs a distinct
-                    // pair; all source choices are constant after loop unrolling.
-                    if (destination == 0) begin
-                        int retained, source_slot;
-                        retained = ISSUE_WIDTH - empty - consumed;
-                        source_slot = retained > 0 ? consumed : ISSUE_WIDTH;
-                        resource_candidates[consumed] |= empty_slots == COUNT_W'(empty) &&
-                            structural_valid[source_slot] && single_resource_bad[source_slot];
-                    end
                     // Constant after unrolling: retained suffix followed by refill.
                     for (int older_slot = 0; older_slot < destination; older_slot++) begin
                         int retained, older, younger;
@@ -607,9 +587,6 @@ module DecodeStage
                         raw_candidates[consumed] |= empty_slots == COUNT_W'(empty) &&
                             structural_valid[older] && structural_valid[younger] &&
                             pair_raw[older][younger];
-                        serial_candidates[consumed] |= empty_slots == COUNT_W'(empty) &&
-                            structural_valid[older] && structural_valid[younger] &&
-                            pair_serial[older][younger];
                     end
                 end
             end
@@ -643,11 +620,9 @@ module DecodeStage
         always_ff @(posedge clk) begin
             if (reset || reset_reg || redirect_taken) begin
                 group_raw[destination] <= 1'b0;
-                group_serial[destination] <= 1'b0;
                 group_resource_bad[destination] <= 1'b0;
             end else if (!stall) begin
                 group_raw[destination] <= raw_candidates[issue_select_count];
-                group_serial[destination] <= serial_candidates[issue_select_count];
                 group_resource_bad[destination] <= resource_candidates[issue_select_count];
             end
         end

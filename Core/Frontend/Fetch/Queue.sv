@@ -50,7 +50,7 @@ module Queue
     output logic [$bits(BranchOperation_)-1:0] serve_branch_operation [SERVE_WORDS-1:0],
     output logic serve_fp_consumer [SERVE_WORDS-1:0],
     output TrapType_ serve_trap [SERVE_WORDS-1:0],
-    output logic [31:0] serve_pc_reg [SERVE_WORDS-1:0],
+    output DerivedParameters::fetch_pc_t serve_pc_reg [SERVE_WORDS-1:0],
     output logic serve_valid_reg [SERVE_WORDS-1:0],
     output logic serve_c_reg [SERVE_WORDS-1:0],
     output logic serve_taken_reg [SERVE_WORDS-1:0],
@@ -120,14 +120,14 @@ module Queue
     endfunction
 
     // Fetch Address and Response Tracking
-    logic [31:0] prefetch_pc;
-    logic [31:0] prefetch_pc_next;
-    logic [31:0] response_pc_reg;
+    DerivedParameters::fetch_pc_t prefetch_pc;
+    DerivedParameters::fetch_pc_t prefetch_pc_next;
+    DerivedParameters::fetch_pc_t response_pc_reg;
 
     // Registered Fetch Staging and Predecode
     logic [FETCH_WORDS*32-1:0] fetch_staging_reg;
-    logic [31:0] fetch_staging_pc;
-    logic [31:0] fetch_lane_pc [FETCH_SLOTS-1:0];
+    DerivedParameters::fetch_pc_t fetch_staging_pc;
+    DerivedParameters::fetch_pc_t fetch_lane_pc [FETCH_SLOTS-1:0];
     logic fetch_staging_reg_valid;
     logic [FETCH_SLOTS-1:0] fetch_branch_reg;
     logic [FETCH_SLOTS-1:0] fetch_c_reg;
@@ -135,20 +135,20 @@ module Queue
     // Registered Partial-Instruction Recovery
     logic tail_partial;
     logic [15:0] partial_half_reg;
-    logic [31:0] partial_pc_reg;
+    DerivedParameters::fetch_pc_t partial_pc_reg;
     logic partial_branch_reg;
 
     // Combinational Instruction Reconstruction
     logic [(FETCH_SLOTS+1)*16-1:0] packet_half_window;
     logic packet_start [FETCH_SLOTS-1:0];
     logic [31:0] packet_data [FETCH_SLOTS-1:0];
-    logic [31:0] packet_pc [FETCH_SLOTS-1:0];
+    DerivedParameters::fetch_pc_t packet_pc [FETCH_SLOTS-1:0];
     logic packet_valid [FETCH_SLOTS-1:0];
     logic packet_c [FETCH_SLOTS-1:0];
     logic packet_branch [FETCH_SLOTS-1:0];
     logic packet_new_partial;
     logic [15:0] packet_partial_half;
-    logic [31:0] packet_partial_pc;
+    DerivedParameters::fetch_pc_t packet_partial_pc;
     logic [PUSH_COUNT_W-1:0] stage_push_count;
 
     logic [4:0] packet_rs1 [FETCH_SLOTS-1:0];
@@ -242,7 +242,7 @@ module Queue
     // Registered Prediction Result Stage
     logic prediction_stage_valid;
     logic prediction_lane_valid [FETCH_SLOTS-1:0];
-    logic [31:0] prediction_pc;
+    DerivedParameters::fetch_pc_t prediction_pc;
     BranchInput_ prediction_payload [FETCH_SLOTS-1:0];
     TrapType_ packet_system_trap [FETCH_SLOTS-1:0];
     TrapType_ prediction_system_trap [FETCH_SLOTS-1:0];
@@ -269,7 +269,7 @@ module Queue
 
     // Registered FIFO Contents
     logic [31:0] fifo_data [FIFO_WORDS-1:0];
-    logic [31:0] fifo_pc [FIFO_WORDS-1:0];
+    DerivedParameters::fetch_pc_t fifo_pc [FIFO_WORDS-1:0];
     logic fifo_c [FIFO_WORDS-1:0];
     logic fifo_branch [FIFO_WORDS-1:0];
     logic fifo_evaluated [FIFO_WORDS-1:0];
@@ -289,7 +289,7 @@ module Queue
     // source identities and instruction/c flag before their output registers.
     logic [SERVE_COUNT_W-1:0] prev_serve_consumed;
     localparam int unsigned TRAP_W = $bits(TrapType_);
-    localparam int unsigned SERVE_ENTRY_W = 92 + 3 + 20 + $bits(BranchOperation_) + $bits(DecodeCapability_) + TRAP_W;
+    localparam int unsigned SERVE_ENTRY_W = DerivedParameters::FETCH_PC_WIDTH + 60 + 3 + 20 + $bits(BranchOperation_) + $bits(DecodeCapability_) + TRAP_W;
     logic [SERVE_ENTRY_W-1:0] serve_bank [SERVE_WORDS+1][SERVE_WORDS];
     localparam int unsigned SOURCE_FLAGS_LSB = TRAP_W + $bits(DecodeCapability_) + 3;
     // rs1, rs2 and their bank flags share the payload's exact outcome mapping.
@@ -375,6 +375,15 @@ module Queue
         end
     end
 
+    logic packet_access_fault [FETCH_SLOTS];
+    logic prediction_access_fault [FETCH_SLOTS];
+    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : check_instruction_extent
+        // Use the reconstructed start PC, including split 32-bit instructions.
+        assign packet_access_fault[lane] = packet_c[lane] ?
+            (Parameters::MAX_MEMORY_ADDRESS < 1 || packet_pc[lane] > Parameters::MAX_MEMORY_ADDRESS - 1) :
+            (Parameters::MAX_MEMORY_ADDRESS < 3 || packet_pc[lane] > Parameters::MAX_MEMORY_ADDRESS - 3);
+    end
+
     // Feeds Branch Predictor and Flushes Instructions Past First Taken Prediction
     always_comb begin
         logic earlier_taken;
@@ -386,7 +395,7 @@ module Queue
                 bp_pc: packet_pc[i],
                 bp_instruction: packet_data[i],
                 bp_compressed: packet_c[i],
-                bp_branch: packet_valid[i] && packet_branch[i]
+                bp_branch: packet_valid[i] && packet_branch[i] && !packet_access_fault[i]
             };
             // Operates on Prediction Register Latched Data
             packet_lane_taken[i] = prediction_lane_valid[i] && prediction_payload[i].bp_branch &&
@@ -433,9 +442,9 @@ module Queue
             (!fetch_staging_reg_valid || !prediction_stage_valid || packet_commit);
         prefetch_pc_next = prefetch_pc;
         if (reset || reset_reg) begin
-            prefetch_pc_next = RESET_VECTOR;
+            prefetch_pc_next = DerivedParameters::bound_fetch_pc(RESET_VECTOR);
         end else if (redirect_taken) begin
-            prefetch_pc_next = redirect_pc;
+            prefetch_pc_next = DerivedParameters::bound_fetch_pc(redirect_pc);
         end else if (packet_commit && packet_taken) begin
             for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                 if (packet_lane_selected[i]) begin
@@ -443,7 +452,8 @@ module Queue
                 end
             end
         end else if (advance) begin
-            prefetch_pc_next = prefetch_pc + $unsigned(FETCH_WORDS * 4);
+            prefetch_pc_next = prefetch_pc > Parameters::MAX_MEMORY_ADDRESS ? prefetch_pc :
+                DerivedParameters::bound_fetch_pc(32'(prefetch_pc) + FETCH_WORDS * 4);
         end
     end
 
@@ -456,14 +466,14 @@ module Queue
     always_ff @(posedge clk) begin
         if (reset || reset_reg) begin
             real_pc <= RESET_VECTOR;
-            prefetch_pc <= RESET_VECTOR;
-            response_pc_reg <= RESET_VECTOR;
+            prefetch_pc <= DerivedParameters::bound_fetch_pc(RESET_VECTOR);
+            response_pc_reg <= DerivedParameters::bound_fetch_pc(RESET_VECTOR);
             fetch_staging_reg <= '0;
-            fetch_staging_pc <= RESET_VECTOR;
+            fetch_staging_pc <= DerivedParameters::bound_fetch_pc(RESET_VECTOR);
             fetch_staging_reg_valid <= 1'b0;
             fetch_branch_reg <= '0;
             fetch_c_reg <= '0;
-            for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= $unsigned(int'(RESET_VECTOR)) + (i*2);
+            for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= DerivedParameters::bound_fetch_pc(RESET_VECTOR + i*2);
         end else begin
             // Tracks Memory Response Address and Consumed Instruction PC
             response_pc_reg <= req_address;
@@ -476,7 +486,8 @@ module Queue
                 fetch_staging_reg <= fetch_data;
                 // Predecodes Each Halfword Before Instruction Boundary Resolution
                 for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
-                    fetch_lane_pc[i] <= response_pc_reg + $unsigned(i*2);
+                    fetch_lane_pc[i] <= response_pc_reg > Parameters::MAX_MEMORY_ADDRESS ? response_pc_reg :
+                        DerivedParameters::bound_fetch_pc(32'(response_pc_reg) + i*2);
                     fetch_c_reg[i] <= fetch_data[i*16 +: 2] != 2'b11;
                     fetch_branch_reg[i] <= is_branch16(fetch_data[i*16 +: 16]) ||
                         is_branch32(fetch_data[i*16 +: 16]);
@@ -539,6 +550,7 @@ module Queue
                     prediction_rs2[i] <= packet_rs2[i];
                     prediction_payload[i] <= branch_input[i];
                     prediction_system_trap[i] <= packet_system_trap[i];
+                    prediction_access_fault[i] <= packet_access_fault[i];
                     prediction_result[i] <= branch_output[i];
                     prediction_lane_valid[i] <= packet_valid[i];
                 end
@@ -602,7 +614,7 @@ module Queue
                     fifo_capability[index] <= prediction_capability[i];
                     fifo_rs2[index] <= prediction_rs2[i];
                     fifo_data[index] <= prediction_payload[i].bp_instruction;
-                    fifo_trap[index] <= prediction_trap[i];
+                    fifo_trap[index] <= prediction_access_fault[i] ? INST_ACCESS_FAULT : prediction_trap[i];
                     fifo_pc[index] <= prediction_payload[i].bp_pc;
                     fifo_c[index] <= prediction_payload[i].bp_compressed;
                     fifo_branch[index] <= prediction_payload[i].bp_branch;

@@ -10,7 +10,6 @@ module IssueContract
     input LaneType_ lane_types [ISSUE_WIDTH-1:0],
     input logic packets_valid [ISSUE_WIDTH-1:0],
     input logic group_raw [ISSUE_WIDTH-1:0],
-    input logic group_serial [ISSUE_WIDTH-1:0],
     input logic group_resource_bad [ISSUE_WIDTH-1:0],
     input logic operands_ready [ISSUE_WIDTH-1:0],
     input logic serial_active,
@@ -45,11 +44,10 @@ module IssueContract
     assign bad_execution_unit = group_resource_bad;
 
     // Only live serial occupancy remains in this stage; pair conflicts were
-    // computed before Decode's FIFO latch.
+    // covered by the distinct-lane check.
     always_comb begin
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            bad_serial[i] = group_serial[i] ||
-                (serial_active && (packets[i].common.capability inside {CAP_SYSTEM, CAP_CSR}));
+            bad_serial[i] = serial_active && (packets[i].common.capability inside {CAP_SYSTEM, CAP_CSR});
         end
     end
 

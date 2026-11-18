@@ -40,7 +40,7 @@ module FetchTop
     output logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0],
     output logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     output TrapType_ serve_trap [ISSUE_WIDTH-1:0],
-    output logic [31:0] serve_pc_reg [ISSUE_WIDTH-1:0],
+    output DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     output logic serve_valid_reg [ISSUE_WIDTH-1:0],
     output logic serve_c_reg [ISSUE_WIDTH-1:0],
     output logic serve_taken_reg [ISSUE_WIDTH-1:0],
