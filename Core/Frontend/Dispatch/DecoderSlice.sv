@@ -19,9 +19,7 @@ module DecoderSlice
     input logic rs3_float_in,
     input logic rd_float_in,
     input DecodeCapability_ capability_in,
-    input logic [13:0] immediate_upper_select_in,
-    input logic [4:0] immediate_low_in,
-    input logic [$bits(BranchOperation_)-1:0] branch_operation_in,
+    input logic [6:0] immediate_upper_select_in,
     input logic fp_consumer_in,
     input TrapType_ trap_in,
     input logic rs1_used_in,
@@ -49,6 +47,7 @@ module DecoderSlice
     // Immediate payload depends only on encoding format. Legality/capability
     // are evaluated independently; trapped/unused payload is not consumed.
     // Direct layout enables avoid decoding a format number after serve selection.
+    logic [13:0] upper_select;
     logic [31:0] upper_layout [14];
     assign upper_layout[0] = {22'd0, c[10:7], c[12:11], c[5], c[6], 2'd0};
     assign upper_layout[1] = {25'd0, c[5], c[12:10], c[6], 2'd0};
@@ -68,7 +67,7 @@ module DecoderSlice
     always_comb begin
         immediate_direct = '0;
         for (int layout = 0; layout < 14; layout++)
-            immediate_direct[31:5] |= {27{immediate_upper_select_in[layout]}} & upper_layout[layout][31:5];
+            immediate_direct[31:5] |= {27{upper_select[layout]}} & upper_layout[layout][31:5];
     end
 
     logic [6:0] op;
@@ -109,9 +108,23 @@ module DecoderSlice
     wire c_cr = is_compressed && c[1:0] == 2 && c[15:13] == 4;
     wire c_load = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 2 || (SUPPORT_FLOAT && c[15:13] == 3));
     wire c_store = is_compressed && (c[1:0] == 0 || c[1:0] == 2) && (c[15:13] == 6 || (SUPPORT_FLOAT && c[15:13] == 7));
+    assign upper_select[6:0] = immediate_upper_select_in;
+    assign upper_select[7] = c_branch;
+    assign upper_select[8] = c_load && c[1:0] == 2;
+    assign upper_select[9] = c_store && c[1:0] == 2;
+    assign upper_select[10] = i_alu || jalr || load_op || store_op;
+    assign upper_select[11] = branch_op;
+    assign upper_select[12] = upper;
+    assign upper_select[13] = jal;
+
     assign packet.common.pc = 32'(pc); // Upper bits are constant through Decode, Issue and lane capture.
     assign packet.common.trap_type = trap;
-    assign packet.common.immediate = {immediate_direct[31:5], immediate_low_in};
+    ImmediateLowPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) low_decode (
+        .instruction(instruction),
+        .is_compressed(is_compressed),
+        .immediate_low(packet.common.immediate[4:0])
+    );
+    assign packet.common.immediate[31:5] = immediate_direct[31:5];
     // Reserved packet field; execution derives fall-through locally.
     assign packet.common.next_pc = 'x;
     assign packet.common.rs1 = rs1_in;
@@ -179,8 +192,13 @@ module DecoderSlice
         endcase
     end
 
-    // Encoding operation comes from FIFO metadata; legality remains authoritative.
-    assign packet.bru.operation = ok ? BranchOperation_'(branch_operation_in) : BR_NONE;
+    BranchOperation_ branch_operation;
+    BranchOperationPredecode operation_decode (
+        .instruction(instruction),
+        .is_compressed(is_compressed),
+        .operation(branch_operation)
+    );
+    assign packet.bru.operation = ok ? branch_operation : BR_NONE;
     assign packet.bru.is_branch = is_branch;
     assign packet.bru.is_compressed = is_compressed;
     assign packet.bru.predicted_taken = predicted_taken;

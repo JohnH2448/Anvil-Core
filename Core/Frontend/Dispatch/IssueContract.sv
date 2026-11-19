@@ -6,7 +6,6 @@ module IssueContract
     parameter unsigned ISSUE_WIDTH = 2
 )(
     // Input Metadata
-    input DecoderPacket_ packets [ISSUE_WIDTH-1:0],
     input LaneType_ lane_types [ISSUE_WIDTH-1:0],
     input logic packets_valid [ISSUE_WIDTH-1:0],
     input logic group_raw [ISSUE_WIDTH-1:0],
@@ -47,7 +46,7 @@ module IssueContract
     // covered by the distinct-lane check.
     always_comb begin
         for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
-            bad_serial[i] = serial_active && (packets[i].common.capability inside {CAP_SYSTEM, CAP_CSR});
+            bad_serial[i] = serial_active && (lane_types[i] == SERIAL);
         end
     end
 

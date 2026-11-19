@@ -167,7 +167,6 @@ module Issuer
     IssueContract #(
         .ISSUE_WIDTH(ISSUE_WIDTH)
     ) issue_contract (
-        .packets(packets_out),
         .lane_types(lane_types_out),
         .packets_valid(packets_valid),
         .group_raw(group_raw),
@@ -212,6 +211,12 @@ module Issuer
     logic [TOTAL_LANE_COUNT-1:0] assigned_lanes [ISSUE_WIDTH-1:0];
     localparam int unsigned INT_LANE_MAX = 1 + Parameters::INTEGER_LANE_COUNT;
     localparam int unsigned MEM_LANE_MAX = INT_LANE_MAX + Parameters::MEMORY_LANE_COUNT;
+    localparam logic [TOTAL_LANE_COUNT-1:0] SINGLE_LANES =
+        TOTAL_LANE_COUNT'(1) |
+        (TOTAL_LANE_COUNT'(Parameters::INTEGER_LANE_COUNT == 1) << 1) |
+        (TOTAL_LANE_COUNT'(Parameters::MEMORY_LANE_COUNT == 1) << INT_LANE_MAX) |
+        (TOTAL_LANE_COUNT'(Parameters::FLOATING_LANE_COUNT == 1) << MEM_LANE_MAX);
+
     always_comb begin
         logic [TOTAL_LANE_COUNT-1:0] compatible [ISSUE_WIDTH-1:0];
         logic [TOTAL_LANE_COUNT-1:0] used_lanes;
@@ -254,9 +259,11 @@ module Issuer
         end
 
         for (int unsigned slot = 0; slot < ISSUE_WIDTH; slot++) begin
-            logic [TOTAL_LANE_COUNT-1:0] available, younger_lanes, preferred, chosen;
+            logic [TOTAL_LANE_COUNT-1:0] available, fixed_lane, younger_lanes, preferred, chosen;
 
-            available = compatible[slot] & ~used_lanes;
+            // Singleton classes claim their lane directly, oldest slot first.
+            fixed_lane = compatible[slot] & ~used_lanes & SINGLE_LANES;
+            available = compatible[slot] & ~used_lanes & ~SINGLE_LANES;
             younger_lanes = '0;
             for (int unsigned younger = 0; younger < ISSUE_WIDTH; younger++) begin
                 if (younger > slot)
@@ -265,7 +272,8 @@ module Issuer
             preferred = available & ~younger_lanes;
             // Priority encode both choices in parallel; late preference selects
             // one-hot results rather than feeding another priority encoder.
-            chosen = (|preferred) ? first_lane(preferred) : first_lane(available);
+            // An instruction's capability belongs to exactly one lane class.
+            chosen = fixed_lane | ((|preferred) ? first_lane(preferred) : first_lane(available));
             assigned_lanes[slot] = chosen;
             if (|chosen) begin
                 for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin

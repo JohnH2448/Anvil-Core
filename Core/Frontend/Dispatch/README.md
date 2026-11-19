@@ -65,7 +65,7 @@ Accepted integer writes enter Issuer's one-cycle write buffer. Older duplicate
 rd entries are invalidated before capture; buffered source matches are mutually
 exclusive. Buffered metadata corrects both readiness and forwarding immediately,
 then Decode absorbs it into retained and refill snapshots at the next edge.
-The table commits on that same edge at index one.
+The table commits on that same edge at index one. It holds ISSUE_WIDTH owners per pre-RF stage in a fixed-depth shift register. Source addresses match all valid destinations in parallel within each age group. The youngest matching group supplies producer metadata, and a miss selects the register file.
 All buffered writers are older than every current Decode packet. There is no
 same-cycle live-write refresh and no instruction-counted history shift register.
 The buffer is replaced on every unstalled cycle, even with no accepted writes;
@@ -594,9 +594,9 @@ check-in. Five selector bits travel with each instruction through FIFO/serve ban
 DecoderSlice assembles immediate bits using that selector. FP formats honor support
 flags. Existing direct source identities keep their packed offsets.
 
-Branch operation is also predecoded before FIFO check-in as a four-bit enum and
-carried with serve payload. DecoderSlice applies final trap qualification to BR_NONE;
-branch prediction flags and immediate assembly remain independent.
+DecoderSlice derives the four-bit BRU operation from the served instruction and
+compressed flag. A trapped instruction receives BR_NONE. Fetch carries branch
+prediction flags independently.
 
 Immediate bits[4:0] are computed before FIFO check-in and carried as five payload
 bits. Decode assembles only bits[31:5] locally. Both paths use the same encoding
@@ -632,7 +632,7 @@ metadata and validity retain their existing selection. No pipeline stage added.
 
 
 The14 upper-immediate layout enables also select before serve capture, aligned
-with the direct instruction/trap registers. Low immediate bits remain banked.
+with the direct instruction/trap registers. DecoderSlice now derives the five low immediate bits from the served instruction and compressed flag.
 
 
 The FP-consumer flag also selects before serve capture. It is tied low with no
@@ -704,7 +704,7 @@ Decode relies on elaboration-time lane coverage for individual instructions. The
 
 ## 2026-11-18 - Bounded instruction PCs
 
-Parameters.MAX_MEMORY_ADDRESS is the inclusive byte limit (default 0x7ff). Fetch carries the address bits plus one overflow bit, capped at RV32 width, through prediction, FIFO and serve. Full redirect and PC-relative target inputs fold discarded bits into the guard before capture. Queue checks the last byte of each reconstructed instruction and carries instruction access faults through FIFO check-in. Out-of-range targets can lose their original high bits in the reported PC. Decode ties unused architectural PC bits low through lane capture. Static field and selector review only. Area and timing are unmeasured.
+Parameters.MAX_MEMORY_ADDRESS sizes the fetch PC. Sequential addresses, branch targets and redirects wrap to that width. With the default 0x7ff, Fetch carries 11 bits and Decode zero-extends the PC for lane capture. FIFO pop selects INST_ACCESS_FAULT on the instruction whose predicted successor wraps the fetch PC width.
 
 
 ## 2026-11-18 - Full direct serve capture
@@ -715,3 +715,15 @@ Fetch now selects every serve payload field and FIFO head/occupied/free outcome 
 ## 2026-11-18 - Direct serve-register producer addresses
 
 DispatchTop wires Fetch serve_rs1/serve_rs2 registers directly to ProducerTable read addresses. Decode consumes the same served identities and returned producer metadata, with its address pass-through outputs removed. Table ownership, capture-edge aging and correction timing retain their existing alignment. This wiring simplification may affect synthesis locality but has no measured timing result. Affected RTL is Dispatch/Top.sv and Dispatch/Decode.sv. Validation was static port/reference inspection and diff checking. No tests or synthesis run.
+
+RegisterSlice classifies whether an encoding reads rs2 during prediction. At FIFO check-in Fetch combines that registered predicate with the registered source bank and number to form the rs2_used bit consumed by Decode.
+
+Decode resolves buffered and prospective writer priority per consumption outcome in parallel with snapshot readiness. Each operand takes the winning writer readiness on a match and its snapshot otherwise.
+
+FIFO pop consumes the predicted wrap flag to produce the access-fault trap carried downstream. FIFO admission derives available space from occupancy after committed pushes and gives no same-cycle pop credit.
+
+Prediction capture registers the FIFO keep mask and each lane's physical write slot alongside its payload. Slot calculation uses the tail after any simultaneous commit. Check-in uses the registered slots.
+
+Fetch carries seven compressed upper-immediate layout enables through FIFO and serve. DecoderSlice supplies the compressed branch, stack load/store and four full-width layout enables from its local instruction predicates.
+
+Issue assigns singleton lane classes directly in oldest-first order. Classes with multiple lanes use the compatibility and preference allocator.

@@ -33,9 +33,7 @@ module DecodeStage
     input logic serve_rs2_used [ISSUE_WIDTH-1:0],
     input logic serve_rd_written [ISSUE_WIDTH-1:0],
     input logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0],
-    input logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
-    input logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0],
-    input logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0],
+    input logic [6:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
     input logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
@@ -120,8 +118,6 @@ module DecodeStage
             .rd_float_in(serve_rd_float[i]),
             .capability_in(DecodeCapability_'(serve_capability[i])),
             .immediate_upper_select_in(serve_immediate_upper_select[i]),
-            .immediate_low_in(serve_immediate_low[i]),
-            .branch_operation_in(serve_branch_operation[i]),
             .fp_consumer_in(serve_fp_consumer[i]),
             .trap_in(serve_trap[i]),
             .rs1_used_in(serve_rs1_used[i]),
@@ -375,8 +371,12 @@ module DecodeStage
         assign buffered_capture_ready[writer] = producer_capture_ready(UNROLLED_W'(0),
             op_type[writer], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
     end
-    function automatic logic refresh_ready(
-        input logic snapshot_ready,
+    typedef struct packed {
+        logic matched;
+        logic ready;
+    } WriterReadiness_;
+
+    function automatic WriterReadiness_ buffered_override(
         input logic [4:0] source_register,
         input logic source_float,
         input logic rf_only
@@ -389,7 +389,7 @@ module DecodeStage
             matched |= hit;
             selected |= hit && !rf_only && buffered_capture_ready[writer];
         end
-        return matched ? selected : snapshot_ready;
+        return {matched, selected};
     endfunction
 
     logic candidate_writes [ISSUE_WIDTH];
@@ -405,7 +405,7 @@ module DecodeStage
     logic source_ready_by_pop [ISSUE_WIDTH+1][SOURCE_COUNT];
     for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : readiness_sources
         logic snapshot_rs1_ready, snapshot_rs2_ready;
-        logic base_rs1_ready, base_rs2_ready;
+        WriterReadiness_ buffered_1, buffered_2;
         logic rf_only_consumer, rf_only_1, rf_only_2;
         assign rf_only_consumer =
             (SUPPORT_FLOAT && structural_sources[source_slot].common.fp_consumer) ||
@@ -425,23 +425,27 @@ module DecodeStage
             assign snapshot_rs2_ready = rf_only_2 ?
                 (rs2_index[source_slot - ISSUE_WIDTH] >= EXECUTION_UNROLL+1) : rs2_capture_ready[source_slot - ISSUE_WIDTH];
         end
-        assign base_rs1_ready = refresh_ready(snapshot_rs1_ready,
+        assign buffered_1 = buffered_override(
             structural_sources[source_slot].common.rs1, structural_sources[source_slot].common.rs1_float, rf_only_1);
-        assign base_rs2_ready = refresh_ready(snapshot_rs2_ready,
+        assign buffered_2 = buffered_override(
             structural_sources[source_slot].common.rs2, structural_sources[source_slot].common.rs2_float, rf_only_2);
         for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : outcome
             always_comb begin
+                WriterReadiness_ writer_1, writer_2;
                 logic ready_1, ready_2;
-                ready_1 = base_rs1_ready;
-                ready_2 = base_rs2_ready;
+                writer_1 = buffered_1;
+                writer_2 = buffered_2;
                 // New buffer writers start at zero NEXT cycle. Ascending priority
                 // reproduces youngest-writer dedup without live op_write gating.
                 for (int writer = 0; writer < consumed; writer++) begin
                     if (candidate_writes[writer] && next_rs1_match[source_slot][writer])
-                        ready_1 = !rf_only_1 && candidate_bypass_ready[writer];
+                        writer_1 = {1'b1, !rf_only_1 && candidate_bypass_ready[writer]};
                     if (candidate_writes[writer] && next_rs2_match[source_slot][writer])
-                        ready_2 = !rf_only_2 && candidate_bypass_ready[writer];
+                        writer_2 = {1'b1, !rf_only_2 && candidate_bypass_ready[writer]};
                 end
+                // Resolve writer priority independently of the late CAM result.
+                ready_1 = writer_1.matched ? writer_1.ready : snapshot_rs1_ready;
+                ready_2 = writer_2.matched ? writer_2.ready : snapshot_rs2_ready;
                 source_ready_by_pop[consumed][source_slot] =
                     (!structural_sources[source_slot].common.rs1_valid || ready_1) &&
                     (!structural_sources[source_slot].common.rs2_valid || ready_2);

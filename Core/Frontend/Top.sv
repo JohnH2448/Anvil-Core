@@ -61,9 +61,7 @@ module FrontendTop
     logic serve_rs2_used [ISSUE_WIDTH-1:0];
     logic serve_rd_written [ISSUE_WIDTH-1:0];
     logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0];
-    logic [13:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0];
-    logic [4:0] serve_immediate_low [ISSUE_WIDTH-1:0];
-    logic [$bits(BranchOperation_)-1:0] serve_branch_operation [ISSUE_WIDTH-1:0];
+    logic [6:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0];
     logic serve_fp_consumer [ISSUE_WIDTH-1:0];
     TrapType_ serve_trap [ISSUE_WIDTH-1:0];
     DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0];
@@ -100,8 +98,6 @@ module FrontendTop
         .serve_rd_written(serve_rd_written),
         .serve_capability(serve_capability),
         .serve_immediate_upper_select(serve_immediate_upper_select),
-        .serve_immediate_low(serve_immediate_low),
-        .serve_branch_operation(serve_branch_operation),
         .serve_fp_consumer(serve_fp_consumer),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),
@@ -137,8 +133,6 @@ module FrontendTop
         .serve_rd_written(serve_rd_written),
         .serve_capability(serve_capability),
         .serve_immediate_upper_select(serve_immediate_upper_select),
-        .serve_immediate_low(serve_immediate_low),
-        .serve_branch_operation(serve_branch_operation),
         .serve_fp_consumer(serve_fp_consumer),
         .serve_trap(serve_trap),
         .serve_pc_reg(serve_pc_reg),

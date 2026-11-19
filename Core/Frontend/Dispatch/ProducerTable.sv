@@ -39,115 +39,82 @@ module ProducerTable
 
 );
     
-    // Current producer position: 0 = operand select, 1 = execute,
-    // 2..EXECUTION_UNROLL+1 = result registers, EXECUTION_UNROLL+2 = RF.
-    localparam logic [UNROLLED_W-1:0] RF_INDEX = UNROLLED_W'(EXECUTION_UNROLL + 2);
+    // Index zero belongs to the issuer write buffer. A CAM miss is in the RF.
+    localparam unsigned STAGES = EXECUTION_UNROLL + 1;
+    localparam logic [UNROLLED_W-1:0] RF_INDEX = UNROLLED_W'(STAGES + 1);
 
-    // Registered producer identity and progress, indexed by architectural register.
-    logic [UNROLLED_W-1:0] index_table [31:0];
-    logic [LANE_WIDTH-1:0] lane_table [31:0];
-    DecodeCapability_ capability_table [31:0];
-    logic capture_ready [31:0];
-    // Invariant after each edge: capture_ready[r] equals the helper evaluated
-    // on the CURRENT registered index/capability. The helper itself already
-    // accounts for the following advancing Decode capture edge.
-    logic write_capture_ready [ISSUE_WIDTH];
-    for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : write_eligibility
-        assign write_capture_ready[slot] = producer_capture_ready(UNROLLED_W'(1),
-            op_type[slot], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
-    end
+    typedef struct packed {
+        logic [4:0] rd;
+        logic [LANE_WIDTH-1:0] lane;
+        DecodeCapability_ capability;
+    } owner_t;
 
-    // Issuer buffers writes and suppresses older duplicate destinations before capture.
-    // Commit advances the buffered producer from index zero to index one.
-    // op_age remains an interface tag, not a dynamic arbitration input.
-    for (genvar regno = 0; regno < 32; regno++) begin : entries
-        logic candidate [ISSUE_WIDTH];
-        logic hit [ISSUE_WIDTH];
-        logic write_valid;
-        logic write_ready;
-        logic [UNROLLED_W-1:0] aged_index;
-        assign aged_index = index_table[regno] < RF_INDEX ?
-            index_table[regno] + UNROLLED_W'(1) : index_table[regno];
-        logic [LANE_WIDTH-1:0] write_lane;
-        DecodeCapability_ write_capability;
+    typedef struct packed {
+        logic [UNROLLED_W-1:0] index;
+        logic [LANE_WIDTH-1:0] lane;
+        DecodeCapability_ capability;
+        logic ready;
+    } result_t;
 
-        for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : writers
-            if (regno == 0) begin : zero_register
-                assign candidate[slot] = 1'b0;
-            end else begin : destination_match
-                // Registered destinations and valid bits arrive together.
-                assign candidate[slot] = op_rd[slot] == 5'(regno);
+    owner_t owners [STAGES][ISSUE_WIDTH];
+    logic valid [STAGES][ISSUE_WIDTH];
+    logic ready [STAGES][ISSUE_WIDTH];
+
+    for (genvar stage = 0; stage < STAGES; stage++) begin : age_group
+        for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : writer
+            owner_t incoming;
+            logic incoming_valid;
+            if (stage == 0) begin
+                assign incoming = {op_rd[slot], op_lane[slot], op_type[slot]};
+                assign incoming_valid = op_write[slot] && op_rd[slot] != 0;
+            end else begin
+                assign incoming = owners[stage-1][slot];
+                assign incoming_valid = valid[stage-1][slot];
             end
-            assign hit[slot] = candidate[slot] && op_write[slot];
-        end
-        always_comb begin
-            write_valid = 1'b0;
-            write_ready = 1'b0;
-            write_lane = '0;
-            write_capability = DecodeCapability_'('0);
-            // Destinations were deduplicated before buffer capture: parallel mux.
-            for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
-                write_valid |= hit[slot];
-                write_ready |= hit[slot] && write_capture_ready[slot];
-                write_lane |= {LANE_WIDTH{hit[slot]}} & op_lane[slot];
-                write_capability = DecodeCapability_'(write_capability |
-                    ({$bits(DecodeCapability_){hit[slot]}} & op_type[slot]));
-            end
-        end
 
-        // Redirect recovery remains backend-owned; mappings hold on redirect.
-        always_ff @(posedge clk) begin
-            if (reset) begin
-                index_table[regno] <= RF_INDEX;
-                capture_ready[regno] <= 1'b1;
-            end else if (!stall && !redirect_taken) begin
-                if (write_valid) begin
-                    index_table[regno] <= UNROLLED_W'(1);
-                    capture_ready[regno] <= write_ready;
-                    lane_table[regno] <= write_lane;
-                    capability_table[regno] <= write_capability;
-                end else begin
-                    index_table[regno] <= aged_index;
-                    capture_ready[regno] <= producer_capture_ready(aged_index,
-                        capability_table[regno], EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
+            always_ff @(posedge clk) begin
+                if (reset)
+                    valid[stage][slot] <= 1'b0;
+                else if (!stall && !redirect_taken)
+                    valid[stage][slot] <= incoming_valid;
+
+                if (!stall && !redirect_taken) begin
+                    owners[stage][slot] <= incoming;
+                    ready[stage][slot] <= producer_capture_ready(
+                        UNROLLED_W'(stage + 1), incoming.capability,
+                        EXECUTION_UNROLL, DIVIDER_AUTO_PIPE);
                 end
             end
         end
     end
 
-    // Operand Serving
-    always_comb begin
-        for (int unsigned s = 0; s < ISSUE_WIDTH; s++) begin
-            rs1_capture_ready[s] = capture_ready[rs1[s]];
-            rs2_capture_ready[s] = capture_ready[rs2[s]];
-            rs1_index[s] = index_table[rs1[s]];
-            rs2_index[s] = index_table[rs2[s]];
-            rs1_lane[s] = lane_table[rs1[s]];
-            rs2_lane[s] = lane_table[rs2[s]];
-            rs1_capability[s] = capability_table[rs1[s]];
-            rs2_capability[s] = capability_table[rs2[s]];
+    function automatic result_t lookup(input logic [4:0] source);
+        result_t result, group_result;
+        logic group_hit, hit;
+        result = '0;
+        result.index = RF_INDEX;
+        result.ready = 1'b1;
+        // Compare an entire issue group in parallel (two entries at dual issue).
+        // Issue removes same-group WAW duplicates. Younger groups override older ones.
+        for (int stage = int'(STAGES)-1; stage >= 0; stage--) begin
+            group_result = '0;
+            group_result.index = UNROLLED_W'(stage + 1);
+            group_hit = 1'b0;
+            for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
+                hit = valid[stage][slot] && owners[stage][slot].rd == source;
+                group_hit |= hit;
+                group_result.lane |= {LANE_WIDTH{hit}} & owners[stage][slot].lane;
+                group_result.capability = DecodeCapability_'(group_result.capability |
+                    ({$bits(DecodeCapability_){hit}} & owners[stage][slot].capability));
+                group_result.ready |= hit && ready[stage][slot];
+            end
+            if (group_hit) result = group_result;
         end
+        return result;
+    endfunction
+
+    for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : reads
+        assign {rs1_index[slot], rs1_lane[slot], rs1_capability[slot], rs1_capture_ready[slot]} = lookup(rs1[slot]);
+        assign {rs2_index[slot], rs2_lane[slot], rs2_capability[slot], rs2_capture_ready[slot]} = lookup(rs2[slot]);
     end
-
-    // real concern of redirect state restoration
-    // perhaps post redirect, nothing may issue until pipeline clears
-    // several cycles of mercy to restore and do priority select because
-    // the frontend needs several cycles to refill. this is prob best
-    // for performance unless i can think of something cleverer
-    // maybe keep a state change shift register and restore from it
-    // also an option of searching lanes and restoring state from there
-    // also an option that issue searches every lane every cycle for
-    // data rather than keeping a register file. same as standard
-    // cpus but moves that to issue rather than in forward crit path
-
-    // another option, taking advantage of the refill penalty, is to take
-    // 1-2 cycles to derive state from present pipeline data. 
-
-    // also consideration that same cycle overwrite entry and reference
-    // is contentious. need smart dual condition logic to handle it. 
-    // need to block same cycle producer consumer dependencies at issue.
-
-    // Reads expose current mappings; Decode owns capture aging and write bypass.
-
-
 endmodule

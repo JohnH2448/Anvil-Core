@@ -17,7 +17,7 @@ module RegisterSlice
     output logic rs3_float,
     output logic rd_float,
     output logic rs1_used,
-    output logic rs2_used,
+    output logic reads_rs2,
     output logic rd_written,
     output DecodeCapability_ capability
 );
@@ -258,7 +258,7 @@ module RegisterSlice
          c_branch || c_shift ||
          (c_ci && (c[15:13] == 0 || (c[15:13] == 3 && c[11:7] == 2))) ||
          (c_cr && (c[6:2] == 0 || c[12])));
-    assign rs2_used = (rs2_float || rs2 != 0) &&
+    assign reads_rs2 =
         (r_alu || mul_op || div_op || branch_op || store_op ||
          (atomic_op && f5 != 2) || fused ||
          (float_op && (f5 inside {5'd0,5'd1,5'd2,5'd3,5'd4,5'd5,5'd20})) ||

@@ -45,9 +45,7 @@ module Queue
     output logic serve_rs2_used [SERVE_WORDS-1:0],
     output logic serve_rd_written [SERVE_WORDS-1:0],
     output logic [$bits(DecodeCapability_)-1:0] serve_capability [SERVE_WORDS-1:0],
-    output logic [13:0] serve_immediate_upper_select [SERVE_WORDS-1:0],
-    output logic [4:0] serve_immediate_low [SERVE_WORDS-1:0],
-    output logic [$bits(BranchOperation_)-1:0] serve_branch_operation [SERVE_WORDS-1:0],
+    output logic [6:0] serve_immediate_upper_select [SERVE_WORDS-1:0],
     output logic serve_fp_consumer [SERVE_WORDS-1:0],
     output TrapType_ serve_trap [SERVE_WORDS-1:0],
     output DerivedParameters::fetch_pc_t serve_pc_reg [SERVE_WORDS-1:0],
@@ -160,7 +158,7 @@ module Queue
     logic packet_rs3_float [FETCH_SLOTS-1:0];
     logic packet_rd_float [FETCH_SLOTS-1:0];
     logic packet_rs1_used [FETCH_SLOTS-1:0];
-    logic packet_rs2_used [FETCH_SLOTS-1:0];
+    logic packet_reads_rs2 [FETCH_SLOTS-1:0];
     logic packet_rd_written [FETCH_SLOTS-1:0];
     DecodeCapability_ packet_capability [FETCH_SLOTS-1:0];
     logic [4:0] prediction_rs1 [FETCH_SLOTS-1:0];
@@ -172,7 +170,7 @@ module Queue
     logic prediction_rs3_float [FETCH_SLOTS-1:0];
     logic prediction_rd_float [FETCH_SLOTS-1:0];
     logic prediction_rs1_used [FETCH_SLOTS-1:0];
-    logic prediction_rs2_used [FETCH_SLOTS-1:0];
+    logic prediction_reads_rs2 [FETCH_SLOTS-1:0];
     logic prediction_rd_written [FETCH_SLOTS-1:0];
     logic [$bits(DecodeCapability_)-1:0] prediction_capability [FETCH_SLOTS-1:0];
     logic [4:0] fifo_rs1 [FIFO_WORDS-1:0];
@@ -187,26 +185,8 @@ module Queue
     logic fifo_rs2_used [FIFO_WORDS-1:0];
     logic fifo_rd_written [FIFO_WORDS-1:0];
     logic fifo_fp_consumer [FIFO_WORDS-1:0];
-    BranchOperation_ prediction_branch_operation [FETCH_SLOTS-1:0];
-    logic [$bits(BranchOperation_)-1:0] fifo_branch_operation [FIFO_WORDS-1:0];
-    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : branch_operation_predecode
-        BranchOperationPredecode operation_decode (
-            .instruction(prediction_payload[lane].bp_instruction),
-            .is_compressed(prediction_payload[lane].bp_compressed),
-            .operation(prediction_branch_operation[lane])
-        );
-    end
-    logic [4:0] prediction_immediate_low [FETCH_SLOTS-1:0];
-    logic [4:0] fifo_immediate_low [FIFO_WORDS-1:0];
-    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : immediate_low_predecode
-        ImmediateLowPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) low_decode (
-            .instruction(prediction_payload[lane].bp_instruction),
-            .is_compressed(prediction_payload[lane].bp_compressed),
-            .immediate_low(prediction_immediate_low[lane])
-        );
-    end
-    logic [13:0] prediction_immediate_upper_select [FETCH_SLOTS-1:0];
-    logic [13:0] fifo_immediate_upper_select [FIFO_WORDS-1:0];
+    logic [6:0] prediction_immediate_upper_select [FETCH_SLOTS-1:0];
+    logic [6:0] fifo_immediate_upper_select [FIFO_WORDS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : immediate_predecode
         ImmediateUpperPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) format_decode (
             .instruction(prediction_payload[lane].bp_instruction),
@@ -233,7 +213,7 @@ module Queue
             .rs3_float(packet_rs3_float[lane]),
             .rd_float(packet_rd_float[lane]),
             .rs1_used(packet_rs1_used[lane]),
-            .rs2_used(packet_rs2_used[lane]),
+            .reads_rs2(packet_reads_rs2[lane]),
             .rd_written(packet_rd_written[lane]),
             .capability(packet_capability[lane])
         );
@@ -241,7 +221,9 @@ module Queue
 
     // Registered Prediction Result Stage
     logic prediction_stage_valid;
-    logic prediction_lane_valid [FETCH_SLOTS-1:0];
+    logic stage_keep [FETCH_SLOTS];
+    logic [PUSH_COUNT_W-1:0] stage_offset [FETCH_SLOTS];
+    logic [FIFO_INDEX_W-1:0] prediction_write_slot [FETCH_SLOTS];
     DerivedParameters::fetch_pc_t prediction_pc;
     BranchInput_ prediction_payload [FETCH_SLOTS-1:0];
     TrapType_ packet_system_trap [FETCH_SLOTS-1:0];
@@ -257,7 +239,6 @@ module Queue
 
     // Combinational Predicted-Path Selection
     logic [FETCH_SLOTS-1:0] packet_lane_taken;
-    logic [FETCH_SLOTS-1:0] packet_lane_selected;
     logic packet_keep [FETCH_SLOTS-1:0];
     logic packet_taken;
     logic [31:0] packet_redirect_pc;
@@ -273,24 +254,23 @@ module Queue
     logic fifo_c [FIFO_WORDS-1:0];
     logic fifo_branch [FIFO_WORDS-1:0];
     logic fifo_evaluated [FIFO_WORDS-1:0];
+    logic fifo_pc_wrapped [FIFO_WORDS-1:0];
     logic fifo_taken [FIFO_WORDS-1:0];
 
     // Selected FIFO State and Registered Tail/Admission
     logic [FIFO_INDEX_W:0] fifo_occipied_slots;
-    logic [FIFO_INDEX_W:0] fifo_free_slots;
-    logic [FIFO_INDEX_W:0] fifo_tail;
+    logic [FIFO_INDEX_W:0] fifo_tail, fifo_tail_next;
     logic [FIFO_INDEX_W:0] fifo_head;
     logic fifo_full;
     logic fifo_empty;
     logic fifo_packet_room;
 
     localparam int unsigned TRAP_W = $bits(TrapType_);
-    localparam int unsigned SERVE_ENTRY_W = DerivedParameters::FETCH_PC_WIDTH + 60 + 3 + 20 + $bits(BranchOperation_) + $bits(DecodeCapability_) + TRAP_W;
+    localparam int unsigned SERVE_ENTRY_W = DerivedParameters::FETCH_PC_WIDTH + 48 + 3 + 20 + $bits(DecodeCapability_) + TRAP_W;
     // Combinational outcomes feed a single set of serve and FIFO state registers.
     logic [SERVE_ENTRY_W-1:0] serve_next [SERVE_WORDS][SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] head_next [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] occupied_next [SERVE_WORDS+1];
-    logic [FIFO_INDEX_W:0] free_next [SERVE_WORDS+1];
 
     // Decode-Consumption PC Tracking
     logic [31:0] real_pc;
@@ -360,19 +340,8 @@ module Queue
         end
     end
 
-    logic packet_access_fault [FETCH_SLOTS];
-    logic prediction_access_fault [FETCH_SLOTS];
-    for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : check_instruction_extent
-        // Use the reconstructed start PC, including split 32-bit instructions.
-        assign packet_access_fault[lane] = packet_c[lane] ?
-            (Parameters::MAX_MEMORY_ADDRESS < 1 || packet_pc[lane] > Parameters::MAX_MEMORY_ADDRESS - 1) :
-            (Parameters::MAX_MEMORY_ADDRESS < 3 || packet_pc[lane] > Parameters::MAX_MEMORY_ADDRESS - 3);
-    end
-
     // Feeds Branch Predictor and Flushes Instructions Past First Taken Prediction
     always_comb begin
-        logic earlier_taken;
-        earlier_taken = 1'b0;
         packet_redirect_pc = '0;
         for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
             // Operates on Fetch Staging Registered Data
@@ -380,16 +349,13 @@ module Queue
                 bp_pc: packet_pc[i],
                 bp_instruction: packet_data[i],
                 bp_compressed: packet_c[i],
-                bp_branch: packet_valid[i] && packet_branch[i] && !packet_access_fault[i]
+                bp_branch: packet_valid[i] && packet_branch[i]
             };
             // Operates on Prediction Register Latched Data
-            packet_lane_taken[i] = prediction_lane_valid[i] && prediction_payload[i].bp_branch &&
+            packet_lane_taken[i] = packet_keep[i] && prediction_payload[i].bp_branch &&
                 prediction_result[i].bp_valid && prediction_result[i].bp_taken;
-            packet_keep[i] = prediction_lane_valid[i] && !earlier_taken;
-            packet_lane_selected[i] = packet_lane_taken[i] && !earlier_taken;
             packet_redirect_pc = packet_redirect_pc |
-                ({32{packet_lane_selected[i]}} & prediction_result[i].bp_redirect_pc);
-            earlier_taken = earlier_taken || packet_lane_taken[i];
+                ({32{packet_lane_taken[i]}} & prediction_result[i].bp_redirect_pc);
         end
         // Operates on Prediction Register Latched Data
         packet_taken = prediction_stage_valid && |packet_lane_taken;
@@ -401,7 +367,9 @@ module Queue
         earlier_taken = 1'b0;
         stage_push_count = '0;
         for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
-            stage_push_count += PUSH_COUNT_W'(packet_valid[i] && !earlier_taken);
+            stage_keep[i] = packet_valid[i] && !earlier_taken;
+            stage_offset[i] = stage_push_count;
+            stage_push_count += PUSH_COUNT_W'(stage_keep[i]);
             earlier_taken |= packet_valid[i] && packet_branch[i] &&
                 branch_output[i].bp_valid && branch_output[i].bp_taken;
         end
@@ -427,18 +395,17 @@ module Queue
             (!fetch_staging_reg_valid || !prediction_stage_valid || packet_commit);
         prefetch_pc_next = prefetch_pc;
         if (reset || reset_reg) begin
-            prefetch_pc_next = DerivedParameters::bound_fetch_pc(RESET_VECTOR);
+            prefetch_pc_next = DerivedParameters::fetch_pc_t'(RESET_VECTOR);
         end else if (redirect_taken) begin
-            prefetch_pc_next = DerivedParameters::bound_fetch_pc(redirect_pc);
+            prefetch_pc_next = DerivedParameters::fetch_pc_t'(redirect_pc);
         end else if (packet_commit && packet_taken) begin
             for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
-                if (packet_lane_selected[i]) begin
+                if (packet_lane_taken[i]) begin
                     prefetch_pc_next = prediction_result[i].bp_redirect_pc;
                 end
             end
         end else if (advance) begin
-            prefetch_pc_next = prefetch_pc > Parameters::MAX_MEMORY_ADDRESS ? prefetch_pc :
-                DerivedParameters::bound_fetch_pc(32'(prefetch_pc) + FETCH_WORDS * 4);
+            prefetch_pc_next = DerivedParameters::fetch_pc_t'(32'(prefetch_pc) + FETCH_WORDS * 4);
         end
     end
 
@@ -451,14 +418,14 @@ module Queue
     always_ff @(posedge clk) begin
         if (reset || reset_reg) begin
             real_pc <= RESET_VECTOR;
-            prefetch_pc <= DerivedParameters::bound_fetch_pc(RESET_VECTOR);
-            response_pc_reg <= DerivedParameters::bound_fetch_pc(RESET_VECTOR);
+            prefetch_pc <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
+            response_pc_reg <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
             fetch_staging_reg <= '0;
-            fetch_staging_pc <= DerivedParameters::bound_fetch_pc(RESET_VECTOR);
+            fetch_staging_pc <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
             fetch_staging_reg_valid <= 1'b0;
             fetch_branch_reg <= '0;
             fetch_c_reg <= '0;
-            for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= DerivedParameters::bound_fetch_pc(RESET_VECTOR + i*2);
+            for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= DerivedParameters::fetch_pc_t'(RESET_VECTOR + i*2);
         end else begin
             // Tracks Memory Response Address and Consumed Instruction PC
             response_pc_reg <= req_address;
@@ -471,8 +438,7 @@ module Queue
                 fetch_staging_reg <= fetch_data;
                 // Predecodes Each Halfword Before Instruction Boundary Resolution
                 for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
-                    fetch_lane_pc[i] <= response_pc_reg > Parameters::MAX_MEMORY_ADDRESS ? response_pc_reg :
-                        DerivedParameters::bound_fetch_pc(32'(response_pc_reg) + i*2);
+                    fetch_lane_pc[i] <= DerivedParameters::fetch_pc_t'(32'(response_pc_reg) + i*2);
                     fetch_c_reg[i] <= fetch_data[i*16 +: 2] != 2'b11;
                     fetch_branch_reg[i] <= is_branch16(fetch_data[i*16 +: 16]) ||
                         is_branch32(fetch_data[i*16 +: 16]);
@@ -501,14 +467,14 @@ module Queue
                 prediction_rs3_float[i] <= 'x;
                 prediction_rd_float[i] <= 'x;
                 prediction_rs1_used[i] <= 'x;
-                prediction_rs2_used[i] <= 'x;
+                prediction_reads_rs2[i] <= 'x;
                 prediction_rd_written[i] <= 'x;
                 prediction_capability[i] <= 'x;
                 prediction_rs2[i] <= 'x;
                 prediction_payload[i] <= 'x;
                 prediction_system_trap[i] <= TrapType_'('x);
                 prediction_result[i] <= 'x;
-                prediction_lane_valid[i] <= 1'b0;
+                packet_keep[i] <= 1'b0;
             end
             tail_partial <= 1'b0;
             partial_half_reg <= 'x;
@@ -529,15 +495,17 @@ module Queue
                     prediction_rs3_float[i] <= packet_rs3_float[i];
                     prediction_rd_float[i] <= packet_rd_float[i];
                     prediction_rs1_used[i] <= packet_rs1_used[i];
-                    prediction_rs2_used[i] <= packet_rs2_used[i];
+                    prediction_reads_rs2[i] <= packet_reads_rs2[i];
                     prediction_rd_written[i] <= packet_rd_written[i];
                     prediction_capability[i] <= packet_capability[i];
                     prediction_rs2[i] <= packet_rs2[i];
                     prediction_payload[i] <= branch_input[i];
                     prediction_system_trap[i] <= packet_system_trap[i];
-                    prediction_access_fault[i] <= packet_access_fault[i];
                     prediction_result[i] <= branch_output[i];
-                    prediction_lane_valid[i] <= packet_valid[i];
+                    packet_keep[i] <= stage_keep[i];
+                    // A simultaneous commit advances the base for this incoming group.
+                    prediction_write_slot[i] <= fifo_tail_next[FIFO_INDEX_W-1:0]
+                        + FIFO_INDEX_W'(stage_offset[i]);
                 end
                 // Saves Trailing Partial Data for the Next Reconstructed Packet
                 // Reconstruction Can Be Ahead of Prediction; Redirects Clear Both
@@ -556,9 +524,13 @@ module Queue
 
     // Legality runs after prediction capture, in parallel with FIFO admission.
     // The same commit/keep/index as the instruction captures its result.
+    logic prediction_pc_wrapped [FETCH_SLOTS];
     TrapType_ prediction_trap [FETCH_SLOTS];
     TrapType_ fifo_trap [FIFO_WORDS];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : prediction_legality
+        assign prediction_pc_wrapped[lane] = packet_lane_taken[lane] ? prediction_result[lane].bp_target_wrapped :
+            (DerivedParameters::fetch_pc_t'(~prediction_payload[lane].bp_pc) <
+             (prediction_payload[lane].bp_compressed ? 32'd2 : 32'd4));
         InstructionLegality #(
             .SUPPORT_MUL(SUPPORT_MUL),
             .SUPPORT_DIV(SUPPORT_DIV),
@@ -575,11 +547,9 @@ module Queue
     // Compacts Kept Prediction Lanes Into FIFO Entries Through First Taken Branch
     always_ff @(posedge clk) begin
         if (!reset && !reset_reg && !redirect_taken && packet_commit) begin
-            logic [PUSH_COUNT_W-1:0] write_offset;
-            write_offset = '0;
             for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                 logic [FIFO_INDEX_W-1:0] index;
-                index = fifo_tail[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(write_offset);
+                index = prediction_write_slot[i];
                 if (packet_keep[i]) begin
                     fifo_rs1[index] <= prediction_rs1[i];
                     fifo_rd[index] <= prediction_rd[i];
@@ -589,23 +559,21 @@ module Queue
                     fifo_rs3_float[index] <= prediction_rs3_float[i];
                     fifo_rd_float[index] <= prediction_rd_float[i];
                     fifo_rs1_used[index] <= prediction_rs1_used[i];
-                    fifo_rs2_used[index] <= prediction_rs2_used[i];
+                    fifo_rs2_used[index] <= prediction_reads_rs2[i] && (prediction_rs2_float[i] || prediction_rs2[i] != 0);
                     fifo_rd_written[index] <= prediction_rd_written[i];
-                    fifo_branch_operation[index] <= prediction_branch_operation[i];
                     fifo_fp_consumer[index] <= SUPPORT_FLOAT &&
                         (prediction_capability[i] inside {CAP_FP_F, CAP_FP_CONVERT});
-                    fifo_immediate_low[index] <= prediction_immediate_low[i];
                     fifo_immediate_upper_select[index] <= prediction_immediate_upper_select[i];
                     fifo_capability[index] <= prediction_capability[i];
                     fifo_rs2[index] <= prediction_rs2[i];
                     fifo_data[index] <= prediction_payload[i].bp_instruction;
-                    fifo_trap[index] <= prediction_access_fault[i] ? INST_ACCESS_FAULT : prediction_trap[i];
+                    fifo_trap[index] <= prediction_trap[i];
                     fifo_pc[index] <= prediction_payload[i].bp_pc;
                     fifo_c[index] <= prediction_payload[i].bp_compressed;
                     fifo_branch[index] <= prediction_payload[i].bp_branch;
                     fifo_evaluated[index] <= 1'b1;
                     fifo_taken[index] <= packet_lane_taken[i];
-                    write_offset = write_offset + PUSH_COUNT_W'(1);
+                    fifo_pc_wrapped[index] <= prediction_pc_wrapped[i];
                 end
             end
         end
@@ -615,21 +583,23 @@ module Queue
     logic [SERVE_ENTRY_W-1:0] fifo_candidate [SERVE_WORDS];
     logic [SERVE_ENTRY_W-1:0] retained_candidate [SERVE_WORDS];
     logic [FIFO_INDEX_W:0] push_count;
-    logic [FIFO_INDEX_W:0] admission_free;
+    logic [FIFO_INDEX_W:0] occupied_after_push;
     assign push_count = packet_commit ? (FIFO_INDEX_W+1)'(packet_push_count) : '0;
-    assign admission_free = fifo_free_slots - push_count;
+    assign fifo_tail_next = fifo_tail + push_count;
+    assign occupied_after_push = fifo_occipied_slots + push_count;
 
-    assign fifo_full = fifo_free_slots == '0;
+    assign fifo_full = fifo_occipied_slots == (FIFO_INDEX_W+1)'(FIFO_WORDS);
     assign fifo_empty = fifo_occipied_slots == '0;
 
     for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : serve_lanes
         logic [FIFO_INDEX_W-1:0] read_index;
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
+        wire TrapType_ pop_trap = fifo_pc_wrapped[read_index] ? INST_ACCESS_FAULT : fifo_trap[read_index];
         assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
-            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index], fifo_branch_operation[read_index], fifo_fp_consumer[read_index], fifo_immediate_low[read_index], fifo_immediate_upper_select[read_index],
-            fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index], fifo_trap[read_index]};
+            fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index], fifo_fp_consumer[read_index], fifo_immediate_upper_select[read_index],
+            fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index], pop_trap};
         assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
-            serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane], serve_branch_operation[lane], serve_fp_consumer[lane], serve_immediate_low[lane], serve_immediate_upper_select[lane],
+            serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane], serve_fp_consumer[lane], serve_immediate_upper_select[lane],
             serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane], serve_trap[lane]};
         always_ff @(posedge clk) begin
             if (reset || reset_reg || redirect_taken)
@@ -637,8 +607,8 @@ module Queue
             else
                 serve_valid_reg[lane] <= serve_next[lane][serve_select_count][SERVE_ENTRY_W-1];
             {serve_c_reg[lane], serve_taken_reg[lane], serve_branch_reg[lane],
-             serve_data_reg[lane], serve_pc_reg[lane], serve_branch_operation[lane],
-             serve_fp_consumer[lane], serve_immediate_low[lane], serve_immediate_upper_select[lane],
+             serve_data_reg[lane], serve_pc_reg[lane],
+             serve_fp_consumer[lane], serve_immediate_upper_select[lane],
              serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane],
              serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane],
              serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane],
@@ -689,20 +659,17 @@ module Queue
         end
 
         assign head_next[consumed] = fifo_head + (FIFO_INDEX_W+1)'(pull_count);
-        assign occupied_next[consumed] = fifo_occipied_slots + push_count -
+        assign occupied_next[consumed] = occupied_after_push -
             (FIFO_INDEX_W+1)'(pull_count);
-        assign free_next[consumed] = admission_free + (FIFO_INDEX_W+1)'(pull_count);
     end
 
     always_ff @(posedge clk) begin
         if (reset || reset_reg || redirect_taken) begin
             fifo_head <= '0;
             fifo_occipied_slots <= '0;
-            fifo_free_slots <= (FIFO_INDEX_W+1)'(FIFO_WORDS);
         end else begin
             fifo_head <= head_next[serve_select_count];
             fifo_occipied_slots <= occupied_next[serve_select_count];
-            fifo_free_slots <= free_next[serve_select_count];
         end
     end
 
@@ -714,11 +681,11 @@ module Queue
             fifo_tail <= '0;
             fifo_packet_room <= 1'b1;
         end else begin
-            fifo_tail <= fifo_tail + push_count;
+            fifo_tail <= fifo_tail_next;
             if (packet_commit && packet_taken) begin
                 fifo_packet_room <= 1'b1;
             end else begin
-                fifo_packet_room <= admission_free >= (stage_transfer ?
+                fifo_packet_room <= ((FIFO_INDEX_W+1)'(FIFO_WORDS) - occupied_after_push) >= (stage_transfer ?
                     (FIFO_INDEX_W+1)'(stage_push_count) :
                     (FIFO_INDEX_W+1)'(packet_push_count));
             end

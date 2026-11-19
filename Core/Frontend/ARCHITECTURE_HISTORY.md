@@ -2481,3 +2481,71 @@ DispatchTop wires Fetch serve_rs1/serve_rs2 registers directly to ProducerTable 
 Revisit once operation completion and forwarding times are settled. The candidate is to encode producers with identical readiness behavior into a compact class at issue and carry it through the write buffer, producer table and Decode FIFO. Three bits cover the current rules. Keep the instruction capability for lane selection and the cached capture_ready bit for fresh table reads.
 
 Before choosing an encoding, verify that producers sharing a class become usable on the same cycle for every supported execution unroll and divider configuration, including index zero in the write buffer and later indices as waiting Decode packets age. Reassess whether a static class is sufficient for variable-latency results. The expected benefit is narrower metadata muxes. Area and routed timing are unmeasured. Proposal only.
+
+## 2026-11-18 - Pipeline-aged producer CAM
+
+Dispatch/ProducerTable.sv now represents committed integer owners with ISSUE_WIDTH slots at each index from one through EXECUTION_UNROLL+1. The issuer buffer covers index zero separately. This bounds storage by in-flight capacity and makes index implicit in position. Every advancing edge shifts one full group, including bubbles. Stall and redirect hold the groups, and reset invalidates them. Direct serve-register rs1 and rs2 reads compare writers within each age group in parallel and select the youngest matching group. Issue deduplicates simultaneous writes to one rd. A miss, including x0, returns the RF index and ready. Lane and capability on misses are immaterial. Per-owner capture readiness is registered at each stage using the existing helper. Decode capture aging and buffered corrections retain their existing interfaces. This exchanges register-indexed muxes and age counters for destination comparisons and group priority. Area and timing are unmeasured. Static interface and control review only.
+
+## 2026-11-18 - Decode low immediate bits after serve
+
+The routed prediction-to-FIFO path ended at fifo_immediate_low_reg[0][2] with -2.403 ns setup slack at a 2.500 ns target. DecoderSlice now evaluates the existing FP-parameterized low-bit equations using the served instruction and its compressed flag. Fetch Queue drops five bits from each FIFO entry and serve candidate. FrontendTop, FetchTop, DispatchTop and DecodeStage drop the corresponding wiring. Upper-immediate selection remains in Fetch. This moves logic onto the serve-to-Decode path and preserves instruction/flag alignment across holds and refills. Static wiring and packed-width review only. Timing after the move is unmeasured.
+
+## 2026-11-18 - Qualify rs2 dependencies at FIFO check-in
+
+The preceding route reached -2.088 ns setup slack from tail_partial to the prediction rs2 use bit. Dispatch/RegisterSlice.sv now classifies whether the encoding reads rs2. Fetch/Queue.sv captures that predicate alongside the decoded source number and bank, then qualifies it at FIFO check-in using the same kept prediction lane. Integer x0 is dependency-free and FP f0 remains a dependency. This moves the zero comparison and final qualification across prediction capture without adding FIFO fields or a cycle. Static port and check-in alignment review only. Timing after the split is unmeasured.
+
+## 2026-11-18 - Direct CAM readiness reductions
+
+The preceding route reached -2.057 ns from served rs2 to Decode operands_ready. Dispatch/ProducerTable.sv now derives RF-after-capture eligibility from the absence of a younger-stage hit, and ordinary readiness from whether the youngest hit blocks. Both a miss and the oldest group are ready after capture. Dispatch/Top.sv carries the RF predicate to fresh-source readiness in Dispatch/Decode.sv. Retained snapshots still use their local indices. This trades one combinational bit per operand for removing the fresh indexed threshold comparison and excluding the oldest stage from the readiness reduction. Reviewed miss, RF boundary and repeated destinations statically. Timing unmeasured.
+
+## 2026-11-18 - Revert direct CAM readiness reductions
+
+Restored youngest-hit selection of cached capture readiness in ProducerTable and the local fresh-source RF index comparison in Decode. DispatchTop again carries one readiness bit per operand. The experimental routed CAM segment went from 0.958 to 0.991 ns. The full matched register path improved from 4.514 to 4.381 ns through routing, while design WNS worsened from -2.057 to -2.213 ns. Reviewed the restored lookup and wiring statically. No implementation rerun.
+
+## 2026-11-18 - Resolve writer priority alongside the CAM read
+
+The routed serve-rs2 to operands_ready path had 2.311 ns following the CAM result. Dispatch/Decode.sv now computes a writer match and ready bit per source and pop outcome before selecting the snapshot as fallback. The youngest prospective writer in the consumed prefix overrides the registered buffer, which overrides the committed snapshot. The snapshot joins once per operand before the existing packet readiness and slot selection. This reshapes combinational work between the same registers and may shift the limiting arrival to buffered rd. Reviewed the no-match, buffered-hit, prospective WAW and RF-only cases statically. No synthesis or measured timing for this change.
+
+## 2026-11-18 - Use registered serial lane type in IssueContract
+
+IssueContract.sv gates live serial occupancy with the registered SERIAL lane type. Issue.sv drops the contract's packet input. Decode maps exactly CAP_SYSTEM and CAP_CSR to SERIAL and carries lane type with the selected packet. This removes capability decoding from this acceptance predicate with no new registers. Checked the mapping and port wiring statically. Routed timing is unmeasured.
+
+## 2026-11-18 - Remove fetch address range trapping
+
+The preceding route ended at the predicted target guard bit with -2.116 ns setup slack. DerivedParameters now sizes fetch PCs to the address bits alone, with a one-bit minimum. Fetch/Predictor and Fetch/Queue truncate targets, redirects and sequential PCs to that width. Queue removes instruction extent checks, fault-based branch suppression and the FIFO trap override. FIFO check-in takes the predecoded trap directly. Addresses wrap modulo the representable width, including split instructions at the boundary. Non-power-of-two ranges have unenforced unused addresses. Reviewed RTL references and diff statically. Timing after removal is unmeasured.
+
+## 2026-11-18 - Predicted successor wrap metadata
+
+Predictor computes the low target and carry together. Whole-window displacement tests run in parallel with that sum. Fetch Queue selects the wrap flag for a taken prediction or compares remaining address space with the 2/4 byte fall-through step at FIFO check-in. Queue, FetchTop, FrontendTop, DispatchTop, Decode and DecoderSlice transport the flag to Definitions.DecodeCommon_.predicted_pc_wrapped with its instruction. For a split instruction the reference is the reconstructed start PC. The flag covers crossing the width-defined window in either direction, even by several windows. It describes the predicted successor only and does not trap or steer fetch. Compared with the old range trap it avoids full target arithmetic and instruction extent fault plumbing, at the cost of one packet bit. Static arithmetic and packing review only. Area and timing unmeasured.
+
+## 2026-11-18 - Prioritize predicted wrap at FIFO trap capture
+
+Fetch/Queue.sv resolves the per-lane wrap flag from registered prediction results before FIFO check-in. A kept lane with a wrapped predicted successor captures INST_ACCESS_FAULT in its own trap entry ahead of all legality and system traps. FIFO trap and wrap metadata share the same predicate, index and write edge. The additional timing cost is the trap select before FIFO capture. Static wiring and diff review only. Timing is unmeasured.
+
+## 2026-11-18 - Select the wrap trap on FIFO pop
+
+The check-in route from prediction instruction bit 14 to fifo_trap[1][2] had -2.658 ns setup slack. Fetch/Queue.sv now stores the decoded trap and wrap flag independently. Each fresh serve candidate selects INST_ACCESS_FAULT on wrap from the same FIFO read index before the late consumption mux. Retained candidates carry their already resolved trap. This shifts the override from FIFO write to FIFO read. Static check of fresh and retained packing and diff only. Routed timing after the move is unmeasured.
+
+## 2026-11-18 - Register FIFO push rank at prediction capture
+
+The routed prediction lane-valid to FIFO instruction data path measured 5.120 ns and -2.651 ns slack. Fetch/Queue.sv now captures each lane's keep flag and relative write offset from the existing stage push-count calculation. The first valid taken lane is kept; younger lanes cannot write or redirect. Check-in adds the captured rank to the current tail. Capturing relative addresses permits an older group to commit on the same edge as prediction replacement. Backpressure holds the captured group and flush clears its keep flags. This adds rank registers and loads the prediction-stage prefix, removing prefix recomputation from FIFO write selection. Reviewed holes, first-taken suppression, simultaneous replacement and stalls statically. New timing unmeasured.
+
+## 2026-11-18 - Decode BRU operation after serve
+
+The 5.012 ns routed prediction-to-check-in path ended at fifo_branch_operation_reg[3][3] with -2.604 ns slack. DecoderSlice now runs the existing BranchOperationPredecode for each served instruction, retaining compressed decoding and BR_NONE trap qualification. Fetch Queue and the Fetch, Dispatch and frontend interfaces drop four bits from each FIFO entry and serve candidate. Prediction still uses its own branch and taken metadata. The operation logic moves onto the Decode capture path. Static wiring and packed-field review performed. New routed timing is unmeasured.
+
+## 2026-11-18 - Halve upper-immediate serve controls
+
+The preceding routed path ran from prediction_offset to a FIFO data bit with -2.452 ns slack. Fetch/ImmediateUpperPredecode.sv now produces seven compressed layout enables directly. Queue and the frontend and dispatch interfaces carry seven bits per entry. DecoderSlice derives the other seven enables from the same served instruction and compressed flag, reusing local opcode and FP-gated predicates. I and S still share their upper layout. This narrows the payload driven by push selection while adding decode-side dependencies; the offset calculation itself is unchanged. Checked the mapping against the prior format table, port widths and fresh/retained packing statically. Timing unmeasured.
+
+## 2026-11-18 - Register physical FIFO write slots at prediction capture
+
+The preceding routed path ran from fifo_tail to fifo_data at -2.246 ns setup slack. Fetch/Queue.sv now adds each compacted lane rank to the post-commit tail at prediction capture. A concurrent outgoing push advances that base. Backpressure holds slots with their payload, and flush clears their keep flags. Check-in uses the registered slots directly. This moves slot arithmetic onto the prediction capture path while leaving FIFO write selection at check-in. Reviewed hold, flush and simultaneous replacement statically. Routed timing is unmeasured.
+
+## 2026-11-18 - Direct allocation for singleton lane classes
+
+Dispatch/Issue.sv uses an elaboration-time mask to route serial and any one-lane integer, memory or floating class around the priority encoders. Capability masks still qualify the claim and the oldest slot reserves the lane first. Multi-lane classes retain the younger-slot preference policy. This removes singleton lane choices from the generic selector without adding state. Static review covered disjoint lane classes and same-lane contention. Timing and area are unmeasured.
+
+## 2026-11-18 - Remove duplicate free-count state and end wrap metadata at pop
+
+Fetch/Queue.sv shares occupancy after committed pushes between admission and pop candidates. Capacity minus that occupancy gives the previous admission budget, preserving conservative no-pop-credit behavior and the registered room decision. This removes the complementary free counter and its candidate updates, with a possible timing cost on admission. FIFO pop still prioritizes the stored wrap flag over the decoded trap. Serve, Fetch/Dispatch wiring and DecodeCommon_ now carry the resulting trap alone. Downstream loses the separate wrap-cause indicator; current backend RTL uses no such indicator. Reviewed reset, simultaneous push/pop and serve packing statically. Area and timing unmeasured.

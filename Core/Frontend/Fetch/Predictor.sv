@@ -49,6 +49,11 @@ module Predictor (
         end
     end
 
-    // Calculates PC-Relative Branch Target
-    assign branch_output.bp_redirect_pc = DerivedParameters::bound_fetch_pc(32'(branch_input.bp_pc) + displacement);
+    // Split the signed displacement into whole windows and a low offset.
+    // Only the low sum carries. The high tests depend solely on the displacement.
+    logic carry;
+    wire signed [31:0] window_offset = $signed(displacement) >>> DerivedParameters::FETCH_PC_WIDTH;
+    assign {carry, branch_output.bp_redirect_pc} = {1'b0, branch_input.bp_pc}
+        + {1'b0, DerivedParameters::fetch_pc_t'(displacement)};
+    assign branch_output.bp_target_wrapped = carry ? window_offset != -1 : window_offset != 0;
 endmodule

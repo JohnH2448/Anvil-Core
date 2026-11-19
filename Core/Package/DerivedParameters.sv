@@ -2,17 +2,8 @@
 package DerivedParameters;
     localparam int unsigned MEMORY_ADDRESS_BITS =
         $clog2({1'b0, Parameters::MAX_MEMORY_ADDRESS} + 33'd1);
-    localparam int unsigned FETCH_PC_WIDTH = MEMORY_ADDRESS_BITS < 32 ? MEMORY_ADDRESS_BITS + 1 : 32;
+    localparam int unsigned FETCH_PC_WIDTH = MEMORY_ADDRESS_BITS > 0 ? MEMORY_ADDRESS_BITS : 1;
     typedef logic [FETCH_PC_WIDTH-1:0] fetch_pc_t;
-
-    // Preserve the overflow bit even for redirects beyond the compact PC range.
-    function automatic fetch_pc_t bound_fetch_pc(input logic [31:0] address);
-        fetch_pc_t pc;
-        pc = fetch_pc_t'(address);
-        if ((address >> FETCH_PC_WIDTH) != 0)
-            pc[FETCH_PC_WIDTH-1] = 1'b1;
-        return pc;
-    endfunction
 
     typedef logic [3:0] integer_caps_t [(Parameters::INTEGER_LANE_COUNT > 0 ? Parameters::INTEGER_LANE_COUNT : 1)];
     function automatic integer_caps_t build_integer_caps();

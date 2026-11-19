@@ -11,6 +11,7 @@ package Definitions;
     // Branch Predictor Outputs
     typedef struct packed {
         DerivedParameters::fetch_pc_t bp_redirect_pc;
+        logic bp_target_wrapped;
         logic bp_taken;
         logic bp_valid;
     } BranchOutput_;
