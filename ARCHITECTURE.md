@@ -49,36 +49,50 @@ Below are synthesis numbers for several selected configurations:
 
 ## Frontend timing across parameter sets
 
-Results use the I/O delay model below. Clock targets may vary to push frequency;
-record each target in the run notes. Frequency/period columns are slack-derived
-estimates, not necessarily the clock target met by that run. Delays are relative to the rising edge of frontend_clk;
-minimum delays model earliest external arrival, not inserted hardware delay.
+This table starts a fresh comparison series on November 19, 2026.
+Frequency is estimated as 1000 / (target period - setup WNS).
+All rows use the following common constraints unless a separate series is introduced.
 
-```tcl
+```bash
 create_clock -name frontend_clk -period 2.500 [get_ports clk]
 set late_controls [get_ports {stall redirect_taken redirect_pc[*]}]
-set_input_delay -clock frontend_clk -max 3.250 $late_controls
+set_input_delay -clock frontend_clk -max 3.250 $late_controls # Dual Issue
+set_input_delay -clock frontend_clk -max 2.500 $late_controls # Single Issue
 set_input_delay -clock frontend_clk -min 2.000 $late_controls
 set_input_delay -clock frontend_clk -max 1.000 [get_ports {reset serial_active}]
 set_input_delay -clock frontend_clk -min 1.000 [get_ports reset]
 set_input_delay -clock frontend_clk -min 0.500 [get_ports serial_active]
-# FP writeback ports added after the currently recorded runs:
-set fp_writebacks [get_ports -quiet {fp_wb_valid* fp_wb_rd*}]
-if {[llength $fp_writebacks]} {
-    set_input_delay -clock frontend_clk -max 3.000 $fp_writebacks
-    set_input_delay -clock frontend_clk -min 1.500 $fp_writebacks
-}
 set_output_delay -clock frontend_clk -max 0.000 [all_outputs]
 set_output_delay -clock frontend_clk -min 0.000 [all_outputs]
 ```
 
-The latest single-issue run (286.37 MHz) uses 2.500 ns maximum delay for stall, redirect_taken and redirect_pc, rather than the 3.250 ns model above; minimum delay remains 2.000 ns.
-
 | ISA | Issue Width | FIFO Words | Cache Line Words | Lanes | Frequency (MHz) | Period (ns) | LUTs | FFs |
 |---|---|---|---|---|---|---|---|---|
-| RV32IMAFC | 2 | 8 | 1 | 5 | 227.22 | 4.401 | 5,273 | 3,262 |
-| RV32IMC | 2 | 8 | 1 | 4 | 236.18 | 4.234 | 4,579 | 2,902 |
-| RV32IC | 2 | 8 | 1 | 4 | 230.52 | 4.338 | 4,482 | 2,890 |
-| RV32IC | 1 | 8 | 1 | 3 | 286.37 | 3.492 | 2,828 | 2,141 |
+| RV32IMAFC | 2 | 8 | 2 | 5 | 226.96 | 4.406 | 5,337 | 2,276 |
+| RV32IMC | 2 | 8 | 2 | 4 | 231.00 | 4.329 | 4,721 | 2,025 |
+| RV32IC | 2 | 8 | 2 | 4 | 223.76 | 4.469 | 4,737 | 2,019 |
+| RV32IMAFC | 1 | 8 | 1 | 4 | 274.65 | 3.641 | 2,045 | 1,427 |
+| RV32IMC | 1 | 8 | 1 | 3 | 283.61 | 3.526 | 1,831 | 1,314 |
+| RV32IC | 1 | 8 | 1 | 3 | 279.25 | 3.581 | 1,821 | 1,310 |
 
-Note: These are representative, not guarentees.
+## Frontend TODOs
+
+- [ ] Detect sequential PC wrap, including compressed and split instructions. Define fault reporting and recovery.
+- [ ] Handle registered prediction_result[i].bp_target_wrapped for taken predictions, preserving instruction association.
+- [ ] Calculate next_pc later in the pipeline as PC + 2 for compressed instructions or PC + 4 otherwise.
+
+## Additional implementation TODOs
+
+- [ ] Recover integer producer ownership after redirects.
+- [ ] Implement FP dependencies, including rs3 and lane operand search.
+- [ ] Implement MemoryLane execution, requests/responses, faults, ordering and atomics.
+- [ ] Implement FloatingLane arithmetic, conversions, rounding, exceptions and result delivery.
+- [ ] Implement SerialLane CSR/system execution and trap/interrupt control.
+- [ ] Integrate the full CPU top, backend stall/advancement, writeback and precise recovery.
+- [ ] Support issue widths above two if required.
+
+FP load forwarding policy is prepared as Parameters.FP_LOAD_RF_ONLY, default 0.
+Implement its enforcement with FloatingLane operand search: 0 permits searching
+memory lanes and 1 requires the youngest matching FP load owner to reach RF.
+Apply the policy to every FP source, including rs3, using the existing capture
+threshold index >= EXECUTION_UNROLL+1. The current lane shell does not enforce it.

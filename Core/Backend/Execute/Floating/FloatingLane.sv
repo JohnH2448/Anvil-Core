@@ -3,6 +3,7 @@ module FloatingLane
 #(
     parameter unsigned IS_FLOAT = 1,
     parameter unsigned IS_CONVERT = 1,
+    parameter bit FP_LOAD_RF_ONLY = Parameters::FP_LOAD_RF_ONLY,
     parameter unsigned EXECUTION_UNROLL = 1, // execution stages
     parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
     parameter unsigned LANE_ID = 0, // 0 is first
@@ -12,4 +13,10 @@ module FloatingLane
 )(
 
 );
+    // TODO: Apply FP_LOAD_RF_ONLY to each FP source in the dynamic owner search,
+    // including rs3. Match the youngest FP writer before testing its lane class.
+    // For a memory-lane owner with FP_LOAD_RF_ONLY, reuse the RF eligibility
+    // threshold index >= EXECUTION_UNROLL+1 at issue/operand capture.
+    // Zero permits the normal memory-lane search and result-ready handling.
+    // The predicate is relevant only when SUPPORT_FLOAT is enabled.
 endmodule

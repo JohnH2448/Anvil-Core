@@ -2549,3 +2549,47 @@ Dispatch/Issue.sv uses an elaboration-time mask to route serial and any one-lane
 ## 2026-11-18 - Remove duplicate free-count state and end wrap metadata at pop
 
 Fetch/Queue.sv shares occupancy after committed pushes between admission and pop candidates. Capacity minus that occupancy gives the previous admission budget, preserving conservative no-pop-credit behavior and the registered room decision. This removes the complementary free counter and its candidate updates, with a possible timing cost on admission. FIFO pop still prioritizes the stored wrap flag over the decoded trap. Serve, Fetch/Dispatch wiring and DecodeCommon_ now carry the resulting trap alone. Downstream loses the separate wrap-cause indicator; current backend RTL uses no such indicator. Reviewed reset, simultaneous push/pop and serve packing statically. Area and timing unmeasured.
+
+## 2026-11-18 - Detect traps entirely in DecoderSlice
+
+Fetch no longer computes or transports system traps, legality results or FIFO wrap metadata. Queue FIFO and serve packing lose four trap bits. DecoderSlice invokes the existing system and instruction legality helpers on the served instruction and compressed flag. It recomputes predicted successor wrap from the served PC, instruction displacement and taken flag, giving INST_ACCESS_FAULT priority. This moves legality and wrap arithmetic onto the Decode capture path and removes their FIFO write selection. Predictor target wrap remains an unused helper output subject to synthesis pruning. Static port and packing review only. Timing unmeasured.
+
+## 2026-11-18 - Narrow Decode wrap arithmetic
+
+The first all-Decode trap route had -3.711 ns WNS and a 6.187 ns path through seven carry cells into operands_ready. DecoderSlice had unnecessarily formed a full 33-bit successor. It now adds only the compact PC and low displacement, using carry plus parallel signed whole-window checks to identify wrap. A 33-bit signed displacement extension handles the full-PC-width parameter case without an empty slice. Trap priority is preserved. Static arithmetic and diff review performed. New routed timing is unmeasured.
+
+## 2026-11-18 - Remove Decode wrap detection
+
+DecoderSlice now takes its trap directly from instruction legality and system/CSR checks. Removed successor displacement reconstruction, wrap addition and access-fault override. Compact fetch addresses wrap at their configured width without a Decode-generated address-range trap. Static reference and diff review performed. Timing is unmeasured.
+
+## 2026-11-18 - Restore synced Prototype 3.3
+
+Restored tracked RTL and Dispatch README to origin/main at 011f04f (Prototype 3.3), which matches local HEAD. This reverts the subsequent move of trap detection into DecoderSlice and the Decode wrap arithmetic changes. Preserved the newly added TODO lists in root ARCHITECTURE.md and retained experiment history here. Verified restored RTL matches the checkpoint with git diff. No synthesis or tests run.
+
+## 2026-11-19 - Prepare FP load RF-only policy
+
+Parameters.FP_LOAD_RF_ONLY defaults to zero and is exposed as a FloatingLane parameter. Zero permits memory-lane operand search, while one requires an FP load owner to reach RF. Enforcement is pending the floating operand-search datapath. The present integer CAM excludes FP destinations, so applying this parameter to its CAP_MEMORY readiness would incorrectly affect integer loads. FloatingLane records the intended reuse of the existing index >= EXECUTION_UNROLL+1 RF threshold, youngest-owner selection and rs3 coverage. No frontend scheduling behavior changes. Static interface review and diff check only.
+
+## 2026-11-19 - Restart frontend timing comparison table
+
+Replaced the prior rows in root ARCHITECTURE.md at user request. The first new row comes from retry 20261119_135047/03_hold_aggressive, identified by last_saved.txt as the latest completed stage. WNS -1.906 ns at 2.500 ns gives 4.406 ns and 226.96 MHz. Utilization is 5,337 LUTs and 2,276 registers. Progress reports 04_pins running, so the recorded result is intermediate. Parameters and current Tcl were read for configuration and common I/O assumptions. No synthesis or implementation run.
+
+## 2026-11-19 - Record RV32IMC retry
+
+Added the latest completed checkpoint 20261119_140022/06_clock to the existing table format in ARCHITECTURE.md. Target 2.500 ns and WNS -1.829 ns yield 4.329 ns and 231.00 MHz. Reports give 4,721 LUTs, 2,025 registers, TNS -4364.486 ns and WHS +0.119 ns. Current parameters disable F/A and configure four lanes. Progress reports 07_restructure running. Read reports and parameters only.
+
+## 2026-11-19 - Record dual-issue RV32IC retry
+
+Added 20261119_140825/03_hold_aggressive in the existing table format. WNS -1.969 ns at 2.500 ns gives 4.469 ns and 223.76 MHz. Reports give 4,737 LUTs, 2,019 registers, TNS -4137.456 ns and WHS +0.071 ns. Parameters configure dual issue, FIFO 8, cache line 2, two ALU/BRU integer lanes, one memory lane and serial. The next pass is 04_pins. Report and parameter inspection only.
+
+## 2026-11-19 - Record completed single-issue RV32IC retry
+
+Recorded 20261119_164435/09_hold_final in the existing main table format. WNS -1.081 ns at 2.500 ns gives 3.581 ns and 279.25 MHz. TNS -963.305 ns, WHS +0.104 ns, THS zero, 1,821 LUTs and 1,310 registers. Parameters specify issue 1, FIFO 8, cache line 1, unroll 1 and three lanes. Current Tcl sets late-control maximum input delay to 2.500 ns, so this row is labeled comparison series B, distinct from the prior 3.250 ns model. Report inspection only.
+
+## 2026-11-19 - Record single-issue RV32IMC retry
+
+Added completed 20261119_165304/09_hold_final in the current table format. Setup WNS -1.026 ns at 2.500 ns gives 3.526 ns and 283.61 MHz. Reports give 1,831 LUTs, 1,314 registers, TNS -1123.953 ns and hold WNS +0.111 ns. Series B input delays apply. Parameters specify issue 1, FIFO 8, cache line 1, three lanes, integer mask 1111 and memory mask 001. Read reports and parameters only.
+
+## 2026-11-19 - Record single-issue RV32IMAFC retry
+
+Added completed 20261119_170138/09_hold_final to the existing main table. Setup WNS -1.141 ns at 2.500 ns yields 3.641 ns and 274.65 MHz. TNS -1203.129 ns, WHS +0.070 ns, THS zero, 2,045 LUTs and 1,427 registers. Parameters specify issue 1, FIFO 8, cache line 1, four total lanes, integer mask 1111, memory mask 111, floating mask 11, unroll 1 and FP_LOAD_RF_ONLY=1. The 2.500 ns single-issue late-control input model applies. Report and parameter inspection only.

@@ -331,6 +331,9 @@ module Issuer
 
 endmodule
 
+// Need to consider memory forwarding cases for floats. I think its wise to have a param that blocks fp ops
+// dependent on fp loads. 0 = dynamic search like other float lanes, 1 = load data ready in register file
+
 // may need to pipeline this. low friction addition
 // Dual issue finds any available pairing; wider issue uses a lane preference heuristic.
 // Older instructions retain priority when allocation fails.
