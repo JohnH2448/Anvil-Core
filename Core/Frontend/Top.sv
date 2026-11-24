@@ -15,13 +15,18 @@ module FrontendTop
     input logic clk,
     input logic reset,
     input logic [31:0] redirect_pc,
-    input logic redirect_taken,
+    input logic redirect_fetch, // Registered recovery launch; pulses with redirect_taken.
+    input logic redirect_taken, // Registered recovery pulse.
+    input logic [AGE_WIDTH-1:0] redirect_slot,
+    input logic redirect_advanced, // Resolving group shifted once before recovery.
     input logic stall,
     input logic serial_active,
 
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
-    output logic accept_vector [TOTAL_LANE_COUNT-1:0]
+    output logic accept_vector [TOTAL_LANE_COUNT-1:0],
+    // Registered operand-wait bits per producer slot; see Issue.
+    output logic watch [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0]
 );
 
     // Shared packet widths come from Parameters; reject inconsistent overrides.
@@ -47,6 +52,7 @@ module FrontendTop
     DecoderPacket_ dispatch_packet [TOTAL_LANE_COUNT-1:0];
     IssuerPacket_ dispatch_issuer [TOTAL_LANE_COUNT-1:0];
     logic dispatch_accept [TOTAL_LANE_COUNT-1:0];
+    logic dispatch_watch [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0];
 
     logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0];
     logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0];
@@ -69,8 +75,7 @@ module FrontendTop
     logic serve_c_reg [ISSUE_WIDTH-1:0];
     logic serve_taken_reg [ISSUE_WIDTH-1:0];
     logic serve_branch_reg [ISSUE_WIDTH-1:0];
-    logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed;
-    logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count;
+    logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count;
 
     FetchTop #(
         .FETCH_WORDS(FETCH_WORDS),
@@ -82,6 +87,7 @@ module FrontendTop
     ) fetch (
         .clk(clk),
         .reset(reset),
+        .redirect_fetch(redirect_fetch),
         .redirect_pc(redirect_pc),
         .redirect_taken(redirect_taken),
         .serve_data_reg(serve_data_reg),
@@ -105,8 +111,8 @@ module FrontendTop
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
-        .serve_consumed(serve_consumed),
-        .serve_select_count(serve_select_count)
+        .stall(stall),
+        .serve_normal_count(serve_normal_count)
     );
 
     DispatchTop #(
@@ -117,6 +123,8 @@ module FrontendTop
         .clk(clk),
         .reset(reset),
         .redirect_taken(redirect_taken),
+        .redirect_slot(redirect_slot),
+        .redirect_advanced(redirect_advanced),
         .stall(stall),
         .serial_active(serial_active),
         .serve_data_reg(serve_data_reg),
@@ -140,11 +148,11 @@ module FrontendTop
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
-        .serve_consumed(serve_consumed),
-        .serve_select_count(serve_select_count),
+        .serve_normal_count(serve_normal_count),
         .decoder_packet(dispatch_packet),
         .issuer_packet(dispatch_issuer),
-        .accept_vector(dispatch_accept)
+        .accept_vector(dispatch_accept),
+        .watch(dispatch_watch)
     );
 
     // Lane order matches Dispatch/actual backend generation: serial, integer,
@@ -241,6 +249,14 @@ module FrontendTop
                 issuer_packet[lane] <= consumed_issuer;
             end
         end
+    end
+
+    // Same capture rule as accept_vector: cleared by reset and flush, held by stall.
+    always_ff @(posedge clk) begin
+        for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++)
+            for (int index = 0; index <= EXECUTION_UNROLL; index++)
+                if (reset || redirect_taken) watch[lane][index] <= 1'b0;
+                else if (!stall) watch[lane][index] <= dispatch_watch[lane][index];
     end
 
 endmodule

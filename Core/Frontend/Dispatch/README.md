@@ -84,9 +84,7 @@ a consumer from issuing alongside its producer; the buffered correction supplies
 new producer next cycle, before readiness is evaluated again.
 
 This remains an integer producer table. Floating-register writes do not update
-it; floating dependency tracking (including rs3) remains unimplemented. Producer
-mapping restoration after backend redirects also remains unimplemented: the table
-holds on redirect and needs a backend recovery protocol before full-core use.
+it; floating dependency tracking (including rs3) remains unimplemented. The backend sends the oldest advancing redirect directly to the fetch PC and registers the recovery pulse for Dispatch. During the next cycle the frontend flushes. The CAM discards group zero and retains writers through the redirecting slot in group one. Survivors advance with execution or hold on independent backpressure.
 
 `DecoderSlice.sv` accepts one raw RV32 instruction and emits a purely combinational
 `Definitions::DecoderPacket_` plus a separate `LaneType_` routing tag. Its inputs
@@ -353,9 +351,7 @@ instruction. Serial integer destinations become issue-ready at index EXECUTION_U
 for the next-cycle RF read; the producer starts at index zero, not RF_INDEX.
 Floating producer-table tracking remains unimplemented.
 
-ProducerTable receives buffered writes with unique destinations and uses parallel
-match/payload selection. Higher issue slot wins duplicate destinations at buffer
-capture. The op_age port is retained but does not arbitrate writes.
+Decode and Issue use buffered writes with unique destinations. ProducerTable separately captures every accepted integer writer so an older same-group writer survives if a redirect kills a younger writer to the same register. The youngest surviving match supplies all producer fields.
 
 common.next_pc is reserved and unspecified throughout decode/issue. Issuer clears
 it to don't-care before packet lane selection. Integer execution derives its own
@@ -549,7 +545,8 @@ For operand lookahead, ProducerTable now supplies one-bit capture-edge eligibili
 computed per entry before source-address selection, alongside unchanged raw metadata.
 Decode uses the same threshold helper on retained snapshots and corrects eligibility
 with precomputed buffered-writer ready bits independently of metadata correction.
-Prospective newly issued writers retain the separate index-zero bypass rule. These
+Prospective newly issued writers retain the separate index-zero bypass rule, which
+since 2026-11-22 admits only CAP_ALU add/sub/xor/or/and (Definitions::alu_bypassable). These
 are combinational summaries, not new table state; stall remains a register enable.
 
 Capture eligibility compares the index against constant per-capability thresholds
@@ -565,7 +562,7 @@ The main frontend OOC flow uses Default synthesis and RuntimeOptimized
 opt/place/route without physical optimization. Standard routed reports and
 frontend_routed.dcp are written directly after routing.
 
-frontend_retry.tcl retries an existing routed DCP single-threaded with aggressive
+Synthesis/Scripts/frontend_retry.tcl retries an existing routed DCP single-threaded with aggressive
 routing followed by explicit hold repair and separate pin, routing, clock and
 restructure passes, another routing pass, and final aggressive hold repair.
 It saves each completed pass before reports, with last_saved.txt/progress.txt for
@@ -652,7 +649,7 @@ operands still compare against current buffered destinations. No new state added
 
 ProducerTable capture readiness is registered alongside each entry. Reset,
 buffered writes and saturated aging keep it equal to producer_capture_ready
-of the current index/capability; stall and redirect hold both. Reads select the
+of the current index/capability. Stall holds both. Registered redirect recovery preserves surviving entries in lockstep with execution. Reads select the
 stored ready bit directly, with Decode correction/lookahead semantics unchanged.
 
 
@@ -727,3 +724,5 @@ Prediction capture registers the FIFO keep mask and each lane's physical write s
 Fetch carries seven compressed upper-immediate layout enables through FIFO and serve. DecoderSlice supplies the compressed branch, stack load/store and four full-width layout enables from its local instruction predicates.
 
 Issue assigns singleton lane classes directly in oldest-first order. Classes with multiple lanes use the compatibility and preference allocator.
+
+Only ordinary loads with a valid nonzero integer destination acquire a memory producer entry. Decode eligibility schedules the consumer into operand select, where it waits for registered load completion if needed. Stores still wait for bus completion at the execution cutoff.

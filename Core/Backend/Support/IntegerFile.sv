@@ -22,14 +22,14 @@ module IntegerFile #(
     genvar i;
     generate
         for (i = 0; i < READ_PORTS; i++) begin : read_ports
-            assign read_data[i] = register_file[read_addr[i]];
+            assign read_data[i] = read_addr[i] == 0 ? 32'b0 : register_file[read_addr[i]];
         end
     endgenerate
 
     // Write Latching
     always_ff @(posedge clk) begin
         for (int unsigned i = 0; i < WRITE_PORTS; i++) begin
-            if (write_en[i]) begin
+            if (write_en[i] && write_addr[i] != 0) begin
                 register_file[write_addr[i]] <= write_data[i];
             end
         end

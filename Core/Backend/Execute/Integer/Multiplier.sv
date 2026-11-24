@@ -98,20 +98,24 @@ module Multiplier
     assign compressed_products_4[6] = compressed_products_3[9];
     assign compressed_products_4[7] = compressed_products_3[10];
 
+    // Step 1 registers the eight rows after pass 4 (product_vector below).
+    // Step 2: compression passes 5 (8 rows to 6) and 6 (6 rows to 4) feed the
+    // final addition.
+    logic [63:0] product_vector [0:7];
+
     // Compression pass 5: 8 rows to 6 rows.
     logic [63:0] compressed_products_5 [0:5];
     for (genvar i = 0; i < 2; i++) begin : gen_comp_5
         logic [63:0] x, y, z;
-        assign x = compressed_products_4[i*3];
-        assign y = compressed_products_4[i*3+1];
-        assign z = compressed_products_4[i*3+2];
+        assign x = product_vector[i*3];
+        assign y = product_vector[i*3+1];
+        assign z = product_vector[i*3+2];
         assign compressed_products_5[i*2] = x ^ y ^ z;
         assign compressed_products_5[i*2+1] = ((x & y) | (y & z) | (x & z)) << 1;
     end
-    assign compressed_products_5[4] = compressed_products_4[6];
-    assign compressed_products_5[5] = compressed_products_4[7];
+    assign compressed_products_5[4] = product_vector[6];
+    assign compressed_products_5[5] = product_vector[7];
 
-    // Compression pass 6: 6 rows to 4 rows.
     logic [63:0] compressed_products_6 [0:3];
     for (genvar i = 0; i < 2; i++) begin : gen_comp_6
         logic [63:0] x, y, z;
@@ -123,12 +127,11 @@ module Multiplier
     end
 
     // Step 8: Calculate Final Addition
-    logic [63:0] product_vector [0:3];
     logic [63:0] sum;
     always_comb begin
         sum = 64'b0;
         for (int unsigned i = 0; i < 4; i++) begin
-            sum = sum + product_vector[i];
+            sum = sum + compressed_products_6[i];
         end
     end
 
@@ -150,7 +153,7 @@ module Multiplier
 
         if (!stall) begin
             multiply_payload_step_2 <= multiply_payload.operation;
-            product_vector <= compressed_products_6;
+            product_vector <= compressed_products_4;
         end
     end
 

@@ -53,7 +53,7 @@ module DecodeStage
     output logic [ISSUE_WIDTH-1:0] rs2_buffer_match [ISSUE_WIDTH-1:0],
 
     // Unmasked candidate selection; state captures only when not stalled.
-    // Flush invalidates the queue and independently suppresses serve_consumed.
+    // Flush invalidates the queue; Fetch applies flush and stall to its pop.
     input logic [$clog2(ISSUE_WIDTH+1)-1:0] issue_select_count,
     input logic issue_select_any,
     input logic issue_select_two,
@@ -65,8 +65,9 @@ module DecodeStage
     input DecodeCapability_ op_type [ISSUE_WIDTH-1:0],
 
     // Acceptance Signals to Fetch
-    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed,
-    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count,
+    // Stall-free pop count. Fetch builds its next state from this and applies
+    // stall only as the final select, keeping stall off the pointer arithmetic.
+    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count,
 
     // Producer Table Reads
 
@@ -151,10 +152,9 @@ module DecodeStage
     assign available_slots = empty_slots + issue_select_count;
     assign serve_consumed_normal = valid_inputs < available_slots ? valid_inputs : available_slots;
     assign next_empty_slots = available_slots - serve_consumed_normal;
-    // Payload selector ignores flush; queue validity handles invalidation.
-    // Stall still selects zero so held packets/refill retain their alignment.
-    assign serve_select_count = stall ? '0 : serve_consumed_normal;
-    assign serve_consumed = (reset || reset_reg || redirect_taken || stall) ? '0 : serve_consumed_normal;
+    // Flush and stall are applied in Fetch: stall as a late 2:1 select between
+    // the consumed-zero and normal outcomes, flush through queue validity.
+    assign serve_normal_count = serve_consumed_normal;
 
     always_ff @(posedge clk) begin
         if (reset || reset_reg || redirect_taken) empty_slots <= COUNT_W'(ISSUE_WIDTH);
@@ -397,10 +397,12 @@ module DecodeStage
     for (genvar writer = 0; writer < ISSUE_WIDTH; writer++) begin : prospective_writers
         // Mirrors issue_write except acceptance/stall/flush, which are implicit
         // in the chosen outcome and the capture enable/validity.
-        assign candidate_writes[writer] = packets_out[writer].common.rd_valid &&
-            !packets_out[writer].common.rd_float && packets_out[writer].common.rd != 0;
+        assign candidate_writes[writer] = writes_integer_producer(packets_out[writer]);
+        // Sole source of index-zero (bypass) eligibility. Compares and shifts
+        // are excluded and wait for the index-one registered forward.
         assign candidate_bypass_ready[writer] = BYPASS_ENABLED &&
-            packets_out[writer].common.capability == CAP_ALU;
+            packets_out[writer].common.capability == CAP_ALU &&
+            alu_bypassable(packets_out[writer].alu.operation);
     end
     logic source_ready_by_pop [ISSUE_WIDTH+1][SOURCE_COUNT];
     for (genvar source_slot = 0; source_slot < SOURCE_COUNT; source_slot++) begin : readiness_sources

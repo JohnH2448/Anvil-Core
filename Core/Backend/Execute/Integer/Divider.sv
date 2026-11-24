@@ -55,19 +55,33 @@ module Divider
     logic [MW-1:0] multiple [0:STAGES-1][0:CHOICES-1];
     logic [31:0] dividend [0:STAGES-1], quotient [0:STAGES-1], remainder_value [0:STAGES-1];
     logic q_neg [0:STAGES-1], r_neg [0:STAGES-1], rem_op [0:STAGES-1];
-    logic stage_valid [0:STAGES-1];
-    // Occupancy from the iteration boundary through the output. Feed this
-    // request back through the lane stall to hold all upstream instructions.
-    // Including the last valid keeps stall asserted through result capture.
-    always_comb begin
-        iteration_stall = 1'b0;
-        if (ITERATION_INDEX == 0) iteration_stall |= magnitude_valid;
-        for (int unsigned i = 0; i<STAGES; i++) begin
-            if (i+1 >= ITERATION_INDEX) iteration_stall |= stage_valid[i];
+    // stage_valid[STAGES] is the registered raw result ahead of sign correction.
+    logic stage_valid [0:STAGES];
+    // Registered occupancy of the iteration region. Only one instruction can be
+    // in the region: its stall holds everything upstream. Set on the edge it
+    // latches into the first region register, cleared on the edge the final
+    // stage's result is captured by the lane. Stall stays asserted through capture.
+    if (ITERATION_INDEX > STAGES+1) begin : no_iteration
+        assign iteration_stall = 1'b0;
+    end else begin : iteration_region
+        logic entering, busy;
+        if (ITERATION_INDEX == 0) begin : enter_magnitude
+            assign entering = !stall && valid_in && !flush;
+        end else if (ITERATION_INDEX == 1) begin : enter_first_stage
+            assign entering = !stall && magnitude_valid;
+        end else begin : enter_stage
+            assign entering = !stall && stage_valid[ITERATION_INDEX-2];
         end
+        always_ff @(posedge clk) begin
+            if (reset) busy <= 1'b0;
+            else if (busy) busy <= !valid_out;
+            else busy <= entering;
+        end
+        assign iteration_stall = busy;
     end
-    assign valid_out = stage_valid[STAGES-1];
+    assign valid_out = stage_valid[STAGES];
     logic [31:0] final_quotient, final_remainder;
+    logic final_q_neg, final_r_neg, final_rem_op;
     always_ff @(posedge clk) begin
         if (reset) stage_valid[0] <= 1'b0;
         else if (!stall || 1>ITERATION_INDEX) stage_valid[0] <= magnitude_valid;
@@ -131,11 +145,24 @@ module Divider
                 digit_next |= BITS'(k) & {BITS{choose[k]}};
             end
         end
-        if (s == STAGES-1) begin : final_combinational
-            // Final quotient digit, sign correction and selection feed the
-            // lane's output register directly, with no final register here.
-            assign final_quotient = (quotient[s]<<BITS) | 32'(digit_next);
-            assign final_remainder = 32'(rem_next);
+        if (s == STAGES-1) begin : final_registered
+            // The last digit step registers the raw result. Sign correction and
+            // quotient/remainder selection happen in the following cycle, in
+            // front of the lane's capture register.
+            always_ff @(posedge clk) begin
+                if (reset) stage_valid[s+1] <= 1'b0;
+                else if (!stall || s+2>ITERATION_INDEX) stage_valid[s+1] <= stage_valid[s];
+                else if (s+3>ITERATION_INDEX) stage_valid[s+1] <= 1'b0;
+            end
+            always_ff @(posedge clk) begin
+                if (!stall || s+2>ITERATION_INDEX) begin
+                    final_quotient <= (quotient[s]<<BITS) | 32'(digit_next);
+                    final_remainder <= 32'(rem_next);
+                    final_q_neg <= q_neg[s];
+                    final_r_neg <= r_neg[s];
+                    final_rem_op <= rem_op[s];
+                end
+            end
         end else begin : registered_stage
             always_ff @(posedge clk) begin
                 if (reset) stage_valid[s+1] <= 1'b0;
@@ -156,8 +183,8 @@ module Divider
             end
         end
     end
-    wire [31:0] corrected_q=q_neg[STAGES-1] ? -final_quotient : final_quotient;
-    wire [31:0] corrected_r=r_neg[STAGES-1] ? -final_remainder : final_remainder;
-    assign data=rem_op[STAGES-1] ? corrected_r : corrected_q;
+    wire [31:0] corrected_q=final_q_neg ? -final_quotient : final_quotient;
+    wire [31:0] corrected_r=final_r_neg ? -final_remainder : final_remainder;
+    assign data=final_rem_op ? corrected_r : corrected_q;
 endmodule
 

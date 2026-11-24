@@ -16,16 +16,19 @@ Source-register interpretation belonged to decode, not branch prediction. The pr
 
 DispatchTop wires Fetch serve_rs1/serve_rs2 registers directly to ProducerTable read addresses. Decode consumes the same served identities and returned producer metadata, with its address pass-through outputs removed. Table ownership, capture-edge aging and correction timing retain their existing alignment. This wiring simplification may affect synthesis locality but has no measured timing result.
 
-Fetch now selects every serve payload field and FIFO head/occupied/free outcome before one register set. The speculative registered banks and prev_serve_consumed are removed. Combinational retain/refill outcomes remain to prepare values before the late serve_select_count. All fields and bookkeeping select the same outcome. Flush clears validity and queue state, while payload is irrelevant. Stall selects zero and permits vacancy refill. Same-edge FIFO pushes are still unavailable to refill, and admission still gives no pop credit.
+The oldest resolving branch drives the fetch PC on its advancing edge. BackendTop registers the redirect pulse and issue slot. During the following recovery cycle, staging may capture the target read. The CAM removes group zero and younger writers in group one, then advances survivors with their lanes unless an independent stall holds execution. Decode and Issue still use the youngest same-group destination for immediate correction. Branch-capable integer lanes compute sequential next_pc for link data and fall-through recovery.
+
+Fetch now selects every serve payload field and FIFO head/occupied/free outcome before one register set. The speculative registered banks and prev_serve_consumed are removed. Combinational retain/refill outcomes remain to prepare values before the late select (since 2026-11-23: serve_normal_count picks the normal outcome, then stall picks between it and the consumed-zero outcome). All fields and bookkeeping select the same outcome. Flush clears validity and queue state, while payload is irrelevant. Stall selects zero and permits vacancy refill. Same-edge FIFO pushes are still unavailable to refill, and admission still gives no pop credit.
 
 Decode relies on elaboration-time lane coverage for individual instructions. The distinct-lane check covers same-group serial conflicts because SYSTEM and CSR share lane zero. IssueContract checks live serial occupancy. The frontend lane model consumes only input age from the serial issuer packet because CSR integer operands require RF readiness and SYSTEM has no integer sources. FP-consumer classification ends at Decode readiness.
 
 InstructionMemory reads and captures halfword alignment every edge without payload
 reset; reset clears only response validity. Queue reset/validity gates consumption.
 
-Main implementation uses Default synthesis and RuntimeOptimized opt/place/route,
-without physical optimization. Standard routed reports/checkpoint are written directly
-after routing. frontend_retry.tcl remains a separate optional checkpoint experiment.
+Main implementation (Synthesis/Scripts/frontend.tcl) uses Default synthesis and
+RuntimeOptimized opt/place/route, without physical optimization. Checkpoints go to
+Synthesis/Build/frontend and the final routed reports to Synthesis/Reports/frontend.
+Synthesis/Scripts/frontend_retry.tcl remains a separate optional checkpoint experiment.
 
 
 
@@ -100,7 +103,8 @@ classes must deliver traps; noninteger lane execution remains unfinished.
 
 Issuer supplies Decode with issue_select_count: the unmasked normal contract count. Effective issue_consumed/acceptance still suppress reset and
 redirect. Decode uses the internal count for candidate selection; its validity,
-occupancy reset and outward serve_consumed independently enforce flush.
+occupancy reset and Fetch's own flush gating independently enforce flush (serve_consumed was
+replaced by the stall-free serve_normal_count on 2026-11-23).
 
 Decode producer snapshots now resolve retained/refill metadata separately for each
 constant consumption outcome, using registered occupancy. issue_select_count directly
@@ -2593,3 +2597,205 @@ Added completed 20261119_165304/09_hold_final in the current table format. Setup
 ## 2026-11-19 - Record single-issue RV32IMAFC retry
 
 Added completed 20261119_170138/09_hold_final to the existing main table. Setup WNS -1.141 ns at 2.500 ns yields 3.641 ns and 274.65 MHz. TNS -1203.129 ns, WHS +0.070 ns, THS zero, 2,045 LUTs and 1,427 registers. Parameters specify issue 1, FIFO 8, cache line 1, four total lanes, integer mask 1111, memory mask 111, floating mask 11, unroll 1 and FP_LOAD_RF_ONLY=1. The 2.500 ns single-issue late-control input model applies. Report and parameter inspection only.
+
+## 2026-11-19 - Connect frontend and backend under CoreTop
+
+Core/Top.sv connects the registered frontend lane packets directly to BackendTop and returns global stall. Fetch takes the backend redirect on the advancing edge so a held branch redirects once. Instruction fetch retains its local memory, leaving the ordered LSU bus as the external data interface. Serial busy is tied low pending serial execution, and precise trap handling remains open. Fetch/Queue.sv declares prediction_payload before its first use for SystemVerilog elaboration. Static elaboration only.
+
+## 2026-11-19 - Align branch recovery with backend advancement
+
+A taken branch reproduced stale integer producer indices at unroll 3 and 13. CoreTop now carries the oldest resolving branch's issue slot from BackendTop through FrontendTop and DispatchTop to ProducerTable. An advancing redirect drops the incoming younger group, masks younger slots of the resolving group, and advances all older owners normally. Issue preserves pre-WAW write valids for the CAM, while the immediate correction buffer retains its existing deduplication. CAM lookup gives priority to the youngest surviving slot. This costs a write-valid bit per issue slot and introduces same-group priority in the read path. The frontend OOC script applies the late-control delay model to the new redirect slot. Timing impact is unmeasured.
+
+IntegerLane generates sequential next_pc only in branch-capable lanes. Jumps write that value to rd and a predicted-taken branch that falls through redirects there. An invalidated operand wait cannot delay a redirect. Temporary whole-core Verilator checks passed at unrolls 1 and 13 with bypass and 3 without bypass. Checks covered physical producer identity after redirects, mixed dependency streams, all six branch conditions, full-width and compressed link writes, wrong-path stores, ALU/M operations and subword memory. No synthesis run.
+
+## 2026-11-19 - Register branch redirects and reserve one recovery cycle
+
+BackendTop latches the oldest redirect's target and issue slot when the resolving group advances. Local lane squashing still occurs on that edge so a younger AGU cannot enqueue a wrong-path store. CoreTop passes the registered event directly to Fetch and Dispatch. During its one-cycle pulse the backend holds lane positions and RF writeback, while accepted LSU requests may still return. Frontend validity and buffered writes clear on the recovery edge. Dispatch/ProducerTable repairs the already-shifted groups in place: invalidate group zero, trim group one at the resolving slot, and preserve all older owners and readiness. A preexisting global stall defers capture until the branch advances. An independent stall may keep execution held after recovery.
+
+This adds one recovery cycle per misprediction and removes the combinational branch decision from frontend flush and target selection. Reviewed stall/flush priority and LSU advancement statically. No synthesis or simulation run for this revision.
+
+## 2026-11-19 - Launch the target read before registered recovery
+
+BackendTop and CoreTop send the oldest advancing redirect and its target directly to the fetch PC. The resolving edge launches the synchronous instruction-memory read. IntegerLane and MemoryLane mask operand-stage validity combinationally on resolution and retain age-selective squashing for the executing group. The registered event suppresses backend input acceptance for the recovery cycle.
+
+FrontendTop and FetchTop route the early signal only to Queue's fetch PC and staging logic. Staging immediately masks old validity and rejects the old memory response. On the following edge the registered flush clears prediction, partial reconstruction, FIFO and dispatch state and repairs the producer CAM. A suppressed stale prediction cannot replace the target PC or prevent staging from capturing a valid target response with its request PC. A missing response keeps the target address pending. Fetched target data can therefore enter staging one cycle earlier, at the cost of a combinational backend-to-instruction-memory address path. The frontend OOC Tcl includes the early event in its late-control input group. Static signal tracing and whole-core elaboration only. No timing measurement.
+
+## 2026-11-19 - Remove redirect from the global stall cone
+
+BackendTop forms global stall from external backpressure and lane stall requests alone. IntegerLane and MemoryLane use packet presence before squash to qualify operand waits, while early redirect and registered recovery independently suppress execution validity. A waiting operand can therefore delay a redirect even if that operand will be squashed. Fetch redirect still fires only on an advancing resolution edge.
+
+Dispatch/ProducerTable invalidates wrong-path owners before selecting advance or hold. In recovery an independent stall repairs validity in place; otherwise the surviving owners advance one stage and the youngest incoming group is a bubble. Older lane results and LSU work can progress through recovery. Reviewed direct and operand-valid stall dependencies, CAM indexing, and elaborated CoreTop. No simulation, synthesis, or routed fanout measurement.
+
+## 2026-11-21 - Match integer memory producer ownership to execution
+
+Definitions.sv shares the integer producer write predicate between Dispatch/Issue.sv and Dispatch/Decode.sv. Ordinary memory operations claim an integer destination only for a load writing nonzero integer rd. Atomics and FP-register destinations are excluded. Capture-edge eligibility for integer loads still permits issue into operand select before the LSU completes. Backend/Execute/Memory/MemoryLane.sv advertises forwarding readiness only for a registered successful load with a valid destination. Stores retain their completion requirement at the final slot. This adds destination and success qualification to the memory ready path. Faulting loads rely on future precise trap recovery to release dependents. Static RTL inspection and diff check only.
+
+## 2026-11-21 - Register per-lane redirects; launch target with the recovery pulse
+
+The routed CoreTop critical path ran from the branch operand through compare, mispredict, oldest-redirect arbitration and the `redirect_pc` mux, into Fetch/Queue advance and prefetch_pc logic, to the instruction BRAM address: 8.665 ns (12 logic levels) at a 10 ns constraint. A backend-only run put the backend half at about 5.5 ns.
+
+Backend/Top.sv now registers each lane's raw redirect, age and PC on an advancing edge. There is no arbitration before the flop. In the following cycle a selector over those flops drives `redirect_pc` and `redirect_slot`, and pulses `redirect_fetch` and `redirect_taken` together. Lanes still squash younger work combinationally from the raw requests during resolution, so no wrong-path AGU or operand-stage packet survives. `recovery_flush` (= `redirect_taken`) kills the wrong-path packet that the frontend capture registers latched on the resolution edge.
+
+Frontend effect: the target read launches at the recovery edge instead of the resolution edge. Queue already gives `redirect_fetch` priority over the flush's commit and transfer gating, so firing both in one cycle needs no Queue change. The target response is captured one cycle after the flush, with recovery already over. ProducerTable alignment is unchanged: the branch has advanced exactly once when `redirect_taken` is seen, so group 1 still holds the resolving issue group. The comments on the `redirect_fetch` ports in Frontend/Top.sv, Fetch/Top.sv and Fetch/Queue.sv now describe the registered launch.
+
+Tradeoff: one extra cycle of fetch penalty per misprediction. All frontend redirect inputs now come from flops plus a lane-count selector. The frontend_ooc.tcl late-control input delays have not been revised to reflect that. Invariants: a lane request is captured only on an advancing edge, so a held branch redirects once. The recovery pulse is one cycle and is not stall-gated. Static review only; no simulation or synthesis.
+
+## 2026-11-21 - Redirect is no longer deferred by global stall
+
+Previously a resolving branch held by an unrelated global stall (operand wait, iteration, memory cutoff) did not redirect until it advanced, so every stall cycle added to the misprediction penalty. Backend/Top.sv now captures a fresh lane request on the first edge it appears, held or not. A per-lane `redirect_fired` flop is set when the capture edge is held and cleared when the branch advances. It blocks re-capture of the still-asserted raw request and gates the operand-stage kill in IntegerLane and MemoryLane (`any_redirect`), so correct-path packets that arrive after recovery are not killed. Execution-group squash (`stage_2_flush`) keeps using the raw request, so younger peers in the resolving group still die on the eventual advance.
+
+A new registered `redirect_advanced` bit travels through CoreTop, FrontendTop and DispatchTop to ProducerTable. Detection and recovery are separated by exactly one edge, so the resolving group is in CAM group 1 if that edge advanced and still in group 0 if it was held. ProducerTable trims at that group, discards everything younger plus the incoming buffered write, and preserves older groups. This applies to both the shift and the hold paths. Frontend capture registers and the Issue write buffer already clear on `redirect_taken` regardless of stall. Fetch, decode and refill proceed while the backend is still held.
+
+Invariants: one capture per branch instance; at most one edge between detection and recovery; `redirect_advanced` is meaningful only during `redirect_taken`. Tradeoffs: one flop per lane, one extra frontend-bound flop, and a 2:1 trim select in ProducerTable's validity filter. Static review only; no simulation or synthesis.
+
+The frontend and backend OOC Tcl add `redirect_advanced` to the late-control group.
+
+Same day, follow-up: removed the `redirect_fired` mask on the lane operand-stage kill (IntegerLane/MemoryLane `any_redirect`). Frontend capture registers load only when stall is low, and that stall is what holds the branch. The only packet present during the hold is the wrong-path one, which `redirect_taken` clears. On the release edge the branch advances as the new packet latches, so no packet is presented while a held branch is still asserting. `redirect_fired` remains in BackendTop only to prevent re-capture. Static reasoning only.
+
+## 2026-11-21 - Register memory-lane forwarding readiness
+
+Backend run (5 ns, frontend-contract output delay) showed `stall` out at -1.543 ns. The path ran memory slot `valid`, then a LUT deriving `forward_ready`, then consumer operand-wait select, the lane OR, and the port. MemoryLane's Slot now carries a `ready` bit computed from the next slot state (held-and-updated or shifted-in) and registered with the slot. `forward_ready_out` is a direct flop. Semantics are unchanged: valid, done, load, rd_valid and no trap, including a response captured during stall. This costs one flop per memory slot and moves the derivation onto the D side, where the late `response_valid`/`response_error` inputs now also feed `ready`. Expected to remove one LUT plus a route from the stall cone (unmeasured). Static review only.
+Late global stall only selects between precomputed held and shifted-in readiness, keeping stall at mux-select depth into the slot flops.
+
+## 2026-11-21 - Register divider iteration stall and integer final-slot readiness
+
+Divider.sv's `iteration_stall` was an OR of every stage valid from the iteration boundary to the output. It is now a single `busy` flop. Busy is set on the advancing edge an instruction latches into the first iteration-region register (the magnitude latch when the boundary is 0) and cleared on the edge the final stage's result is captured. No region at all (boundary beyond the last stage) ties it low. This relies on the existing invariant: an iterating instruction stalls everything upstream, so at most one instruction occupies the region and nothing is pipelined past it.
+
+IntegerLane's `forward_ready_out` was `iterative_done` ORed with a capability decode of the final slot. It is now `final_ready_q`. On an advancing edge it loads the inverse of "the incoming op is an iterating MUL/DIV". It sets on result capture (same priority as before), holds otherwise, and resets high. Semantics are unchanged; both stall and readiness are now direct flops in the global stall cone. Static review only.
+
+## 2026-11-21 - Prune operand forwarding select to real sources
+
+IntegerLane and MemoryLane indexed `forward_data`/`forward_ready` by the full registered lane and index fields. At the current configuration (4 lane IDs including the reserved serial lane 0, unroll 1) that synthesized an 8:1 select per operand, where only 3 entries are ever selected. The select now loops over lanes 1..N-1 and indices 1..EXECUTION_UNROLL. Index 0 is always the bypass path, and with bypass disabled Decode never makes an index-0 producer eligible. Lane 0 (serial) never forwards. At unroll 1 the index field is ignored, so each operand is a 3:1 lane select. Unmatched selections default to ready with don't-care data. BackendTop now drives inactive lanes' forward data as don't-care and their readiness as high, instead of leaving them undriven.
+
+Bypass review: Decode marks a producer bypass-eligible only for a newly issued CAP_ALU writer (`candidate_bypass_ready`), which reaches index 0 when the consumer is captured. Issue maps index 0 to `use_bypass`, and the lane selects the producer lane's combinational ALU result. BRU link writes, loads and iterating MUL/DIV are not bypass-eligible and wait for index 1 (final-slot readiness). A stall freezes producer and consumer together, so a held bypass stays valid. Static review only.
+The integer/memory operand select also excludes floating lanes (lane IDs above the integer and memory range). Serial lanes never forward, which is a deliberate routing-congestion choice, and floating lanes forward only internally.
+No-match is structurally impossible (every issued operand names a bypass, RF, or a real forward port), so unmatched readiness is now don't-care rather than ready.
+
+## 2026-11-21 - Reorganize the synthesis flow under Synthesis/
+
+Root-level Tcl moved to Synthesis/Scripts: frontend_ooc.tcl became frontend.tcl, cpu_ooc.tcl became cpu.tcl, and backend_ooc.tcl became backend.tcl; frontend_retry.tcl, worst_path.tcl and worst_hold_path.tcl kept their names. The shared common.tcl replaces vivado_clean.tcl. It provides root resolution (scripts locate the repository from their own path and `cd` to the root, so `program.hex` still resolves), per-flow Synthesis/Build/<flow> for checkpoints and the generated XDC, Synthesis/Reports/<flow> for final reports, cleanup, and the shared synth/opt/place/route sequence. Constraints, directives and the RuntimeOptimized implementation are unchanged, so results stay comparable with earlier runs. The part argument is optional on every flow (default xc7a100tcsg324-3), and output-directory arguments were dropped. The worst-path scripts and retry take a flow name or checkpoint path. References to build/frontend_ooc and the old script names in earlier entries are historical.
+
+
+## 2026-11-21 - Move ALU operand selection to the operand latch
+
+Backend run, 5 ns: the worst path (-1.409 ns) was the ALU bypass loop. Lane 2's registered `alu.source` (fanout 184) drove the lhs/rhs select, then an SLT compare carry chain, then four LUT levels of result mux, then `bypass_data` (fanout 7), then lane 1's operand mux and `source_1`. IntegerLane now resolves PC/zero/immediate operands while latching `source_1`/`source_2` for CAP_ALU ops, and ArithmaticUnit takes final `lhs`/`rhs` with no source port. This also removes the case-with-default the old operand select had. The operand mux was restructured so every select is from registered payload. Forward/RF/zero/override values form an early value, and bypass data enters last through one 2:1. Bypass is suppressed when an override or an invalid source applies. Other units in the lane (BRU, MUL, DIV) are unaffected because overrides apply only to CAP_ALU ops; the result-select depth is unchanged. Expected to remove about one LUT plus the fanout-184 route from the loop (unmeasured). Static review only.
+
+Same day, follow-up: the ALU operation is also decoded at the operand latch. IntegerLane registers an `AluControl_` (Definitions.sv) alongside `source_1`/`source_2`: one-hot result selects plus subtract and arithmetic-shift flags. ArithmaticUnit now has a flat AND-OR result select over those flops instead of a case on the enum, so result bit 0's eight candidates need about two LUT levels instead of four. This adds 10 flops per ALU lane and moves the decode before the operand register. If that side becomes critical, the decode can move back a stage. Static review only.
+
+## 2026-11-21 - Register the divider's final digit step
+
+With radix 4 (DIVIDER_AUTO_PIPE = 2, 16 digit stages), the worst backend path (-1.031 ns at 5 ns) was the combinational final stage. It ran the final trial subtract, the digit choice (fanout 95), the remainder negate, the rem/quotient select and the lane capture mux into `data_payload[2]` with 16 CARRY4 in one cycle. Divider.sv now registers the raw final quotient/remainder and sign flags (`stage_valid[STAGES]`), and sign correction plus selection feed the lane capture in the next cycle. Divide latency rises by one cycle. Updated to match: the iteration-region bound (`ITERATION_INDEX > STAGES+1` means no region), `valid_out`, IntegerLane `DIV_RESULT_LATENCY` (+1, which drives DIV_RESULT_STAGE and DIV_ITERATES), and Definitions `producer_capture_ready` `div_ready` (+1). The `busy` register's entry and exit logic is unchanged, since exit follows `valid_out`. Static review only.
+
+## 2026-11-21 - Memory-lane presence is the accept bit alone
+
+Backend run, 5 ns: the worst path (-0.837 ns) ran from the `decoder_packet[3]` capability input through a LUT3, the lane OR and the global OR to the `stall` output. MemoryLane's `input_valid` re-checked capability, load/store operation and FP register class on top of `accept`. Issue already guarantees lane compatibility (IntegerLane uses `accept` alone), so the check was redundant on the operand-stall path. `input_valid = accept` now. If Issue ever sends an unsupported op to a memory lane, that is an upstream contract violation, not something this lane filters. Static review only.
+
+## 2026-11-21 - Backend OOC: model register-launched inputs from a real clock pin
+
+The backend.tcl issue-packet input delay (1.3 ns) bundled clock-to-output with a boundary-route guess, and Vivado then added its own unplaced port-net estimate on top, so the route was counted twice. It also used the ideal-clock frame, which ignores the clock insertion that the launching frontend flops share with the backend's. Issue packets, accept, memory response data and bus handshake inputs are now constrained after synthesis (a `backend_post_synth` hook called by common.tcl's anvil_implement) with `-reference_pin` on a backend register clock pin. The values are only the launching cell's clock-to-output: issue/flags 0.40 max / 0.30 min, RAMB36 DO 1.80 / 0.60. The port net stands in for the boundary route. Reset and external_stall delays and all output delays are unchanged. This starts a new backend comparison series. Unmeasured.
+
+## 2026-11-21 - Split lane stall into operand and iteration outputs
+
+IntegerLane and MemoryLane no longer combine their stall terms. Each exports `operand_stall_out` and `iteration_stall_out`, and BackendTop's single OR takes all of them plus `external_stall`, so placement can centre one stall tree instead of chaining per-lane ORs.
+- `operand_stall_out` = operand present && some source needs forwarding from an unready slot && the packet has no trap. A trapped packet needs no operands.
+- `iteration_stall_out` is a direct flop. IntegerLane: MUL step / DIV busy. MemoryLane: a new registered `pending` slot bit (valid && !done), computed from the next slot state like `ready`.
+MemoryLane's stall no longer ANDs `reset_active`: slot pending clears on reset, and frontend accept is reset. Static review only.
+
+## 2026-11-21 - Remove global stall from idempotent backend enables
+
+Three classes of enable used `stall` without needing it for correctness:
+- **RF write enables.** IntegerLane `result_ready` was `valid && !stall && !trap && rd_valid`. It is now `valid && final_ready_q && !trap && rd_valid`. A held final slot rewrites the same register with the same value each cycle. `final_ready_q` keeps an unfinished iterating MUL/DIV result out of the RF, and no reader can see the interim state: younger consumers of rd map to this slot (forward/wait), and older ones already hold their operands. MemoryLane `result_ready` is now the registered `last.ready` flop (completed, successful load with rd).
+- **Unit result capture.** `capture_mul`/`capture_div` were gated by `!stall` when not iterating. Unit pipelines hold under stall, so recapture writes the same value and the gate is dropped.
+
+This removes `stall` from every RF register write enable (per destination, per port) and from the result-stage capture selects. Stall still drives pipeline payload/valid/operand enables, the MemoryLane slot hold select, LSU enqueue, unit stage enables and redirect capture, all of which need it. Precise traps later must revisit idempotent RF writes if a held final-slot instruction can be cancelled. Static review only.
+
+## 2026-11-21 - Align cpu.tcl with the backend run
+
+cpu.tcl now defaults to a 5 ns period (an optional second argument sets it), down from 10 ns. Its data-bus model is shared with backend.tcl through common.tcl `anvil_bus_constraints`: inputs use `-reference_pin`, RAMB36 DO is 1.80/0.60, handshake flags 0.40/0.30, request payload output delay 1.00 and handshake 1.30. The previous model applied 1.0 ns ideal-frame inputs and a 0 ns output delay on every output. Reset is unchanged. Frontend/backend boundary paths are internal in CoreTop, so comparing this run with backend.tcl separates real dependency from modeled port budgets. This starts a new CoreTop comparison series. Not run.
+
+Same day, follow-up: dropped the trap qualification from `operand_stall_out` in both lanes. The `trap_type` compare pushed each operand term past one LUT6, giving 4 levels in the stall tree. A trapped packet waiting on an operand costs only a few cycles in a rare case.
+
+## 2026-11-21 - First CoreTop run at 5 ns; take redirect off LSU payload enables
+
+The first cpu.tcl run at 5 ns had WNS -0.482 ns (about 182 MHz). The worst path went from lane 1's `source_2` (fanout 153, 1.36 ns route) through the BRU compare, `actual_taken`, `redirect`, the memory lane's `stage_2_flush`, `request_valid` and the LSU enqueue enable, to the R pin of `queue[0].data` (0.31 ns R setup).
+- IntegerLane: dedicated `bru_source_1/2` registers were added and then reverted the same day. They would load the operand mux, which is likely critical, and the LSU change alone targets this path.
+- LoadStoreUnit takes `candidate` (MemoryLane `request_candidate` = `request_valid` before redirect squash) for payload write enables and enqueue rank, and keeps `pending` for occupancy (`pushes`, `tail`, `unsent`). Invariant: redirect kills only the youngest requests of a group (age > redirect age), and misaligned traps are already excluded from candidates, so a survivor's candidate rank equals its pending rank. A squashed candidate writes a slot at or past the new tail; that slot is free because a full batch always fits, and it is overwritten before it can be sent. The payload write also drops its `!reset` term (pointers reset; payload is don't-care).
+
+Redirect now reaches only the LSU counters. Static review only.
+
+## 2026-11-22 - LSU enqueue-then-retract for redirect-squashed requests
+
+The second CoreTop run at 5 ns had WNS -0.413 ns. The path was `source_2` (fanout 183), the BRU compare, `redirect`, the memory lane's same-group kill, `pending`, the LSU `pushes` count and the `unsent` counter D. The earlier candidate split had removed the redirect from payload writes, but occupancy still counted only surviving requests.
+
+LoadStoreUnit now counts candidates into `tail`/`unsent` at enqueue. The redirect reaches the LSU only through `squashed = candidates - pending`, registered as `squashed_q`. The next cycle uses `live_tail = tail - squashed_q` for enqueue position and the new tail, `sendable = unsent - squashed_q` for `request_valid`, and folds the retraction into the counter update.
+
+Invariants:
+- Redirect kills only requests younger than the branch within its group, so squashed entries are always the youngest at the tail.
+- `request_valid` uses `sendable`, so a squashed entry is never presented, even if every older entry has already been sent.
+- Squashed slots are free again from `live_tail` before the next batch writes. Capacity is unchanged, since a full batch always fits.
+- `awaiting_response`, `return_head` and response routing are untouched; squashed entries are never sent, so they never expect a response.
+
+The redirect now ends at one small register, at roughly the same depth as the slot valid bits it already feeds. The cost is a 2-bit register plus two small subtracts from flops: on `request_valid`, a bus output, and on the enqueue position. No latency change. STALL_AND_REDIRECT.md and ARCHITECTURE.md now describe the retraction. Static review only; not simulated or synthesized.
+
+## 2026-11-22 - Restrict index-zero bypass to fast ALU operations
+
+Third CoreTop run, 5 ns: WNS -0.525 ns. The worst path was the ALU bypass loop: `source_1` (fanout 93, 1.35 ns), the SLT/SLTU compare carry chain, a three-level AND-OR select on result bit 0 (eight candidates), `bypass_data` (fanout 7) and the consumer's 2:1 into `source_2`.
+
+Bypass eligibility now excludes compares and shifts. `Definitions::alu_bypassable` (add, sub, xor, or, and) is checked by Decode's `candidate_bypass_ready`, the only place index-zero eligibility is granted: retained snapshots, buffered writers and CAM entries all describe producers at index one or later at capture. A consumer of an SLT/SLTU/shift result issued in the next group is therefore held by the existing readiness logic until the registered forward at index one, not given a bad bypass. ArithmaticUnit adds `bypass_result`, a four-term AND-OR over the adder and bitwise logic, which IntegerLane exports as `bypass_data_out`. The full `result` still feeds `data_payload[2]`.
+
+Invariant: the eligibility set and the bypass output set must match; both reference the same function and comment. Tradeoff: one extra cycle when an SLT/SLTU/SLL/SRL/SRA result feeds the very next issue group. The comparator and barrel shifter leave the bypass loop. Static review only; not simulated or synthesized.
+
+## 2026-11-22 - One-LUT bypass result and pruned consumer bypass select
+
+Two changes to the ALU bypass loop, following an RTL audit of its exact fan-in:
+- **Producer (ArithmaticUnit).** The three one-hot bitwise selects in `AluControl_` became a 2-bit `AluLogic_` code (`logic_op`: none/xor/or/and). Each `bypass_result` bit is now `control.sum & sum[i] | f(logic_op, lhs[i], rhs[i])`: six inputs, so one LUT6 straight after the carry chain. Before, it had seven inputs and needed two levels. The full `result` reuses `bypass_result` plus the shift and compare terms. The fan-in of `bypass_result` is exactly `lhs`, `rhs`, `subtract`, `sum` and `logic_op`.
+- **Consumer (IntegerLane).** `bypass_data_1/2` were indexed by the full lane field over every lane ID. The select now loops only over ALU-capable integer lanes (`EFFECTIVE_INTEGER_CAPS[lane-1][0]`) with a don't-care default, matching the operand-source invariant. At two ALU lanes it is a 2:1 on one lane bit, which can merge with the final 2:1 into the operand register.
+
+Expected (unmeasured): about one LUT level fewer on each side of the bypass loop. Static review only.
+
+## 2026-11-22 - Post-place fanout optimization in all flows
+
+Fourth CoreTop run, 5 ns: WNS -0.199 ns. The worst path was the multiplier's first stage: `source_1` (fanout 88, 1.38 ns route), partial-product generation and three carry-save levels into `product_vector`, with 78% of it routing. The four most recent worst paths all began at lane `source_1`/`source_2` (fanout 88-183, 1.2-1.4 ns first net).
+
+common.tcl `anvil_implement` now runs `phys_opt_design -directive AggressiveFanoutOpt` between `place_design` and `route_design`, which covers backend.tcl, frontend.tcl and cpu.tcl. It replicates high-fanout drivers near their placed loads without RTL changes, so the operand mux's own load is unchanged. frontend_retry.tcl is post-route only and keeps its own explicit pass list. This is an implementation-setting change, so it starts a new comparison series for every flow; ARCHITECTURE.md notes it above the frontend table. Unmeasured.
+
+## 2026-11-22 - Multiplier: move compression pass 6 into the adder stage
+
+Fifth CoreTop run (5 ns, with the AggressiveFanoutOpt pass): WNS -0.284 ns. The worst path was again multiplier step 1: `source_2` (fanout 85, 1.42 ns; phys_opt did not replicate it), partial-product generation and five compression LUT levels into `product_vector`. Logic was 1.14 ns and routing 4.0 ns.
+
+Multiplier.sv step 1 now registers the six rows after compression pass 5 (`product_vector[0:5]`). Step 2 runs pass 6 (6 rows to 4) ahead of the existing four-input 64-bit addition and the low/high select. There is no latency change. The cost is 128 more flops, plus one 3:2 level ahead of the final adder in step 2, whose slack has not yet been observed. This departs from the standalone-tuned split in ARCHITECTURE.md (6 compressions in step 1, 4 vectors), which was measured out of context at 4.321 ns. Static review only.
+
+## 2026-11-23 - Precompute the normal serve pop; stall only as the final select
+
+Sixth CoreTop run, 5 ns: WNS -0.305 ns. The worst path was the full stall round trip. It ran from a frontend capture flop (`issuer_packet[3].forward_lane_2`) through the memory lane's ready select and operand combine and the global stall OR (four LUTs). `stall` then fanned out to 1129 loads (0.94 ns), into Decode's `serve_select_count = stall ? 0 : normal` and from there into Queue's outcome selection and `fifo_head`, four more LUTs.
+
+Decode now exports only the stall-free `serve_normal_count` (its existing `serve_consumed_normal`). The `serve_consumed` and `serve_select_count` outputs are gone from Decode, DispatchTop, FrontendTop and FetchTop. FetchTop and Queue take `stall` directly.
+- **Queue serve window, `fifo_head`, `fifo_occipied_slots`:** the outcome indexed by `serve_normal_count` is selected first, from stall-free logic. `stall` then picks between it and the consumed-zero outcome (`serve_selected`, `head_selected`, `occupied_selected`). A stalled cycle still takes the consumed-zero outcome, which can refill empty serve slots, so this is a late 2:1 between outcomes rather than a clock enable.
+- **`real_pc`:** the consumed PC step comes from `serve_normal_count`, gated by reset, `reset_reg` and `redirect_taken` (all early). `stall` is the register's hold (`else if (!stall)`), and `redirect_fetch` keeps priority.
+
+Invariants: on a stalled cycle every structure selects the same outcome as before (consumed zero), and on a non-stalled cycle the same as before (the normal count). Flush still clears validity and queue state, and redirect still has priority for `real_pc`. Expected (unmeasured): `stall` reaches these registers through one 2:1 level or a hold instead of four LUTs. Static review only; not simulated or synthesized.
+
+## 2026-11-23 - Precompute operand waits in Issue as per-slot watch bits
+
+Seventh CoreTop run, 5 ns: WNS -0.291 ns. The worst path was the stall round trip again: memory slot `ready`, four LUTs of stall generation (per-operand ready select, operand combine, two-level OR), `stall` (fanout 1223, 1.17 ns), then a shared select decode Vivado re-extracted in the Queue serve window.
+
+Issue now computes `watch[lane][index]`. A bit is set when any accepted integer- or memory-lane packet in the group has an operand that is valid, not read from the RF, not bypassed, and forwarded from that producer slot. These are the same terms the lanes used for `operand_stall`. It uses ungated acceptance (`accept_raw`), so stall stays out of the cone. Only dynamic-ready slots get a bit, from the new `Definitions::forward_slot_dynamic`: the integer final slot of a lane whose MUL or DIV iterates (matching IntegerLane MUL_ITERATES/DIV_ITERATES), and memory slots 1..EXECUTION_UNROLL. Statically ready integer slots, FP lanes and serial lanes contribute nothing. With the current configuration that is two bits: lane 1's final slot and memory slot 1.
+
+DispatchTop passes `watch` out, and FrontendTop registers it with the lane packets under the same rule as `accept_vector` (clear on reset/redirect_taken, hold on stall). CoreTop wires it to BackendTop, where `stall = external_stall | OR(watch & !forward_ready over dynamic slots) | OR(iteration_stall)`. Every input is a flop: about two LUT levels instead of four. IntegerLane and MemoryLane no longer export `operand_stall_out`. backend.tcl adds `watch[*]` to the register-launched issue inputs.
+
+Invariants: `operand_present` is `accept` alone, so the precompute is exact. The operand-source invariant guarantees every forwarded operand names a real slot, and a statically ready slot never needs a wait. `forward_slot_dynamic` must stay in step with the lanes' iteration rules. Scaling: watch width grows with dynamic producer slots, not consumer lanes; consumer growth lands in Issue's OR in front of a capture register. FP lanes' own dynamic operand search is out of scope. Static review only; not simulated or synthesized.
+
+## 2026-11-23 - Multiplier: move compression pass 5 into the adder stage as well
+
+Eighth CoreTop run, 5 ns: WNS -0.038 ns. The stall round trip and the ALU bypass loop no longer appear at the top. The worst path was multiplier step 1 at its post-pass-6 depth: `source_2` (fanout 91, 1.53 ns), a partial-product LUT merged with a pass-2 term, then passes 3-5 into `product_vector`, with 0.23 ns of adverse clock skew from operand-register placement.
+
+Multiplier.sv step 1 now registers the eight rows after compression pass 4 (`product_vector[0:7]`). Step 2 runs passes 5 (8 to 6) and 6 (6 to 4) ahead of the four-input 64-bit addition and the low/high select. No latency change. Cost: 128 more flops (8x64 instead of 6x64) and two 3:2 levels in front of the final adder in step 2, whose slack has still not appeared in any report. ARCHITECTURE.md's in-core note is updated. Static review only.
+
+## 2026-11-23 - Registered WAW conflict mask for RF write enables
+
+Ninth CoreTop run, 5 ns: WNS -0.175 ns. The worst path was the RF write enable. It ran from lane 2's final-slot `trap_type`, through `result_ready` (fanout 35) and the memory port's same-cycle WAW dedup (5-bit `write_addr` compare plus age compare against every other ready port), then the per-register decode (fanout 32) and a 1.65 ns net, to `register_file[1][16]`.
+
+IntegerLane and MemoryLane export `next_result_destination`/`next_result_age`: the rd and issue age that enter the final slot on the next advancing edge. That is stage LAST-1 for integer lanes, and the AGU stage (unroll 1) or `slots[UNROLL-1]` for memory lanes. BackendTop registers `conflict[i][j]` (port j younger, same rd) under `!stall` and holds it otherwise, since final-slot rd and age never change while held. `write_en[i] = result_ready[i] && !reset && !OR_j(conflict[i][j] && result_ready[j])`: flops only, with no address or age compare.
+
+Invariant: the mask ignores validity, rd_valid, traps and the redirect kill (`stage_2_flush`), all of which are in `result_ready[j]`. A flushed, trapped or not-yet-ready younger writer therefore never suppresses an older one, which matches the previous behaviour, and the redirect stays out of the mask's cone. Cost: RF_LANES^2 flops (9 at three ports) and two small exports per lane. Static review only.
+

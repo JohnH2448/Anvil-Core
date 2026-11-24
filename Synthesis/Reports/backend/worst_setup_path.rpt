@@ -1,0 +1,75 @@
+Checkpoint: C:/Users/johnc/Downloads/Anvil-Core/Synthesis/Build/backend/backend_routed.dcp
+Generated: Sat Nov 21 23:23:38 -0600 2026
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date         : Sat Nov 21 23:23:38 2026
+| Host         : JohnsComputer running 64-bit major release  (build 9200)
+| Command      : report_timing -delay_type max -max_paths 1 -nworst 1 -path_type full_clock_expanded -input_pins -return_string
+| Design       : BackendTop
+| Device       : 7a100t-csg324
+| Speed File   : -3  PRODUCTION 1.23 2018-06-13
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (VIOLATED) :        -1.173ns  (required time - arrival time)
+  Source:                 issuer_packet[1][forward_lane_2][0]
+                            (input port clocked by backend_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            stall
+                            (output port clocked by backend_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             backend_clk
+  Path Type:              Max at Slow Process Corner
+  Requirement:            5.000ns  (backend_clk rise@5.000ns - backend_clk rise@0.000ns)
+  Data Path Delay:        2.744ns  (logic 0.388ns (14.139%)  route 2.356ns (85.861%))
+  Logic Levels:           4  (LUT5=2 LUT6=2)
+  Input Delay:            0.400ns
+  Output Delay:           1.750ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock backend_clk rise edge)
+                                                      0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=3424, unset)         1.243     1.243    clk
+    SLICE_X56Y90                                                      r  redirect_advanced_reg/C
+  -------------------------------------------------------------------    -------------------
+                         input delay                  0.400     1.643    
+                                                      0.000     1.643 r  issuer_packet[1][forward_lane_2][0] (IN)
+                         net (fo=64, unset)           0.704     2.347    lanes[1].integer_lane.lane/issuer_packet[1][forward_lane_2][0]
+    SLICE_X55Y87                                                      r  lanes[1].integer_lane.lane/stall_INST_0_i_13/I4
+    SLICE_X55Y87         LUT5 (Prop_lut5_I4_O)        0.097     2.444 f  lanes[1].integer_lane.lane/stall_INST_0_i_13/O
+                         net (fo=1, routed)           0.585     3.029    lanes[1].integer_lane.lane/stall_INST_0_i_13_n_0
+    SLICE_X55Y88                                                      f  lanes[1].integer_lane.lane/stall_INST_0_i_9/I0
+    SLICE_X55Y88         LUT6 (Prop_lut6_I0_O)        0.097     3.126 r  lanes[1].integer_lane.lane/stall_INST_0_i_9/O
+                         net (fo=1, routed)           0.096     3.222    lanes[1].integer_lane.lane/gen_mul.multiplier/stall_4
+    SLICE_X55Y88                                                      r  lanes[1].integer_lane.lane/gen_mul.multiplier/stall_INST_0_i_4/I5
+    SLICE_X55Y88         LUT6 (Prop_lut6_I5_O)        0.097     3.319 r  lanes[1].integer_lane.lane/gen_mul.multiplier/stall_INST_0_i_4/O
+                         net (fo=1, routed)           0.267     3.586    lanes[1].integer_lane.lane/gen_mul.multiplier/stall_INST_0_i_4_n_0
+    SLICE_X53Y87                                                      r  lanes[1].integer_lane.lane/gen_mul.multiplier/stall_INST_0/I3
+    SLICE_X53Y87         LUT5 (Prop_lut5_I3_O)        0.097     3.683 r  lanes[1].integer_lane.lane/gen_mul.multiplier/stall_INST_0/O
+                         net (fo=32, unset)           0.704     4.387    stall
+                                                                      r  stall (OUT)
+  -------------------------------------------------------------------    -------------------
+
+                         (clock backend_clk rise edge)
+                                                      5.000     5.000 r  
+                         clock pessimism              0.000     5.000    
+                         clock uncertainty           -0.035     4.965    
+                         output delay                -1.750     3.215    
+  -------------------------------------------------------------------
+                         required time                          3.215    
+                         arrival time                          -4.387    
+  -------------------------------------------------------------------
+                         slack                                 -1.173    
+
+
+
+
+

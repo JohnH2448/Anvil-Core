@@ -1,5 +1,19 @@
 package Definitions;
 
+    // Bitwise operation as a 2-bit code, so each bypass bit is one LUT6:
+    // sum[i], control.sum, lhs[i], rhs[i] and this code.
+    typedef enum logic [1:0] {
+        LOGIC_NONE, LOGIC_XOR, LOGIC_OR, LOGIC_AND
+    } AluLogic_;
+
+    // ALU controls decoded at the operand latch. sum, shift_left, set_less,
+    // set_less_unsigned, shift_right and a non-NONE logic code are mutually exclusive.
+    typedef struct packed {
+        logic sum, shift_left, set_less, set_less_unsigned, shift_right;
+        AluLogic_ logic_op;
+        logic subtract, arithmetic_shift;
+    } AluControl_;
+
     // Branch Predictor Inputs
     typedef struct packed {
         DerivedParameters::fetch_pc_t bp_pc;
@@ -134,6 +148,46 @@ package Definitions;
     } IssuerPacket_;
 
 
+    function automatic logic writes_integer_producer(input DecoderPacket_ packet);
+        return packet.common.rd_valid && !packet.common.rd_float && packet.common.rd != 0 &&
+            packet.common.capability != Enumerations::CAP_ATOMIC &&
+            (packet.common.capability != Enumerations::CAP_MEMORY ||
+             packet.memory.operation == Enumerations::MEM_LOAD);
+    endfunction
+
+    // Producer slots whose forwarding readiness can be low. Integer slots are
+    // statically ready except the final slot of a lane whose MUL or DIV
+    // iterates; memory slots 1..EXECUTION_UNROLL wait on the LSU. Only integer
+    // and memory lanes forward to integer/memory consumers (serial lanes never
+    // forward; FP lanes search their own operands). Issue's watch bits and
+    // BackendTop's stall OR are both generated from this function, and it must
+    // match IntegerLane's MUL_ITERATES/DIV_ITERATES.
+    function automatic logic forward_slot_dynamic(input int lane, input int index);
+        int div_latency;
+        div_latency = (32 + Parameters::DIVIDER_AUTO_PIPE - 1) / Parameters::DIVIDER_AUTO_PIPE + 2;
+        if (lane >= 1 && lane <= Parameters::INTEGER_LANE_COUNT) begin
+            return index == Parameters::EXECUTION_UNROLL &&
+                ((DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane-1][2] && Parameters::EXECUTION_UNROLL == 1) ||
+                 (DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane-1][3] && Parameters::EXECUTION_UNROLL <= div_latency));
+        end
+        if (lane > Parameters::INTEGER_LANE_COUNT &&
+            lane <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT) begin
+            return DerivedParameters::EFFECTIVE_MEMORY_CAPS[lane-1-Parameters::INTEGER_LANE_COUNT][0] &&
+                index >= 1 && index <= Parameters::EXECUTION_UNROLL;
+        end
+        return 1'b0;
+    endfunction
+
+    // Index-zero bypass eligibility for an ALU producer. Only operations whose
+    // result is a short AND-OR over the adder and bitwise logic are bypassed;
+    // compares and shifts reach consumers through the registered forward at
+    // index one. Decode's candidate_bypass_ready and the lane's bypass output
+    // (ArithmaticUnit bypass_result) must agree on this set.
+    function automatic logic alu_bypassable(input Enumerations::AluOperation_ operation);
+        return operation inside {Enumerations::ALU_ADD, Enumerations::ALU_SUB,
+            Enumerations::ALU_XOR, Enumerations::ALU_OR, Enumerations::ALU_AND};
+    endfunction
+
     // Eligibility after one advancing edge. Thresholds are shifted back by one
     // so no incrementer or stall-controlled mux precedes the one-bit table read.
     // This is not index-zero bypass eligibility for newly issued producers.
@@ -147,15 +201,18 @@ package Definitions;
         // Configuration-only arithmetic folds to constants at each call site.
         // Compare before capability selection: never subtract from a threshold
         // selected by capability, which can infer a wide carry chain.
-        div_ready = (32 + divider_auto_pipe - 1) / divider_auto_pipe + 2;
+        // Includes the divider's registered raw-result stage ahead of sign correction.
+        div_ready = (32 + divider_auto_pipe - 1) / divider_auto_pipe + 3;
         if (index >= execution_unroll + 1) return 1'b1; // RF after capture
         // FP-produced integer results are usable only once captured into RF.
         if (Parameters::SUPPORT_FLOAT &&
             capability inside {Enumerations::CAP_FP_F, Enumerations::CAP_FP_CONVERT})
             return 1'b0;
         case (capability)
-            Enumerations::CAP_ALU,
-            Enumerations::CAP_BRU, Enumerations::CAP_MEMORY: return 1'b1;
+            Enumerations::CAP_ALU, Enumerations::CAP_BRU: return 1'b1;
+            // The load has a forwarding slot after capture. Operand selection
+            // waits for that slot's registered LSU completion when necessary.
+            Enumerations::CAP_MEMORY: return 1'b1;
             Enumerations::CAP_MUL: begin
                 if (execution_unroll <= 1) return 1'b1;
                 return index >= 1;

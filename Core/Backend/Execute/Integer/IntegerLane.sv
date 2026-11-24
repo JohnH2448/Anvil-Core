@@ -7,6 +7,7 @@ module IntegerLane
     parameter unsigned IS_BRU = 1,
     parameter unsigned IS_MUL = 1,
     parameter unsigned IS_DIV = 1,
+    parameter bit REGISTERED_INPUT = 1'b0,
     parameter unsigned EXECUTION_UNROLL = 1, // execution stages (min 1)
     parameter unsigned BYPASS_ENABLED = 1, // worth considering for only alu, no bru
     parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
@@ -21,6 +22,7 @@ module IntegerLane
     input DecoderPacket_ decoder_packet,
     input IssuerPacket_ issuer_packet,
     input logic accept,
+    input logic recovery_flush, // Applies to the frontend-registered input.
 
     // Forwarding Inputs
     input logic [31:0] forward_data [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0], // used by all valid int forward points
@@ -46,13 +48,19 @@ module IntegerLane
     output logic [31:0] redirect_pc_out,
 
     // Stall Controls
-    output logic stall_out,
+    // Kept separate so BackendTop's single stall OR takes every term directly.
+    output logic iteration_stall_out, // Registered structural hold.
     input logic stall, // top needs to or all outs and pass an in
 
     // Result Broadcast
     output logic [31:0] result_data,
     output logic [4:0] result_destination,
     output logic [AGE_WIDTH-1:0] result_age, 
+    // Destination and age of the instruction that enters the final slot on the
+    // next advancing edge. BackendTop registers same-cycle WAW conflicts from
+    // these, so no address/age compare sits on the RF write enable.
+    output logic [4:0] next_result_destination,
+    output logic [AGE_WIDTH-1:0] next_result_age,
     output logic result_ready, 
     output logic result_trap,
 
@@ -77,7 +85,8 @@ module IntegerLane
     // Stage 0 is decode, stage 1 selects operands, execution starts at 2.
     localparam int unsigned LAST_EXECUTION_STAGE = EXECUTION_UNROLL + 1;
     localparam int unsigned MUL_RESULT_STAGE = LAST_EXECUTION_STAGE < 3 ? LAST_EXECUTION_STAGE : 3;
-    localparam int unsigned DIV_RESULT_LATENCY = (32 + DIVIDER_AUTO_PIPE - 1) / DIVIDER_AUTO_PIPE + 1;
+    // Digit stages plus the magnitude latch and the registered raw result.
+    localparam int unsigned DIV_RESULT_LATENCY = (32 + DIVIDER_AUTO_PIPE - 1) / DIVIDER_AUTO_PIPE + 2;
     localparam int unsigned DIV_RESULT_STAGE = LAST_EXECUTION_STAGE < DIV_RESULT_LATENCY + 2 ?
         LAST_EXECUTION_STAGE : DIV_RESULT_LATENCY + 2;
     localparam bit MUL_ITERATES = EXECUTION_UNROLL == 1;
@@ -99,6 +108,7 @@ module IntegerLane
 
     // Stall Causation Declarations
     logic operand_stall;
+    logic operand_present; // Registered packet presence, independent of combinational squash.
     logic iteration_stall;
     logic mul_iteration_stall;
     logic div_iteration_stall;
@@ -109,11 +119,14 @@ module IntegerLane
     if (!IS_DIV) begin : gen_div_stall
         assign div_iteration_stall = 1'b0;
     end
-    assign stall_out = (operand_stall && valid_payload[0]) || iteration_stall;
+    logic any_redirect;
+    // Operand waits are no longer formed here: Issue precomputes per-slot watch
+    // bits and BackendTop combines them with forward_ready. The equivalent local
+    // condition is operand_present && operand_stall.
+    assign iteration_stall_out = iteration_stall;
 
     // Stage 2 Flush Logic
     logic stage_2_flush;
-    logic any_redirect;
     always_comb begin
         stage_2_flush = 1'b0;
         any_redirect = 1'b0;
@@ -127,37 +140,84 @@ module IntegerLane
 
     // Payload advances through bubbles; validity has one owner below.
     // Global stall must still preserve the packet waiting for operands.
-    always_ff @(posedge clk) begin
-        if (!stall) begin
-            decoder_payload[0] <= decoder_packet;
-            issuer_payload[0] <= issuer_packet;
+    wire input_valid = accept;
+    if (REGISTERED_INPUT) begin : frontend_capture
+        assign decoder_payload[0] = decoder_packet;
+        assign issuer_payload[0] = issuer_packet;
+        assign operand_present = input_valid;
+        assign valid_payload[0] = operand_present && !any_redirect && !recovery_flush;
+    end else begin : local_capture
+        logic captured_valid;
+        assign operand_present = captured_valid;
+        assign valid_payload[0] = operand_present && !any_redirect;
+        always_ff @(posedge clk) begin
+            if (reset_active) captured_valid <= 1'b0;
+            else if (!stall) captured_valid <= input_valid && !any_redirect;
+            if (!stall) begin
+                decoder_payload[0] <= decoder_packet;
+                issuer_payload[0] <= issuer_packet;
+            end
         end
     end
 
     // Forwarding Decision and Stall Logic
+    // Registered forwarding comes only from integer and memory lanes at indices
+    // 1..EXECUTION_UNROLL. Index 0 is bypass. Serial lane 0 never forwards, by
+    // design, to limit routing. Floating lanes forward only among themselves.
+    // At unroll 1 the index field is ignored, so each source is a lane-select only.
     logic [31:0] forward_data_1;
     logic [31:0] forward_data_2;
+    logic forward_ready_1, forward_ready_2;
     always_comb begin
-        forward_data_1 = forward_data[issuer_payload[0].forward_lane_1][issuer_payload[0].forward_index_1];
-        forward_data_2 = forward_data[issuer_payload[0].forward_lane_2][issuer_payload[0].forward_index_2];
+        forward_data_1 = 'x;
+        forward_data_2 = 'x;
+        forward_ready_1 = 1'bx; // Unmatched is structurally impossible.
+        forward_ready_2 = 1'bx;
+        for (int lane = 1; lane <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT; lane++) begin
+            for (int index = 1; index <= EXECUTION_UNROLL; index++) begin
+                if (issuer_payload[0].forward_lane_1 == LANE_WIDTH'(lane) &&
+                    (EXECUTION_UNROLL == 1 || issuer_payload[0].forward_index_1 == UNROLL_WIDTH'(index))) begin
+                    forward_data_1 = forward_data[lane][index];
+                    forward_ready_1 = forward_ready[lane][index];
+                end
+                if (issuer_payload[0].forward_lane_2 == LANE_WIDTH'(lane) &&
+                    (EXECUTION_UNROLL == 1 || issuer_payload[0].forward_index_2 == UNROLL_WIDTH'(index))) begin
+                    forward_data_2 = forward_data[lane][index];
+                    forward_ready_2 = forward_ready[lane][index];
+                end
+            end
+        end
+    end
+    always_comb begin
         operand_stall =
             (decoder_payload[0].common.rs1_valid &&
              !issuer_payload[0].read_reg_file_1 &&
              !(BYPASS_ENABLED && issuer_payload[0].use_bypass_1) &&
-             !forward_ready[issuer_payload[0].forward_lane_1][issuer_payload[0].forward_index_1]) ||
+             !forward_ready_1) ||
             (decoder_payload[0].common.rs2_valid &&
              !issuer_payload[0].read_reg_file_2 &&
              !(BYPASS_ENABLED && issuer_payload[0].use_bypass_2) &&
-             !forward_ready[issuer_payload[0].forward_lane_2][issuer_payload[0].forward_index_2]);
+             !forward_ready_2);
     end
 
     // Bypass Data Selection
     logic [31:0] bypass_data_1;
     logic [31:0] bypass_data_2;
     if (BYPASS_ENABLED) begin : gen_bypass_selection
+        // Only ALU-capable integer lanes produce bypass data, so the select
+        // covers just those lanes (a 2:1 on one lane bit at two ALU lanes).
+        // Any other selection is structurally impossible: don't-care.
         always_comb begin
-            bypass_data_1 = bypass_data[issuer_payload[0].forward_lane_1];
-            bypass_data_2 = bypass_data[issuer_payload[0].forward_lane_2];
+            bypass_data_1 = 'x;
+            bypass_data_2 = 'x;
+            for (int lane = 1; lane <= Parameters::INTEGER_LANE_COUNT; lane++) begin
+                if (EFFECTIVE_INTEGER_CAPS[lane-1][0]) begin
+                    if (issuer_payload[0].forward_lane_1 == LANE_WIDTH'(lane))
+                        bypass_data_1 = bypass_data[lane];
+                    if (issuer_payload[0].forward_lane_2 == LANE_WIDTH'(lane))
+                        bypass_data_2 = bypass_data[lane];
+                end
+            end
         end
     end else begin : gen_no_bypass_selection
         assign bypass_data_1 = 'x;
@@ -177,63 +237,88 @@ module IntegerLane
     // Source Muxing
     logic [31:0] temp_source_1;
     logic [31:0] temp_source_2;
+    // ALU operand selection (PC, zero, immediate) is done here at latch time, so
+    // the ALU sees final operands and its bypass loop carries no source select.
+    // Every select below is from registered payload. Late bypass data enters
+    // last, through a single 2:1 whose select is also early.
+    logic alu_operands;
+    logic override_1, override_2, take_bypass_1, take_bypass_2;
+    logic [31:0] early_source_1, early_source_2;
     always_comb begin
-        temp_source_1 = forward_data_1;
-        temp_source_2 = forward_data_2;
-        if (issuer_payload[0].read_reg_file_1) begin
-            temp_source_1 = file_data_1;
-        end
-        if (issuer_payload[0].read_reg_file_2) begin
-            temp_source_2 = file_data_2;
-        end
-        if (BYPASS_ENABLED) begin
-            if (issuer_payload[0].use_bypass_1 != '0) begin
-                temp_source_1 = bypass_data_1;
-            end
-            if (issuer_payload[0].use_bypass_2 != '0) begin
-                temp_source_2 = bypass_data_2;
-            end
-        end
+        alu_operands = IS_ALU && decoder_payload[0].common.capability == CAP_ALU;
+        override_1 = alu_operands && (decoder_payload[0].alu.source == ALU_PC_IMM ||
+            decoder_payload[0].alu.source == ALU_ZERO_IMM);
+        override_2 = alu_operands && decoder_payload[0].alu.source != ALU_RS1_RS2;
+
+        early_source_1 = issuer_payload[0].read_reg_file_1 ? file_data_1 : forward_data_1;
+        early_source_2 = issuer_payload[0].read_reg_file_2 ? file_data_2 : forward_data_2;
         // Invalid integer sources represent x0 or an unused operand. Decode
         // leaves their register numbers unspecified; neither may read garbage.
-        if (!decoder_payload[0].common.rs1_valid) temp_source_1 = '0;
-        if (!decoder_payload[0].common.rs2_valid) temp_source_2 = '0;
+        if (!decoder_payload[0].common.rs1_valid) early_source_1 = '0;
+        if (!decoder_payload[0].common.rs2_valid) early_source_2 = '0;
+        if (override_1)
+            early_source_1 = decoder_payload[0].alu.source == ALU_PC_IMM ? decoder_payload[0].common.pc : '0;
+        if (override_2) early_source_2 = decoder_payload[0].common.immediate;
+
+        take_bypass_1 = BYPASS_ENABLED && issuer_payload[0].use_bypass_1 &&
+            decoder_payload[0].common.rs1_valid && !override_1;
+        take_bypass_2 = BYPASS_ENABLED && issuer_payload[0].use_bypass_2 &&
+            decoder_payload[0].common.rs2_valid && !override_2;
+        temp_source_1 = take_bypass_1 ? bypass_data_1 : early_source_1;
+        temp_source_2 = take_bypass_2 ? bypass_data_2 : early_source_2;
     end
 
     // Operand Selection Stage
     logic [31:0] source_1;
     logic [31:0] source_2;
+    // ALU controls are decoded from the operand-stage payload and registered with
+    // the operands, so the ALU result select is a flat AND-OR of flops.
+    AluControl_ alu_control_next, alu_control;
+    always_comb begin
+        unique case (decoder_payload[0].alu.operation)
+            ALU_ADD, ALU_SUB: alu_control_next = '{sum: 1'b1, logic_op: LOGIC_NONE, default: 1'b0};
+            ALU_SLL: alu_control_next = '{shift_left: 1'b1, logic_op: LOGIC_NONE, default: 1'b0};
+            ALU_SLT: alu_control_next = '{set_less: 1'b1, logic_op: LOGIC_NONE, default: 1'b0};
+            ALU_SLTU: alu_control_next = '{set_less_unsigned: 1'b1, logic_op: LOGIC_NONE, default: 1'b0};
+            ALU_XOR: alu_control_next = '{logic_op: LOGIC_XOR, default: 1'b0};
+            ALU_SRL, ALU_SRA: alu_control_next = '{shift_right: 1'b1, logic_op: LOGIC_NONE, default: 1'b0};
+            ALU_OR: alu_control_next = '{logic_op: LOGIC_OR, default: 1'b0};
+            ALU_AND: alu_control_next = '{logic_op: LOGIC_AND, default: 1'b0};
+        endcase
+        alu_control_next.subtract = decoder_payload[0].alu.operation == ALU_SUB;
+        alu_control_next.arithmetic_shift = decoder_payload[0].alu.operation == ALU_SRA;
+    end
     always_ff @(posedge clk) begin
         if (!stall) begin
             source_1 <= temp_source_1;
             source_2 <= temp_source_2;
+            alu_control <= alu_control_next;
         end
     end
 
     // First Execution Stage Combinational Logic
     // Fall-through is local to execution; frontend next_pc is unspecified.
-    logic [31:0] fallthrough_pc;
-    assign fallthrough_pc = decoder_payload[1].common.pc +
-        (decoder_payload[1].bru.is_compressed ? 32'd2 : 32'd4);
+    logic [31:0] next_pc;
     logic [31:0] alu_result;
     logic bru_misaligned;
     if (IS_ALU) begin : gen_alu
-        logic [31:0] result;
+        logic [31:0] result, bypass_result;
         assign alu_result = result;
-        assign bypass_data_out = result;
+        // Fast subset only; see Definitions::alu_bypassable.
+        assign bypass_data_out = bypass_result;
         ArithmaticUnit alu (
-            .operation(decoder_payload[1].alu.operation),
-            .source(decoder_payload[1].alu.source),
-            .source_1(source_1),
-            .source_2(source_2),
-            .immediate(decoder_payload[1].common.immediate),
-            .pc(decoder_payload[1].common.pc),
-            .result(result)
+            .control(alu_control),
+            .lhs(source_1),
+            .rhs(source_2),
+            .result(result),
+            .bypass_result(bypass_result)
         );
     end else begin : no_alu
         assign alu_result = '0;
         assign bypass_data_out = 'x;
     end if (IS_BRU) begin : gen_bru
+        assign next_pc = decoder_payload[1].common.pc +
+            (decoder_payload[1].bru.is_compressed ? 32'd2 : 32'd4);
         logic redirect;
         logic condition;
         logic [31:0] target;
@@ -250,14 +335,16 @@ module IntegerLane
             .target(target),
             .misaligned(misaligned)
         );
-        assign condition = decoder_payload[1].common.trap_type == NONE && valid_payload[1];
+        assign condition = decoder_payload[1].common.capability == CAP_BRU &&
+            decoder_payload[1].common.trap_type == NONE && valid_payload[1];
         assign redirect_taken_out = redirect && condition;
         assign redirect_age_out = issuer_payload[1].input_age;
         // A redirect means direction disagreed with prediction. A predicted
         // taken branch therefore recovers to fall-through, otherwise target.
         assign redirect_pc_out = decoder_payload[1].bru.predicted_taken ?
-            fallthrough_pc : target;
+            next_pc : target;
     end else begin : gen_no_bru
+        assign next_pc = 'x;
         assign bru_misaligned = 1'b0;
         assign redirect_taken_out = 1'b0;
         assign redirect_age_out = 'x;
@@ -323,18 +410,28 @@ module IntegerLane
     logic capture_mul, capture_div, final_completion;
     // Early results advance with metadata. Iterating results must be captured
     // while the final lane slot and its metadata are held by global stall.
-    assign capture_mul = mul_result_valid && (!stall || MUL_ITERATES);
-    assign capture_div = div_result_valid && (!stall || DIV_ITERATES);
+    // Unit pipelines hold under stall, so recapturing a held result rewrites the
+    // same value. Capture needs no stall term.
+    assign capture_mul = mul_result_valid;
+    assign capture_div = div_result_valid;
     assign final_completion = (capture_mul && MUL_RESULT_STAGE == LAST_EXECUTION_STAGE) ||
         (capture_div && DIV_RESULT_STAGE == LAST_EXECUTION_STAGE);
+
+    // Registered final-slot readiness. Low on the edge an iterating op enters
+    // the final slot, high on the edge its result is captured there.
+    logic final_ready_q, entering_iterative;
+    assign entering_iterative =
+        (IS_MUL && MUL_ITERATES && decoder_payload[LAST_EXECUTION_STAGE-1].common.capability == CAP_MUL) ||
+        (IS_DIV && DIV_ITERATES && decoder_payload[LAST_EXECUTION_STAGE-1].common.capability == CAP_DIV);
+    assign forward_ready_out = final_ready_q;
 
     // Sole owner of all data stages, including the one-execution-stage case.
     always_ff @(posedge clk) begin
         if (reset_active) begin
-            forward_ready_out <= 1'b0;
+            final_ready_q <= 1'b1;
         end else begin
-            if (final_completion) forward_ready_out <= 1'b1;
-            else if (!stall) forward_ready_out <= 1'b0;
+            if (final_completion) final_ready_q <= 1'b1;
+            else if (!stall) final_ready_q <= !entering_iterative;
 
             for (int unsigned i = 2; i <= LAST_EXECUTION_STAGE; i++) begin
                 if (capture_div && i == DIV_RESULT_STAGE) begin
@@ -344,7 +441,7 @@ module IntegerLane
                 end else if (!stall) begin
                     if (i == 2) begin
                         data_payload[i] <= decoder_payload[1].common.capability == CAP_ALU ?
-                            alu_result : fallthrough_pc;
+                            alu_result : next_pc;
                     end else begin
                         data_payload[i] <= data_payload[i-1];
                     end
@@ -356,10 +453,9 @@ module IntegerLane
     // Sole owner of validity. Redirects are replayed externally during stalls.
     always_ff @(posedge clk) begin
         if (reset_active) begin
-            valid_payload <= '{default: 1'b0};
+            for (int i = 1; i <= LAST_EXECUTION_STAGE; i++) valid_payload[i] <= 1'b0;
         end else if (!stall) begin
-            valid_payload[0] <= accept && !any_redirect;
-            valid_payload[1] <= valid_payload[0] && !any_redirect;
+            valid_payload[1] <= valid_payload[0];
             valid_payload[2] <= valid_payload[1] && !stage_2_flush;
             for (int unsigned i = 3; i <= LAST_EXECUTION_STAGE; i++) begin
                 valid_payload[i] <= valid_payload[i-1];
@@ -385,7 +481,14 @@ module IntegerLane
     assign result_data = data_payload[LAST_EXECUTION_STAGE];
     assign result_destination = decoder_payload[LAST_EXECUTION_STAGE].common.rd;
     assign result_age = issuer_payload[LAST_EXECUTION_STAGE].input_age;
-    assign result_ready = valid_payload[LAST_EXECUTION_STAGE] && !stall && !result_trap && decoder_payload[LAST_EXECUTION_STAGE].common.rd_valid == 1'b1;
+    // The final slot loads stage LAST-1 on an advancing edge and holds otherwise.
+    assign next_result_destination = decoder_payload[LAST_EXECUTION_STAGE-1].common.rd;
+    assign next_result_age = issuer_payload[LAST_EXECUTION_STAGE-1].input_age;
+    // RF writes are idempotent while the final slot is held, so no stall term.
+    // final_ready_q keeps an unfinished iterating result out of the RF. No reader
+    // can depend on it: younger consumers map rd to this slot, not the RF.
+    assign result_ready = valid_payload[LAST_EXECUTION_STAGE] && final_ready_q && !result_trap &&
+        decoder_payload[LAST_EXECUTION_STAGE].common.rd_valid == 1'b1;
     assign result_trap = decoder_payload[LAST_EXECUTION_STAGE].common.trap_type != NONE && valid_payload[LAST_EXECUTION_STAGE];
 
 

@@ -13,6 +13,8 @@ module ProducerTable
     input logic reset,
     input logic stall,
     input logic redirect_taken,
+    input logic [AGE_WIDTH-1:0] redirect_slot,
+    input logic redirect_advanced,
 
     // Register Source Read Inputs
     input logic [4:0] rs1 [ISSUE_WIDTH-1:0],
@@ -59,26 +61,39 @@ module ProducerTable
     owner_t owners [STAGES][ISSUE_WIDTH];
     logic valid [STAGES][ISSUE_WIDTH];
     logic ready [STAGES][ISSUE_WIDTH];
+    logic surviving_valid [STAGES][ISSUE_WIDTH];
 
     for (genvar stage = 0; stage < STAGES; stage++) begin : age_group
         for (genvar slot = 0; slot < ISSUE_WIDTH; slot++) begin : writer
+            // The resolving group sits in group 1 if the branch advanced on the
+            // detection edge, otherwise still in group 0. Filter current owners
+            // before either shifting them or holding them.
+            localparam bit TRIM_ADVANCED = stage == 1;
+            localparam bit TRIM_HELD = stage == 0;
+            logic trim, younger;
+            assign trim = redirect_advanced ? TRIM_ADVANCED : TRIM_HELD;
+            assign younger = redirect_advanced ? stage < 1 : 1'b0;
+            assign surviving_valid[stage][slot] = valid[stage][slot] &&
+                (!redirect_taken || !(younger || (trim && slot > redirect_slot)));
             owner_t incoming;
             logic incoming_valid;
             if (stage == 0) begin
                 assign incoming = {op_rd[slot], op_lane[slot], op_type[slot]};
-                assign incoming_valid = op_write[slot] && op_rd[slot] != 0;
+                assign incoming_valid = !redirect_taken && op_write[slot] && op_rd[slot] != 0;
             end else begin
                 assign incoming = owners[stage-1][slot];
-                assign incoming_valid = valid[stage-1][slot];
+                assign incoming_valid = surviving_valid[stage-1][slot];
             end
 
             always_ff @(posedge clk) begin
                 if (reset)
                     valid[stage][slot] <= 1'b0;
-                else if (!stall && !redirect_taken)
+                else if (!stall)
                     valid[stage][slot] <= incoming_valid;
+                else if (redirect_taken)
+                    valid[stage][slot] <= surviving_valid[stage][slot];
 
-                if (!stall && !redirect_taken) begin
+                if (!stall) begin
                     owners[stage][slot] <= incoming;
                     ready[stage][slot] <= producer_capture_ready(
                         UNROLLED_W'(stage + 1), incoming.capability,
@@ -95,7 +110,7 @@ module ProducerTable
         result.index = RF_INDEX;
         result.ready = 1'b1;
         // Compare an entire issue group in parallel (two entries at dual issue).
-        // Issue removes same-group WAW duplicates. Younger groups override older ones.
+        // Keep both WAW owners until redirect resolution. Younger surviving slots win.
         for (int stage = int'(STAGES)-1; stage >= 0; stage--) begin
             group_result = '0;
             group_result.index = UNROLLED_W'(stage + 1);
@@ -103,10 +118,11 @@ module ProducerTable
             for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
                 hit = valid[stage][slot] && owners[stage][slot].rd == source;
                 group_hit |= hit;
-                group_result.lane |= {LANE_WIDTH{hit}} & owners[stage][slot].lane;
-                group_result.capability = DecodeCapability_'(group_result.capability |
-                    ({$bits(DecodeCapability_){hit}} & owners[stage][slot].capability));
-                group_result.ready |= hit && ready[stage][slot];
+                if (hit) begin
+                    group_result.lane = owners[stage][slot].lane;
+                    group_result.capability = owners[stage][slot].capability;
+                    group_result.ready = ready[stage][slot];
+                end
             end
             if (group_hit) result = group_result;
         end

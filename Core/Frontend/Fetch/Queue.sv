@@ -19,7 +19,8 @@ module Queue
 
     // Redirect Inputs
     input logic [31:0] redirect_pc,
-    input logic redirect_taken,
+    input logic redirect_fetch, // Registered recovery launch; pulses with redirect_taken.
+    input logic redirect_taken, // Registered recovery pulse.
 
     // Memory Request
     output logic [31:0] req_address,
@@ -58,14 +59,19 @@ module Queue
     output BranchInput_ branch_input [FETCH_WORDS*2-1:0],
     input BranchOutput_ branch_output [FETCH_WORDS*2-1:0],
 
-    // Number of consecutive serve lanes consumed, starting at lane zero
-    input logic [$clog2(SERVE_WORDS+1)-1:0] serve_consumed,
-    input logic [$clog2(SERVE_WORDS+1)-1:0] serve_select_count
+    // Global backend stall. Applied only as the final select of serve, FIFO
+    // pointer and real_pc next state, never inside their arithmetic.
+    input logic stall,
+    // Stall-free count of consecutive serve lanes Decode consumes from lane zero.
+    input logic [$clog2(SERVE_WORDS+1)-1:0] serve_normal_count
 );
 
+    // Normal-case PC consumption. Reset and flush are early (registered or
+    // external) and stay inside; stall selects between this and holding real_pc.
     // Do not rely on redirect propagating through upstream consumption logic.
+    logic reset_reg; // Registered below (Registers External Reset Signal).
     logic [$clog2(SERVE_WORDS+1)-1:0] serve_consumed_active;
-    assign serve_consumed_active = redirect_taken ? '0 : serve_consumed;
+    assign serve_consumed_active = (reset || reset_reg || redirect_taken) ? '0 : serve_normal_count;
 
     // Derived Constants
     localparam unsigned FETCH_SLOTS = FETCH_WORDS * 2;
@@ -126,7 +132,8 @@ module Queue
     logic [FETCH_WORDS*32-1:0] fetch_staging_reg;
     DerivedParameters::fetch_pc_t fetch_staging_pc;
     DerivedParameters::fetch_pc_t fetch_lane_pc [FETCH_SLOTS-1:0];
-    logic fetch_staging_reg_valid;
+    logic staging_occupied;
+    wire fetch_staging_reg_valid = staging_occupied && !redirect_fetch;
     logic [FETCH_SLOTS-1:0] fetch_branch_reg;
     logic [FETCH_SLOTS-1:0] fetch_c_reg;
 
@@ -187,6 +194,7 @@ module Queue
     logic fifo_fp_consumer [FIFO_WORDS-1:0];
     logic [6:0] prediction_immediate_upper_select [FETCH_SLOTS-1:0];
     logic [6:0] fifo_immediate_upper_select [FIFO_WORDS-1:0];
+    BranchInput_ prediction_payload [FETCH_SLOTS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : immediate_predecode
         ImmediateUpperPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) format_decode (
             .instruction(prediction_payload[lane].bp_instruction),
@@ -225,7 +233,6 @@ module Queue
     logic [PUSH_COUNT_W-1:0] stage_offset [FETCH_SLOTS];
     logic [FIFO_INDEX_W-1:0] prediction_write_slot [FETCH_SLOTS];
     DerivedParameters::fetch_pc_t prediction_pc;
-    BranchInput_ prediction_payload [FETCH_SLOTS-1:0];
     TrapType_ packet_system_trap [FETCH_SLOTS-1:0];
     TrapType_ prediction_system_trap [FETCH_SLOTS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : system_trap_predecode
@@ -271,13 +278,15 @@ module Queue
     logic [SERVE_ENTRY_W-1:0] serve_next [SERVE_WORDS][SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] head_next [SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] occupied_next [SERVE_WORDS+1];
+    // Outcome chosen by the precomputed normal count, or consumed-zero on stall.
+    logic [SERVE_ENTRY_W-1:0] serve_selected [SERVE_WORDS];
+    logic [FIFO_INDEX_W:0] head_selected, occupied_selected;
 
     // Decode-Consumption PC Tracking
     logic [31:0] real_pc;
     logic [31:0] consumed_pc_step;
 
     // Registers External Reset Signal
-    logic reset_reg;
     always_ff @(posedge clk) begin
         reset_reg <= reset;
     end
@@ -376,7 +385,7 @@ module Queue
     end
 
     // Packet Check-In Data to FIFO is Valid
-    assign packet_commit = prediction_stage_valid && fifo_packet_room;
+    assign packet_commit = prediction_stage_valid && fifo_packet_room && !redirect_taken;
 
     // Staging Register to Prediction Register Transfer Gate Bit
     assign stage_transfer = fetch_staging_reg_valid &&
@@ -386,7 +395,7 @@ module Queue
     // Staging Register Acceptance Gate Bit
     assign fetch_accept = fetch_valid && !fetch_error &&
         (!fetch_staging_reg_valid || stage_transfer) &&
-        !(packet_commit && packet_taken) && !redirect_taken;
+        !(packet_commit && packet_taken) && !redirect_fetch;
 
     // Calculates Next Address For Prefetching
     always_comb begin
@@ -396,7 +405,7 @@ module Queue
         prefetch_pc_next = prefetch_pc;
         if (reset || reset_reg) begin
             prefetch_pc_next = DerivedParameters::fetch_pc_t'(RESET_VECTOR);
-        end else if (redirect_taken) begin
+        end else if (redirect_fetch) begin
             prefetch_pc_next = DerivedParameters::fetch_pc_t'(redirect_pc);
         end else if (packet_commit && packet_taken) begin
             for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
@@ -422,7 +431,7 @@ module Queue
             response_pc_reg <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
             fetch_staging_reg <= '0;
             fetch_staging_pc <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
-            fetch_staging_reg_valid <= 1'b0;
+            staging_occupied <= 1'b0;
             fetch_branch_reg <= '0;
             fetch_c_reg <= '0;
             for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= DerivedParameters::fetch_pc_t'(RESET_VECTOR + i*2);
@@ -430,10 +439,11 @@ module Queue
             // Tracks Memory Response Address and Consumed Instruction PC
             response_pc_reg <= req_address;
             prefetch_pc <= prefetch_pc_next;
-            real_pc <= redirect_taken ? redirect_pc : real_pc + consumed_pc_step;
+            if (redirect_fetch) real_pc <= redirect_pc;
+            else if (!stall) real_pc <= real_pc + consumed_pc_step;
             // Redirects Discard Younger Staging Data
-            if (redirect_taken || (packet_commit && packet_taken)) begin
-                fetch_staging_reg_valid <= 1'b0;
+            if (redirect_fetch || (packet_commit && packet_taken)) begin
+                staging_occupied <= 1'b0;
             end else if (fetch_accept) begin
                 fetch_staging_reg <= fetch_data;
                 // Predecodes Each Halfword Before Instruction Boundary Resolution
@@ -444,10 +454,10 @@ module Queue
                         is_branch32(fetch_data[i*16 +: 16]);
                 end
                 fetch_staging_pc <= response_pc_reg;
-                fetch_staging_reg_valid <= 1'b1;
+                staging_occupied <= 1'b1;
             end else if (stage_transfer) begin
                 // Clears Staging Valid When Transferred Without Replacement
-                fetch_staging_reg_valid <= 1'b0;
+                staging_occupied <= 1'b0;
             end
         end
     end
@@ -605,7 +615,7 @@ module Queue
             if (reset || reset_reg || redirect_taken)
                 serve_valid_reg[lane] <= 1'b0;
             else
-                serve_valid_reg[lane] <= serve_next[lane][serve_select_count][SERVE_ENTRY_W-1];
+                serve_valid_reg[lane] <= serve_selected[lane][SERVE_ENTRY_W-1];
             {serve_c_reg[lane], serve_taken_reg[lane], serve_branch_reg[lane],
              serve_data_reg[lane], serve_pc_reg[lane],
              serve_fp_consumer[lane], serve_immediate_upper_select[lane],
@@ -613,7 +623,7 @@ module Queue
              serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane],
              serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane],
              serve_capability[lane], serve_trap[lane]} <=
-                serve_next[lane][serve_select_count][SERVE_ENTRY_W-2:0];
+                serve_selected[lane][SERVE_ENTRY_W-2:0];
         end
     end
 
@@ -663,13 +673,23 @@ module Queue
             (FIFO_INDEX_W+1)'(pull_count);
     end
 
+    // Precomputed normal pop, then stall as the late select. A stalled cycle
+    // takes the consumed-zero outcome, which can still refill empty serve slots,
+    // so this is a 2:1 between outcomes rather than a hold.
+    always_comb begin
+        for (int unsigned lane = 0; lane < SERVE_WORDS; lane++)
+            serve_selected[lane] = stall ? serve_next[lane][0] : serve_next[lane][serve_normal_count];
+        head_selected = stall ? head_next[0] : head_next[serve_normal_count];
+        occupied_selected = stall ? occupied_next[0] : occupied_next[serve_normal_count];
+    end
+
     always_ff @(posedge clk) begin
         if (reset || reset_reg || redirect_taken) begin
             fifo_head <= '0;
             fifo_occipied_slots <= '0;
         end else begin
-            fifo_head <= head_next[serve_select_count];
-            fifo_occipied_slots <= occupied_next[serve_select_count];
+            fifo_head <= head_selected;
+            fifo_occipied_slots <= occupied_selected;
         end
     end
 

@@ -1,0 +1,62 @@
+# CPU stall and redirect protocol
+
+This is the control contract at [CoreTop](Top.sv) for the implemented integer and integer-memory lanes. An **advancing edge** is a rising edge with global `stall == 0` outside reset. Execution positions and producer ages count advancing edges. Instruction memory, outstanding data-memory transfers, and the iterative tails of execution units also do useful work on held edges.
+
+## Signal ownership
+
+| Signal | Producer and timing | Consumers and meaning |
+|---|---|---|
+| `stall` | Combinational OR of `external_stall` and every lane's `stall_out` in BackendTop. CoreTop ties `external_stall` low. | Holds lockstep execution, RF writeback, producer aging and ordinary dispatch capture. Fetch sees backpressure through consumption. |
+| Lane-local `redirect_taken_out`, `redirect_age_out`, `redirect_pc_out` | A valid branch execution reports a direction mismatch. The age is its issue slot within the resolving group. | Execution lanes see the raw requests for immediate squash. BackendTop registers each lane's request, age and PC on the first edge it appears, held or advancing (`redirect_q`, `redirect_age_q`, `redirect_pc_q`). `redirect_fired` marks a request already captured while its branch is held, which blocks re-capture until the branch advances. |
+| `redirect_advanced` | Registered with the capture: high if the detection edge advanced. | Tells ProducerTable whether the resolving group is in CAM group 1 (advanced) or still in group 0 (held). |
+| `redirect_fetch`, `redirect_taken`, `redirect_pc`, `redirect_slot` | A small selector over the registered lane requests, which picks the smallest age. `redirect_fetch` equals `redirect_taken`. All four are driven only from flops. | One recovery cycle: launches the target instruction-memory read, kills stale fetch staging, suppresses backend input and outward issue/serve, and repairs the producer CAM. The PC and slot are meaningful during this pulse. |
+
+Global stall does not delay redirect launch. Neither the raw branch decision nor the registered recovery pulse drives global stall. A branch held in its execution slot (by an operand wait, iteration, or memory cutoff elsewhere) sends its redirect on the first edge anyway, and the frontend recovers while the backend is still held. The held branch keeps asserting its raw request, so execution-group squash still applies when it finally advances. [Backend arbitration](Backend/Top.sv) · [Integer lane](Backend/Execute/Integer/IntegerLane.sv) · [Memory lane](Backend/Execute/Memory/MemoryLane.sv)
+
+## What can assert global stall
+
+| Cause | Assertion and release |
+|---|---|
+| Operand wait | A present lane packet needs a valid source, Issue selected registered forwarding for it, and the selected lane/index is unready. RF reads, unused sources and enabled ALU bypass skip this wait. Issue precomputes this per producer slot as `watch[lane][index]` (dynamic-ready slots only, `Definitions::forward_slot_dynamic`), FrontendTop registers it with the lane packets, and BackendTop asserts stall for any watched slot whose `forward_ready` flop is low. Release follows the registered producer becoming ready. |
+| Integer iteration | MUL iterates at unroll 1. DIV iterates when the unroll ends before its result can be registered normally. The unit holds upstream positions while the internal tail completes. The lane captures the result at the held final slot so a waiting consumer can progress. Non-iterative integer forward points report ready high for their eligible operations. |
+| Unfinished memory operation at cutoff | The final memory execution slot is valid and incomplete. Both loads and stores require a response. The lane records completion on the response edge, including under stall, and can advance on a subsequent edge. An unresolved load may also cause an earlier operand wait. |
+| External hold | BackendTop exposes `external_stall` for an enclosing design. It is inactive in the current CoreTop. |
+
+Decode precomputes operand eligibility and Issue selects the forwarding lane/index, bypass, or RF. Eligibility permits a memory consumer to reach operand selection before its producer has returned. There the physical ready bit controls the wait. An issue-group RAW hazard, unavailable compatible lane, or serial conflict instead limits the in-order issue prefix. Zero instructions can issue while older backend work continues advancing. [Issue contract](Frontend/Dispatch/IssueContract.sv) · [Issue](Frontend/Dispatch/Issue.sv) · [Divider](Backend/Execute/Integer/Divider.sv) · [Multiplier](Backend/Execute/Integer/Multiplier.sv)
+
+## Ordinary stall, stage by stage
+
+| State or interface | Behavior while stalled, with no recovery pulse |
+|---|---|
+| Instruction fetch, staging, prediction and fetch FIFO | Instruction memory still reads. Fetch can fill staging, prediction, FIFO and vacant serve slots while downstream consumption is zero. Its local occupancy, prediction and transfer conditions determine when it stops. The zero-pop serve selection preserves waiting words in order. |
+| Decode FIFO and producer snapshots | Packet validity, occupancy, source metadata, registered readiness and structural issue checks hold with their packets. Outward `serve_consumed` is zero. |
+| Issue and frontend lane capture | Allocation and candidate logic may evaluate. Issue masks its combinational accept vector, `issue_consumed` and producer writes. The **registered** packet and accept outputs of FrontendTop hold the waiting backend input. Issue's write buffer holds its previous writes. |
+| Producer CAM | Owners, validity and capture-ready bits hold at their current indices. No age increment occurs. |
+| Integer and memory execution lanes | Operand registers, normal data stages and instruction positions hold. Iterative completion and LSU responses can update the held owner's result and ready state. Architectural integer RF writes require advance. |
+| Shared LSU and bus | AGUs enqueue only on advance. Requests already queued can handshake, and responses can return in order. The oldest unfinished slot of the indicated lane captures its response. A load result is forwarded from that registered slot. Bus backpressure reaches global stall through a waiting consumer or an unfinished final slot. |
+
+[Fetch queue](Frontend/Fetch/Queue.sv) · [Decode](Frontend/Dispatch/Decode.sv) · [Registered frontend outputs](Frontend/Top.sv) · [LSU](Backend/Execute/Memory/LoadStoreUnit.sv)
+
+## Branch resolution and recovery, edge by edge
+
+1. **While the branch resolves.** Each lane masks its operand-stage valid combinationally when any execution lane reports a redirect. Within the resolving execution group, a lane kills its instruction if a requesting branch has a smaller issue age. The redirecting branch and older peers survive. The LSU enqueues the group's AGU candidates before this squash is known. It registers how many were killed, excludes them from the sendable count, and retracts them from its tail on the next edge, so a younger store in the group never reaches the bus. A correctly predicted branch continues normally. A mispredicted taken branch supplies its target; a predicted-taken branch that falls through supplies its lane-local sequential PC (PC + 2 or PC + 4).
+2. **Detection edge N.** BackendTop registers every fresh lane request, age and PC on this edge, whether or not it advances. `redirect_advanced` records whether it did. If stall holds the branch, `redirect_fired` is set for its lane so the still-asserted raw request is not captured again. It clears on the edge where the branch advances. Lanes see the raw request unmasked: the stall that holds the branch also blocks frontend capture, and the wrong-path packet already captured is cleared by recovery. So no new packet can be presented while a held branch is still asserting. No frontend signal depends on the branch decision in this cycle. Younger frontend work latched at this edge is disposable.
+3. **Recovery cycle N to N+1.** The selector over the registered requests asserts `redirect_fetch` and `redirect_taken` together, with the oldest `redirect_pc` and `redirect_slot`. The pulse lasts one cycle and is not gated by stall. `redirect_fetch` gives the target priority over the predictor and sequential fetch. Staging masks its old valid bit, rejects the old memory response, and the synchronous memory samples the target at edge N+1. `redirect_taken` suppresses backend input validity and outward issue/serve consumption. At edge N+1, prediction validity, split-instruction state, FIFO and serve validity, decode occupancy/validity, buffered write valids and frontend lane-input valids clear. The target response arrives during the following cycle and staging captures it normally. If it cannot be accepted, fetch holds the target address for retry.
+4. **After edge N+1.** A captured target window can feed prediction. The recovery pulse expires even if independent backpressure arose during recovery. Older backend work may advance, retire or receive memory responses throughout recovery according to its ordinary enables.
+
+A **fetch prediction** has a smaller scope. When a predicted-taken group commits to the fetch FIFO, fetch retains instructions through the first predicted-taken instruction, redirects prefetch, and discards younger staging/prediction and partial-instruction work. It does not initiate backend recovery. Reset has priority over target launch and clears recovery validity. [Predictor](Frontend/Fetch/Predictor.sv) · [Queue](Frontend/Fetch/Queue.sv) · [Branch unit](Backend/Execute/Integer/BranchUnit.sv)
+
+## Producer ownership on the recovery edge
+
+The trim group depends on `redirect_advanced`. If the detection edge advanced, **CAM group 0 is younger than the branch, group 1 contains the resolving issue group, and groups 2 onward are older.** If the detection edge was held, **group 0 contains the resolving issue group and groups 1 onward are older.** These are CAM array indices. The normal issue write buffer represents producer index zero separately and is always younger.
+
+| Owner at the start of recovery | Advanced detection | Held detection |
+|---|---|---|
+| Buffered incoming write | Discard | Discard |
+| CAM group 0 | Discard | Keep slots <= `redirect_slot` |
+| CAM group 1 | Keep slots <= `redirect_slot` | Preserve |
+| Older CAM groups | Preserve | Preserve |
+
+Equality preserves the branch's own link-register write. On an advancing recovery edge, the CAM filters validity **before shifting** and inserts a bubble at the youngest position. On a held recovery edge, it applies the same kill mask **in place** while metadata and ages hold. The CAM retains both same-group writers to a duplicate destination until recovery can distinguish them. Lookup selects the youngest survivor. This keeps frontend forwarding tags aligned with the physical lanes in both cases. [Producer table](Frontend/Dispatch/ProducerTable.sv)
+
+For waveform debugging, align `stall`, the raw lane redirect, `redirect_q`, `redirect_fetch`/`redirect_taken`, and instruction-memory `req_address` first. Then follow `response_pc_reg`, `fetch_accept`, and `staging_occupied` across the recovery edge. For a dependency failure, compare `redirect_slot` and CAM survivor validity against the physical producer's lane and execution index on that same edge.

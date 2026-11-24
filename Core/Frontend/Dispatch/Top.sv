@@ -10,6 +10,8 @@ module DispatchTop
     input logic clk,
     input logic reset,
     input logic redirect_taken,
+    input logic [AGE_WIDTH-1:0] redirect_slot,
+    input logic redirect_advanced,
     input logic stall,
     input logic serial_active,
 
@@ -35,13 +37,13 @@ module DispatchTop
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
-    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed,
-    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count,
+    output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count,
 
     // Issuer outputs to the backend
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
-    output logic accept_vector [TOTAL_LANE_COUNT-1:0]
+    output logic accept_vector [TOTAL_LANE_COUNT-1:0],
+    output logic watch [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0]
 );
 
     DecoderPacket_ packets_out [ISSUE_WIDTH-1:0];
@@ -79,6 +81,7 @@ module DispatchTop
     logic [4:0] op_rd [ISSUE_WIDTH-1:0];
     logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0];
     logic op_write [ISSUE_WIDTH-1:0];
+    logic raw_write [ISSUE_WIDTH-1:0];
     logic [AGE_WIDTH-1:0] op_age [ISSUE_WIDTH-1:0];
     DecodeCapability_ op_type [ISSUE_WIDTH-1:0];
 
@@ -128,8 +131,7 @@ module DispatchTop
         .issue_select_count(issue_select_count),
         .issue_select_any(issue_select_any),
         .issue_select_two(issue_select_two),
-        .serve_consumed(serve_consumed),
-        .serve_select_count(serve_select_count),
+        .serve_normal_count(serve_normal_count),
         .op_rd(op_rd),
         .op_lane(op_lane),
         .op_write(op_write),
@@ -175,6 +177,7 @@ module DispatchTop
         .decoder_packet(decoder_packet),
         .issuer_packet(issuer_packet),
         .accept_vector(accept_vector),
+        .watch(watch),
         .rs1_index_in(rs1_index_out),
         .rs2_index_in(rs2_index_out),
         .rs1_lane_in(rs1_lane_out),
@@ -184,6 +187,7 @@ module DispatchTop
         .op_rd(op_rd),
         .op_lane(op_lane),
         .op_write(op_write),
+        .raw_write(raw_write),
         .op_age(op_age),
         .op_type(op_type)
     );
@@ -196,6 +200,8 @@ module DispatchTop
         .clk(clk),
         .reset(reset),
         .redirect_taken(redirect_taken),
+        .redirect_slot(redirect_slot),
+        .redirect_advanced(redirect_advanced),
         .stall(stall),
         .rs1(serve_rs1),
         .rs2(serve_rs2),
@@ -209,7 +215,7 @@ module DispatchTop
         .rs2_capability(rs2_capability),
         .op_rd(op_rd),
         .op_lane(op_lane),
-        .op_write(op_write),
+        .op_write(raw_write),
         .op_age(op_age),
         .op_type(op_type)
     );

@@ -1,4 +1,7 @@
 ## Lane Model
+
+See the [CPU stall and redirect protocol](Core/STALL_AND_REDIRECT.md) for stage-by-stage backpressure, branch recovery timing, and producer ownership across a flush.
+
 Anvil-Core opts for a highly parameterizable backend, the crux of which being the concept of heterogenous "lane" instantiation at compile time. Long story short:
 FP lanes only forward to other FP lanes, they dynamically search for operands. No integer forwarding goes to them nor integer outputs come from them.
 Integer and memory lanes are served static tags to fetch operands from at issue time. Memory lanes broadcast ready bits, integer lanes are guarenteed ready.
@@ -14,6 +17,8 @@ Stalls are still possible in several scenarios. Primarily, stalls will occur on 
 The other possibility of a stall is a memory operation reaching the iteration point without a valid result. In this case, the pipeline will globally stall until the LSU checks in a result. This maintains ordering, which is a primary correctness concern.
 
 
+BackendTop connects the issuer packet arrays to the configured integer and memory lanes and their shared integer file. LoadStoreUnit queues one request per registered memory forwarding point per lane. On pipeline advance it appends the AGU candidates in issue-age order, before the same-cycle redirect squash is known. Candidates killed by that redirect are counted into a registered squash count, never sent, and retracted from the tail on the next edge; they are always the youngest entries. Its aligned 32-bit bus can issue one request per cycle and requires one response per load or store, strictly in request order. The bus peer must discard outstanding transfers on reset. The LSU keeps the owner until the response handshake. That lane captures the result in its oldest unfinished slot, including during a stall. Consumers forward from the registered slot on the following cycle. A misaligned access raises a lane trap before a request is sent. A bus error raises a lane trap on response. Precise exception retirement remains pending.
+
 ## Integer Lanes
 ![IntegerLane](Docs/IntegerLane.png)
 
@@ -22,12 +27,16 @@ The current implementation uses a pipelined radix-2 carry-save partial Wallace t
 
 The final configuration was arrived at empirically through evaluating several parameters and architecture variants. Notably, the additional routing and selection logic associated with radix-4 lost on timing compared to every tested radix-2 configuration. Additionally, the reduction to 2 vectors traditionally used by a Wallace tree lost to a 4-vector reduction. This is likely because FPGAs have quite efficient adders in comparison to general logic. The logic from the extra reduction tree nodes created sufficient routing, congestion, and LUT delay to be greater than the time saved by the reduced carry chain. The final configuration best distributed the critical path over the reduction/product generation stage and the addition stage, closing at 231.4MHz. More or less compression stages distributed critical path less evenly, thus performing worse post synthesis. 
 
+Note: The design has moved compressions around a bit since these were run.
+
 | Radix | Compressions | Final Vectors | Fmax | Period | LUTs | FFs |
 |---|---|---|---|---|---|---|
 | Radix-2 | 8 | 2 | 169.5 MHz | 5.900 ns | 1,639 | 219 |
 | Radix-2 | 7 | 3 | 182.0 MHz | 5.496 ns | 1,637 | 252 |
 | **Radix-2** | **6** | **4** | **231.4 MHz** | **4.321 ns** | **1,552** | **285** |
 | Radix-2 | 5 | 6 | 188.4 MHz | 5.308 ns | 1,549 | 348 |
+
+In-core note (2026-11-22, revised 2026-11-23): inside CoreTop at 5 ns, step 1 now stops after 4 compressions and registers 8 vectors; the fifth and sixth compressions (8 to 6 to 4) run ahead of the final adder in step 2. The table above is the standalone study and is unchanged.
 
 To handle signedness and RISC-V specific writeback needs, 3 compensation vectors are injected into the initial partial product pool. They are compressed by the partial Wallace tree like other vectors and are not treated differently. The compensation vectors are either 0 or a bitwise inversion of the 2 initial input operands. The third vector consists of the remaining ones that need to be added to the inverted compensation vectors to form a 2's compliment result. In total, the full pool of vectors consists of 32 shift-derived partial products and 3 signedness compensation vectors. 
 
@@ -50,9 +59,9 @@ Below are synthesis numbers for several selected configurations:
 
 ## Frontend timing across parameter sets
 
-This table starts a fresh comparison series on November 19, 2026.
-Frequency is estimated as 1000 / (target period - setup WNS).
-All rows use the following common constraints unless a separate series is introduced.
+Implementation note: from 2026-11-22, Synthesis/Scripts flows run `phys_opt_design -directive AggressiveFanoutOpt` after placement. Runs before that date used opt/place/route only. Treat later frontend runs as a separate series from the rows below.
+
+Note: These numbers are out of context and representative, not authoritative
 
 ```bash
 create_clock -name frontend_clk -period 2.500 [get_ports clk]
@@ -78,15 +87,15 @@ set_output_delay -clock frontend_clk -min 0.000 [all_outputs]
 
 ## Frontend TODOs
 
-- [ ] Detect sequential PC wrap, including compressed and split instructions. Define fault reporting and recovery.
-- [ ] Handle registered prediction_result[i].bp_target_wrapped for taken predictions, preserving instruction association.
-- [ ] Calculate next_pc later in the pipeline as PC + 2 for compressed instructions or PC + 4 otherwise.
+- Detect sequential PC wrap, including compressed and split instructions. Define fault reporting and recovery.
+- Handle registered prediction_result[i].bp_target_wrapped for taken predictions, preserving instruction association.
+- Impliment RAS
+
 
 ## Additional implementation TODOs
 
-- [ ] Recover integer producer ownership after redirects.
 - [ ] Implement FP dependencies, including rs3 and lane operand search.
-- [ ] Implement MemoryLane execution, requests/responses, faults, ordering and atomics.
+- [ ] Extend integer memory execution with precise fault retirement, atomics and floating-point loads/stores.
 - [ ] Implement FloatingLane arithmetic, conversions, rounding, exceptions and result delivery.
 - [ ] Implement SerialLane CSR/system execution and trap/interrupt control.
 - [ ] Integrate the full CPU top, backend stall/advancement, writeback and precise recovery.

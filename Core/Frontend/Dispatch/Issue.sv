@@ -35,6 +35,10 @@ module Issuer
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
     output logic accept_vector [TOTAL_LANE_COUNT-1:0], // Forced low directly on stall/redirect.
+    // Producer slots this issue group will wait on (lane, forward index), for
+    // dynamic-ready slots only (Definitions::forward_slot_dynamic). Registered
+    // by FrontendTop with the lane packets; BackendTop forms stall from it.
+    output logic watch [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0],
 
     // Latched Producer Table Data from Decode
     input logic [UNROLLED_W-1:0] rs1_index_in [ISSUE_WIDTH-1:0],
@@ -48,6 +52,7 @@ module Issuer
     output logic [4:0] op_rd [ISSUE_WIDTH-1:0],
     output logic [LANE_WIDTH-1:0] op_lane [ISSUE_WIDTH-1:0],
     output logic op_write [ISSUE_WIDTH-1:0], // Accepted nonzero integer destination write.
+    output logic raw_write [ISSUE_WIDTH-1:0],
     output logic [AGE_WIDTH-1:0] op_age [ISSUE_WIDTH-1:0],
     output DecodeCapability_ op_type [ISSUE_WIDTH-1:0],
 
@@ -72,8 +77,10 @@ module Issuer
     always_ff @(posedge clk) begin
         if (reset || redirect_taken) begin
             op_write <= '{default: 1'b0};
+            raw_write <= '{default: 1'b0};
         end else if (!stall) begin
             for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
+                raw_write[slot] <= issue_write[slot];
                 op_write[slot] <= buffer_write[slot];
                 op_rd[slot] <= issue_rd[slot];
                 op_lane[slot] <= issue_lane[slot];
@@ -288,15 +295,47 @@ module Issuer
     end
 
     // The contract signs off on fixed assignments. It never steers payload muxes.
+    logic accept_raw [TOTAL_LANE_COUNT-1:0];
     always_comb begin
-        accept_vector = '{default: 1'b0};
+        accept_raw = '{default: 1'b0};
         for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++) begin
             for (int slot = 0; slot < ISSUE_WIDTH; slot++) begin
-                accept_vector[lane] |= assigned_lanes[slot][lane] && issue_good[slot];
+                accept_raw[lane] |= assigned_lanes[slot][lane] && issue_good[slot];
             end
         end
+        accept_vector = accept_raw;
         if (reset || stall || redirect_taken)
             accept_vector = '{default: 1'b0};
+    end
+
+    // Operand-wait precompute. A consumer operand waits on a forward slot when
+    // it is valid, not read from the RF and not bypassed: the same terms the
+    // lanes used, now evaluated once here. Uses ungated acceptance; FrontendTop
+    // applies stall (hold) and flush (clear) at the capture register, so stall
+    // stays out of this cone. Integer and memory lanes are the only consumers.
+    always_comb begin
+        logic need_1, need_2;
+        for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++)
+            for (int index = 0; index <= EXECUTION_UNROLL; index++)
+                watch[lane][index] = 1'b0;
+        for (int lane = 1; lane <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT; lane++) begin
+            need_1 = accept_raw[lane] && decoder_packet[lane].common.rs1_valid &&
+                !issuer_packet[lane].read_reg_file_1 && !(BYPASS_ENABLED && issuer_packet[lane].use_bypass_1);
+            need_2 = accept_raw[lane] && decoder_packet[lane].common.rs2_valid &&
+                !issuer_packet[lane].read_reg_file_2 && !(BYPASS_ENABLED && issuer_packet[lane].use_bypass_2);
+            for (int producer = 1; producer <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT; producer++) begin
+                for (int index = 1; index <= EXECUTION_UNROLL; index++) begin
+                    if (forward_slot_dynamic(producer, index)) begin
+                        if (need_1 && issuer_packet[lane].forward_lane_1 == LANE_WIDTH'(producer) &&
+                            (EXECUTION_UNROLL == 1 || issuer_packet[lane].forward_index_1 == UNROLL_WIDTH'(index)))
+                            watch[producer][index] = 1'b1;
+                        if (need_2 && issuer_packet[lane].forward_lane_2 == LANE_WIDTH'(producer) &&
+                            (EXECUTION_UNROLL == 1 || issuer_packet[lane].forward_index_2 == UNROLL_WIDTH'(index)))
+                            watch[producer][index] = 1'b1;
+                    end
+                end
+            end
+        end
     end
     for (genvar i = 0; i < TOTAL_LANE_COUNT; i++) begin : gen_lane_mux
         // Remove the reserved field before lane selection so it has no mux.
@@ -321,8 +360,7 @@ module Issuer
             // Contract success guarantees allocation for supported widths.
             // Only lane payload waits for allocation; write enable does not.
             issue_write[slot] = issue_good[slot] && !reset && !stall && !redirect_taken &&
-                packets_out[slot].common.rd_valid && !packets_out[slot].common.rd_float &&
-                packets_out[slot].common.rd != 0;
+                writes_integer_producer(packets_out[slot]);
         end
 
     end

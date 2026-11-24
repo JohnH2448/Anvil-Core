@@ -19,7 +19,8 @@ module FetchTop
 
     // Redirect Inputs
     input logic [31:0] redirect_pc,
-    input logic redirect_taken,
+    input logic redirect_fetch, // Registered recovery launch; pulses with redirect_taken.
+    input logic redirect_taken, // Registered recovery pulse.
 
     // Output to Decode Stage
     output logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0],
@@ -45,8 +46,8 @@ module FetchTop
     output logic serve_branch_reg [ISSUE_WIDTH-1:0],
 
     // Consumption from Decode Stage
-    input logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed,
-    input logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_select_count
+    input logic stall,
+    input logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count
 );
 
     Definitions::BranchInput_ branch_input [FETCH_WORDS*2-1:0];
@@ -72,6 +73,7 @@ module FetchTop
         .flush(1'b0), // Reserved queue interface; redirects perform the active flush.
         .reset(reset),
 
+        .redirect_fetch(redirect_fetch),
         .redirect_pc(redirect_pc),
         .redirect_taken(redirect_taken),
 
@@ -108,8 +110,8 @@ module FetchTop
         .branch_input(branch_input),
         .branch_output(branch_output),
 
-        .serve_consumed(serve_consumed),
-        .serve_select_count(serve_select_count)
+        .stall(stall),
+        .serve_normal_count(serve_normal_count)
     );
 
     for (genvar i = 0; i < FETCH_WORDS*2; i++) begin : predictors
