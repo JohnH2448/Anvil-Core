@@ -54,10 +54,12 @@ module Queue
     output logic serve_c_reg [SERVE_WORDS-1:0],
     output logic serve_taken_reg [SERVE_WORDS-1:0],
     output logic serve_branch_reg [SERVE_WORDS-1:0],
+    output logic [DerivedParameters::PHT_INDEX_W-1:0] serve_pht_reg [SERVE_WORDS-1:0],
 
     // Branch Preditor Communication
     output BranchInput_ branch_input [FETCH_WORDS*2-1:0],
     input BranchOutput_ branch_output [FETCH_WORDS*2-1:0],
+    input logic [DerivedParameters::PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0], // GShare index, captured with the result
 
     // Global backend stall. Applied only as the final select of serve, FIFO
     // pointer and real_pc next state, never inside their arithmetic.
@@ -242,6 +244,7 @@ module Queue
         );
     end
     BranchOutput_ prediction_result [FETCH_SLOTS-1:0];
+    logic [DerivedParameters::PHT_INDEX_W-1:0] prediction_pht [FETCH_SLOTS-1:0];
     logic [PUSH_COUNT_W-1:0] packet_push_count;
 
     // Combinational Predicted-Path Selection
@@ -263,6 +266,7 @@ module Queue
     logic fifo_evaluated [FIFO_WORDS-1:0];
     logic fifo_pc_wrapped [FIFO_WORDS-1:0];
     logic fifo_taken [FIFO_WORDS-1:0];
+    logic [DerivedParameters::PHT_INDEX_W-1:0] fifo_pht [FIFO_WORDS-1:0];
 
     // Selected FIFO State and Registered Tail/Admission
     logic [FIFO_INDEX_W:0] fifo_occipied_slots;
@@ -273,7 +277,8 @@ module Queue
     logic fifo_packet_room;
 
     localparam int unsigned TRAP_W = $bits(TrapType_);
-    localparam int unsigned SERVE_ENTRY_W = DerivedParameters::FETCH_PC_WIDTH + 48 + 3 + 20 + $bits(DecodeCapability_) + TRAP_W;
+    localparam int unsigned SERVE_ENTRY_W = DerivedParameters::FETCH_PC_WIDTH + 48 + 3 + 20 + $bits(DecodeCapability_) + TRAP_W
+        + DerivedParameters::PHT_INDEX_W;
     // Combinational outcomes feed a single set of serve and FIFO state registers.
     logic [SERVE_ENTRY_W-1:0] serve_next [SERVE_WORDS][SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] head_next [SERVE_WORDS+1];
@@ -512,6 +517,7 @@ module Queue
                     prediction_payload[i] <= branch_input[i];
                     prediction_system_trap[i] <= packet_system_trap[i];
                     prediction_result[i] <= branch_output[i];
+                    prediction_pht[i] <= branch_pht_index[i];
                     packet_keep[i] <= stage_keep[i];
                     // A simultaneous commit advances the base for this incoming group.
                     prediction_write_slot[i] <= fifo_tail_next[FIFO_INDEX_W-1:0]
@@ -585,6 +591,7 @@ module Queue
                     fifo_branch[index] <= prediction_payload[i].bp_branch;
                     fifo_evaluated[index] <= 1'b1;
                     fifo_taken[index] <= packet_lane_taken[i];
+                    fifo_pht[index] <= prediction_pht[i];
                     fifo_pc_wrapped[index] <= prediction_pc_wrapped[i];
                 end
             end
@@ -607,10 +614,10 @@ module Queue
         logic [FIFO_INDEX_W-1:0] read_index;
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         wire TrapType_ pop_trap = fifo_pc_wrapped[read_index] ? INST_ACCESS_FAULT : fifo_trap[read_index];
-        assign fifo_candidate[lane] = {1'b1, fifo_c[read_index], fifo_taken[read_index],
+        assign fifo_candidate[lane] = {1'b1, fifo_pht[read_index], fifo_c[read_index], fifo_taken[read_index],
             fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index], fifo_fp_consumer[read_index], fifo_immediate_upper_select[read_index],
             fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index], pop_trap};
-        assign retained_candidate[lane] = {serve_valid_reg[lane], serve_c_reg[lane],
+        assign retained_candidate[lane] = {serve_valid_reg[lane], serve_pht_reg[lane], serve_c_reg[lane],
             serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane], serve_fp_consumer[lane], serve_immediate_upper_select[lane],
             serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane], serve_trap[lane]};
         always_ff @(posedge clk) begin
@@ -618,7 +625,7 @@ module Queue
                 serve_valid_reg[lane] <= 1'b0;
             else
                 serve_valid_reg[lane] <= serve_selected[lane][SERVE_ENTRY_W-1];
-            {serve_c_reg[lane], serve_taken_reg[lane], serve_branch_reg[lane],
+            {serve_pht_reg[lane], serve_c_reg[lane], serve_taken_reg[lane], serve_branch_reg[lane],
              serve_data_reg[lane], serve_pc_reg[lane],
              serve_fp_consumer[lane], serve_immediate_upper_select[lane],
              serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane],

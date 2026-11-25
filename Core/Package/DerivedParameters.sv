@@ -77,11 +77,12 @@ package DerivedParameters;
         return count;
     endfunction
 
+    localparam int unsigned BRU_LANE_COUNT = count_integer_lanes(1);
+
     // Counters represent zero through the number of lanes with each capability.
     localparam int unsigned CAP_ALU_LANE_W = lane_counter_width(
         count_integer_lanes(0));
-    localparam int unsigned CAP_BRU_LANE_W = lane_counter_width(
-        count_integer_lanes(1));
+    localparam int unsigned CAP_BRU_LANE_W = lane_counter_width(BRU_LANE_COUNT);
     localparam int unsigned CAP_MUL_LANE_W = lane_counter_width(
         count_integer_lanes(2));
     localparam int unsigned CAP_DIV_LANE_W = lane_counter_width(
@@ -96,6 +97,9 @@ package DerivedParameters;
         count_floating_lanes(1));
 
     localparam int unsigned AGE_WIDTH = (Parameters::ISSUE_WIDTH > 1) ? $clog2(Parameters::ISSUE_WIDTH) : 1;
+    // GShare PHT index carried with every instruction for training. One
+    // constant-zero bit when GShare is off (synthesis removes it).
+    localparam int unsigned PHT_INDEX_W = Parameters::USE_GSHARE ? $clog2(Parameters::GSHARE_PHT_DEPTH) : 1;
     localparam int unsigned TOTAL_INTEGER_STAGES = Parameters::EXECUTION_UNROLL + 2;
     localparam int unsigned UNROLLED_W = $clog2(Parameters::EXECUTION_UNROLL+2) + 1; // extra room bit just in case
 

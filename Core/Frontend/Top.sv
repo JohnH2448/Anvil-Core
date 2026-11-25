@@ -32,6 +32,13 @@ module FrontendTop
     input logic stall,
     input logic serial_active,
 
+    // GShare training from BackendTop (registered, fires once per resolved
+    // conditional branch). Ignored when USE_GSHARE = 0.
+    input logic train_valid [BRU_LANE_COUNT-1:0],
+    input logic train_taken [BRU_LANE_COUNT-1:0],
+    input logic [AGE_WIDTH-1:0] train_age [BRU_LANE_COUNT-1:0],
+    input logic [PHT_INDEX_W-1:0] train_pht [BRU_LANE_COUNT-1:0],
+
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
     output logic accept_vector [TOTAL_LANE_COUNT-1:0],
@@ -84,6 +91,7 @@ module FrontendTop
     logic serve_valid_reg [ISSUE_WIDTH-1:0];
     logic serve_c_reg [ISSUE_WIDTH-1:0];
     logic serve_taken_reg [ISSUE_WIDTH-1:0];
+    logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0];
     logic serve_branch_reg [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count;
 
@@ -119,7 +127,9 @@ module FrontendTop
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
+        .serve_pht_reg(serve_pht_reg),
         .serve_branch_reg(serve_branch_reg),
+        .train_valid, .train_taken, .train_age, .train_pht,
         .stall(stall),
         .serve_normal_count(serve_normal_count)
     );
@@ -158,6 +168,7 @@ module FrontendTop
         .serve_valid_reg(serve_valid_reg),
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
+        .serve_pht_reg(serve_pht_reg),
         .serve_branch_reg(serve_branch_reg),
         .serve_normal_count(serve_normal_count),
         .decoder_packet(dispatch_packet),

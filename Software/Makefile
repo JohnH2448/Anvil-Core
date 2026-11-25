@@ -41,6 +41,9 @@ MABI  := ilp32
 
 # --- Sources -------------------------------------------------------------------
 TARGET  := program
+# Override on the command line for other programs, e.g.
+#   make SOURCES="crt0.S syscalls.c dhrystone/dhrystone.c dhrystone/dhrystone_main.c" \
+#        BUILD=build/dhrystone EXTRA_CFLAGS="-fpermissive -w"
 SOURCES := crt0.S main.c syscalls.c
 BUILD   := build
 OBJECTS := $(addprefix $(BUILD)/,$(addsuffix .o,$(basename $(SOURCES))))
@@ -49,7 +52,7 @@ OBJECTS := $(addprefix $(BUILD)/,$(addsuffix .o,$(basename $(SOURCES))))
 # treats any pointer below 4 KiB as a null dereference (-Warray-bounds).
 CFLAGS  := -march=$(MARCH) -mabi=$(MABI) -O2 -g -Wall -Wextra \
            -ffunction-sections -fdata-sections --param=min-pagesize=0 \
-           -DRAM_BASE=$(RAM_BASE) -DRAM_END=$(RAM_END)
+           -I. -DRAM_BASE=$(RAM_BASE) -DRAM_END=$(RAM_END) $(EXTRA_CFLAGS)
 LDFLAGS := -march=$(MARCH) -mabi=$(MABI) -nostartfiles --specs=nano.specs \
            -T linker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map \
            -Wl,--defsym,__ram_base=$(RAM_BASE) -Wl,--defsym,__ram_end=$(RAM_END)
@@ -62,9 +65,11 @@ $(BUILD):
 	mkdir -p $@
 
 $(BUILD)/%.o: %.c platform.h | $(BUILD)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: %.S platform.h | $(BUILD)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/$(TARGET).elf: $(OBJECTS) linker.ld

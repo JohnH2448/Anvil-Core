@@ -40,12 +40,17 @@ module CoreTop
     logic redirect_advanced, redirect_trap;
     logic [31:0] redirect_pc;
     Enumerations::TrapType_ interrupt_request;
+    // GShare training: BackendTop flops straight into the predictor.
+    logic train_valid [BRU_LANE_COUNT-1:0], train_taken [BRU_LANE_COUNT-1:0];
+    logic [AGE_WIDTH-1:0] train_age [BRU_LANE_COUNT-1:0];
+    logic [PHT_INDEX_W-1:0] train_pht [BRU_LANE_COUNT-1:0];
 
     FrontendTop frontend (
         .clk, .reset,
         .fetch_request, .fetch_address, .fetch_data, .fetch_valid, .fetch_error, .stall,
         .redirect_fetch, .redirect_taken, .redirect_pc, .redirect_slot, .redirect_advanced, .redirect_trap, .interrupt_request,
         .serial_active(1'b0),
+        .train_valid, .train_taken, .train_age, .train_pht,
         .decoder_packet, .issuer_packet, .accept_vector, .watch
     );
 
@@ -53,6 +58,7 @@ module CoreTop
         .clk, .reset, .external_stall(1'b0), .stall,
         .decoder_packet, .issuer_packet, .accept_vector, .watch,
         .redirect_fetch, .redirect_taken, .redirect_pc, .redirect_slot, .redirect_advanced, .redirect_trap, .result_trap(), .trap(),
+        .train_valid, .train_taken, .train_age, .train_pht,
         .interrupt, .interrupt_type, .interrupt_request, .time_value, .timer_pending, .software_pending,
         .request_valid, .request_write, .request_address, .request_data,
         .request_mask, .request_size, .request_ready, .response_valid, .response_error,

@@ -48,6 +48,13 @@ module IntegerLane
     output logic [AGE_WIDTH-1:0] redirect_age_out,
     output logic [31:0] redirect_pc_out,
 
+    // GShare training (raw, unregistered): a valid conditional branch at the
+    // resolution stage. BackendTop registers it and fires it once. Age is
+    // redirect_age_out. Tied low when USE_GSHARE = 0 or the lane has no BRU.
+    output logic train_valid_out,
+    output logic train_taken_out,
+    output logic [PHT_INDEX_W-1:0] train_pht_out,
+
     // Stall Controls
     // Kept separate so BackendTop's single stall OR takes every term directly.
     output logic iteration_stall_out, // Registered structural hold.
@@ -325,6 +332,7 @@ module IntegerLane
         logic condition;
         logic [31:0] target;
         logic misaligned;
+        logic taken;
         assign bru_misaligned = misaligned;
         BranchUnit bru (
             .operation(decoder_payload[1].bru.operation),
@@ -335,7 +343,8 @@ module IntegerLane
             .predicted_taken(decoder_payload[1].bru.predicted_taken),
             .redirect(redirect),
             .target(target),
-            .misaligned(misaligned)
+            .misaligned(misaligned),
+            .taken(taken)
         );
         assign condition = decoder_payload[1].common.capability == CAP_BRU &&
             decoder_payload[1].common.trap_type == NONE && valid_payload[1];
@@ -345,12 +354,26 @@ module IntegerLane
         // taken branch therefore recovers to fall-through, otherwise target.
         assign redirect_pc_out = decoder_payload[1].bru.predicted_taken ?
             next_pc : target;
+        // Only conditional branches train (JAL/JALR use no PHT entry).
+        if (Parameters::USE_GSHARE) begin : gen_train
+            assign train_valid_out = condition &&
+                decoder_payload[1].bru.operation inside {BR_EQ, BR_NE, BR_LT, BR_GE, BR_LTU, BR_GEU};
+            assign train_taken_out = taken;
+            assign train_pht_out = decoder_payload[1].bru.pht_index;
+        end else begin : gen_no_train
+            assign train_valid_out = 1'b0;
+            assign train_taken_out = 1'b0;
+            assign train_pht_out = '0;
+        end
     end else begin : gen_no_bru
         assign next_pc = 'x;
         assign bru_misaligned = 1'b0;
         assign redirect_taken_out = 1'b0;
         assign redirect_age_out = 'x;
         assign redirect_pc_out = 'x;
+        assign train_valid_out = 1'b0;
+        assign train_taken_out = 1'b0;
+        assign train_pht_out = '0;
     end if (IS_MUL) begin : gen_mul
         logic [31:0] result;
         logic valid;

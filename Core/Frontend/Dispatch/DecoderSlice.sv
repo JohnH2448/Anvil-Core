@@ -29,6 +29,7 @@ module DecoderSlice
     input logic is_branch,
     input logic is_compressed,
     input logic predicted_taken,
+    input logic [DerivedParameters::PHT_INDEX_W-1:0] pht_index, // GShare index (0 when off)
 
     // Output Packet
     output DecoderPacket_ packet,
@@ -212,6 +213,7 @@ module DecoderSlice
     assign packet.bru.is_branch = is_branch;
     assign packet.bru.is_compressed = is_compressed;
     assign packet.bru.predicted_taken = predicted_taken;
+    assign packet.bru.pht_index = pht_index;
 
     // mul.operation
     always_comb begin

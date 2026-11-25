@@ -58,6 +58,7 @@ package Definitions;
         Enumerations::BranchOperation_ operation;
         logic is_branch;
         logic predicted_taken;
+        logic [DerivedParameters::PHT_INDEX_W-1:0] pht_index; // GShare index (0 when off)
         logic is_compressed;
     } DecodeBru_;
 

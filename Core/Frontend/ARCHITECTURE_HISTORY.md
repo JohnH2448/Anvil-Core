@@ -2966,3 +2966,26 @@ Expected failures, not run in the sweep:
 
 No synthesis was run.
 
+
+## 2026-11-25 - GShare direction predictor (parameter-gated) and PHT-index carry
+
+Reason: replace static BTFNT direction with a trained gshare when Parameters::USE_GSHARE = 1. With USE_GSHARE = 0 the hardware is the previous design: the static Predictor per slot, no training logic, and a one-bit constant-zero PHT field that synthesis removes.
+
+Structure:
+- Fetch/BranchTarget.sv (new): direct-target immediate decode and window-wrap check, split out of Predictor unchanged. Predictor (static BTFNT) and GShare each instantiate it; GShare contains no static direction logic.
+- Fetch/Top.sv: generate selects GShare (USE_GSHARE) or the per-slot static Predictors. Without GShare, branch_pht_index is tied to zero.
+- GShare: index = pc[PHT_W:1] XOR the GHR folded to PHT_W bits. The fold depends only on the GHR flop, so each slot adds one XOR level and the PHT read mux to the prediction path. JAL/C.J/C.JAL predict taken; conditional branches use the PHT counter MSB. train_age widened to AGE_WIDTH.
+- PHT index carry: captured with prediction_result in Queue (prediction_pht), written to the FIFO with the entry (fifo_pht), carried in the serve entry (serve_pht_reg, SERVE_ENTRY_W + PHT_INDEX_W), through Decode/DecoderSlice into DecoderPacket_.bru.pht_index.
+- Training: IntegerLane emits raw train_valid/taken/pht for a valid, untrapped conditional branch (BEQ..BGEU) at the resolution stage, with BranchUnit's resolved direction. BackendTop registers them per BRU lane using the redirect fire-once rule: valid fires once even while a stall holds the branch, and a trap edge drops it. The frontend therefore sees only flops (train_valid/taken/age/pht).
+
+Invariants:
+- Every branch carries the PHT index it was predicted with. Training writes the same entry it read.
+- At most one training pulse per resolved conditional branch.
+- USE_GSHARE = 0 elaborates no GShare, no training flops, and constant-zero PHT fields.
+
+Tradeoffs and known limits:
+- The GHR updates at training (resolution), not speculatively at fetch, so predictions use stale history and same-window branches share one history value.
+- Wrong-path branches in the same group as an older mispredict train unless TRAIN_SQUASHED_BRANCHES = 0 (oldest-only). A branch younger than a later writeback trap has already trained.
+- JAL/JALR do not train or shift the GHR.
+
+Validation: none. Not linted, simulated or synthesized. Timing impact unmeasured.

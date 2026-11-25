@@ -9,7 +9,8 @@ module BranchUnit
     input logic predicted_taken,
     output logic redirect,
     output logic [31:0] target,
-    output logic misaligned
+    output logic misaligned,
+    output logic taken // Resolved direction (for predictor training)
 );
 
     logic actual_taken;
@@ -37,6 +38,7 @@ module BranchUnit
         endcase
         target = taken_target;
         misaligned = actual_taken && taken_target[0];
+        taken = actual_taken;
         // already gated by misaligned
         redirect = (operation != BR_NONE) && !misaligned &&
             (actual_taken != predicted_taken);

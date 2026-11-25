@@ -1,3 +1,4 @@
+// Static BTFNT predictor for one fetch slot (used when USE_GSHARE = 0).
 module Predictor (
     // Interface Clock and Reset Are Unused; Queue Registers Prediction Results
     input logic clk,
@@ -7,53 +8,19 @@ module Predictor (
     input Definitions::BranchInput_ branch_input,
     output Definitions::BranchOutput_ branch_output
 );
-    // Combinational Direction and Signed Target Displacement
-    logic predict_taken;
-    logic [31:0] displacement;
-
     // Predicts Direct Jumps Taken and Conditional Branches Taken for Negative Offsets
     // Requires bp_branch to Identify Only B/JAL or C.B/C.J/C.JAL Instructions
-    assign predict_taken = branch_input.bp_branch &&
+    assign branch_output.bp_taken = branch_input.bp_branch &&
         (branch_input.bp_compressed ?
             (!branch_input.bp_instruction[14] || branch_input.bp_instruction[12]) :
             (branch_input.bp_instruction[3] || branch_input.bp_instruction[31]));
-    // Exposes Direction and Prediction Validity
-    assign branch_output.bp_taken = predict_taken;
+    // Exposes Prediction Validity
     assign branch_output.bp_valid = branch_input.bp_branch;
 
-    // Reconstructs Signed Displacement Independently of Direction and Validity
     // Target Is Used Only for Taken Predictions
-    always_comb begin
-        if (branch_input.bp_compressed) begin
-            // Selects Compressed Conditional Branch or Direct Jump Immediate
-            if (branch_input.bp_instruction[14])
-                displacement = {{23{branch_input.bp_instruction[12]}}, branch_input.bp_instruction[12],
-                    branch_input.bp_instruction[6:5], branch_input.bp_instruction[2],
-                    branch_input.bp_instruction[11:10], branch_input.bp_instruction[4:3], 1'b0};
-            else
-                displacement = {{20{branch_input.bp_instruction[12]}}, branch_input.bp_instruction[12],
-                    branch_input.bp_instruction[8], branch_input.bp_instruction[10:9],
-                    branch_input.bp_instruction[6], branch_input.bp_instruction[7],
-                    branch_input.bp_instruction[2], branch_input.bp_instruction[11],
-                    branch_input.bp_instruction[5:3], 1'b0};
-        end else if (branch_input.bp_instruction[3]) begin
-            // Reconstructs JAL Immediate
-            displacement = {{11{branch_input.bp_instruction[31]}}, branch_input.bp_instruction[31],
-                branch_input.bp_instruction[19:12], branch_input.bp_instruction[20],
-                branch_input.bp_instruction[30:21], 1'b0};
-        end else begin
-            // Reconstructs Conditional Branch Immediate
-            displacement = {{19{branch_input.bp_instruction[31]}}, branch_input.bp_instruction[31],
-                branch_input.bp_instruction[7], branch_input.bp_instruction[30:25],
-                branch_input.bp_instruction[11:8], 1'b0};
-        end
-    end
-
-    // Split the signed displacement into whole windows and a low offset.
-    // Only the low sum carries. The high tests depend solely on the displacement.
-    logic carry;
-    wire signed [31:0] window_offset = $signed(displacement) >>> DerivedParameters::FETCH_PC_WIDTH;
-    assign {carry, branch_output.bp_redirect_pc} = {1'b0, branch_input.bp_pc}
-        + {1'b0, DerivedParameters::fetch_pc_t'(displacement)};
-    assign branch_output.bp_target_wrapped = carry ? window_offset != -1 : window_offset != 0;
+    BranchTarget target (
+        .branch_input,
+        .redirect_pc(branch_output.bp_redirect_pc),
+        .target_wrapped(branch_output.bp_target_wrapped)
+    );
 endmodule

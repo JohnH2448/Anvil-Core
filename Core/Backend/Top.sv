@@ -31,6 +31,15 @@ module BackendTop
     // final-slot instruction has its result. Not stall gated.
     output logic trap,
 
+    // GShare training, one per BRU lane in lane order. Registered; valid fires
+    // once per resolved conditional branch even while a stall holds it in the
+    // resolution stage (same fire-once rule as the branch redirect). Tied low
+    // when USE_GSHARE = 0.
+    output logic train_valid [BRU_LANE_COUNT-1:0],
+    output logic train_taken [BRU_LANE_COUNT-1:0],
+    output logic [AGE_WIDTH-1:0] train_age [BRU_LANE_COUNT-1:0],
+    output logic [PHT_INDEX_W-1:0] train_pht [BRU_LANE_COUNT-1:0],
+
     // One 32-bit bus. Every accepted load or store gets one response. The bus
     // discovers every memory trap: it must answer a misaligned (address/size),
     // out-of-range or failed access with response_error. request_address is
@@ -61,6 +70,14 @@ module BackendTop
             if (1+k < lane && |EFFECTIVE_INTEGER_CAPS[k]) count++;
         for (int k = 0; k < MEMORY_LANE_COUNT; k++)
             if (MEMORY_BASE+k < lane && EFFECTIVE_MEMORY_CAPS[k][0]) count++;
+        return count;
+    endfunction
+    // BRU lanes before a physical lane, for the compact training outputs.
+    function automatic int brus_before(int lane);
+        int count;
+        count = 0;
+        for (int k = 0; k < INTEGER_LANE_COUNT; k++)
+            if (1+k < lane && EFFECTIVE_INTEGER_CAPS[k][1]) count++;
         return count;
     endfunction
     localparam int RF_LANES = ports_before(N);
@@ -172,6 +189,14 @@ module BackendTop
             write_en[k] &= (!stall || trap) && !reset;
         end
     end
+    if (!USE_GSHARE) begin : no_training
+        for (genvar b = 0; b < BRU_LANE_COUNT; b++) begin : tie
+            assign train_valid[b] = 1'b0;
+            assign train_taken[b] = 1'b0;
+            assign train_age[b] = '0;
+            assign train_pht[b] = '0;
+        end
+    end
     for (genvar i = 0; i < N; i++) begin : lanes
         localparam int PORT = ports_before(i);
         localparam bit ACTIVE = ports_before(i+1) != PORT;
@@ -208,6 +233,8 @@ module BackendTop
             );
         end else if (ACTIVE && i < MEMORY_BASE) begin : integer_lane
             logic final_ready;
+            logic raw_train_valid, raw_train_taken;
+            logic [PHT_INDEX_W-1:0] raw_train_pht;
             for (genvar k = 0; k <= EXECUTION_UNROLL; k++)
                 assign forward_ready[i][k] = k == EXECUTION_UNROLL ? final_ready : 1'b1;
             IntegerLane #(
@@ -222,6 +249,7 @@ module BackendTop
                 .bypass_data, .bypass_data_out(bypass_data[i]),
                 .redirect_taken(redirect), .redirect_age, .redirect_taken_out(redirect[i]),
                 .redirect_age_out(redirect_age[i]), .redirect_pc_out(target[i]),
+                .train_valid_out(raw_train_valid), .train_taken_out(raw_train_taken), .train_pht_out(raw_train_pht),
                 .result_ready(result_ready[PORT]), .result_pending(result_pending[PORT]), .result_valid(result_valid[PORT]),
                 .result_trap(result_trap[i]), .result_trap_type(writer_trap_type[PORT]), .result_pc(writer_pc[PORT]),
                 .result_age(result_age[PORT]),
@@ -230,6 +258,23 @@ module BackendTop
                 .read_data_1(read_data[2*PORT]), .read_data_2(read_data[2*PORT+1])
             );
             assign writer_trap[PORT] = result_trap[i];
+
+            // GShare training register: fire-once, like redirect_q/redirect_fired.
+            // A branch held in the resolution stage by stall keeps raw valid
+            // high; fired suppresses re-capture until it advances. A trap edge
+            // drops it. Everything here is a flop, so the frontend sees no
+            // backend logic.
+            if (USE_GSHARE && EFFECTIVE_INTEGER_CAPS[i-1][1]) begin : train_register
+                localparam int BRU = brus_before(i);
+                logic fired;
+                always_ff @(posedge clk) begin
+                    train_valid[BRU] <= !reset && !trap && raw_train_valid && !fired;
+                    fired <= !reset && !trap && stall && (fired || raw_train_valid);
+                    train_taken[BRU] <= raw_train_taken;
+                    train_age[BRU] <= redirect_age[i];
+                    train_pht[BRU] <= raw_train_pht;
+                end
+            end
         end else if (ACTIVE) begin : memory_lane
             MemoryLane #(
                 .IS_MEMORY(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][0]), .IS_ATOMIC(0), .IS_FLOAT(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][2]),

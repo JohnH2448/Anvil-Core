@@ -42,6 +42,7 @@ module DecodeStage
     input DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
+    input logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
 
     // Output to Issue Stage
@@ -152,6 +153,7 @@ module DecodeStage
             .is_branch(serve_branch_reg[i]),
             .is_compressed(serve_c_reg[i]),
             .predicted_taken(serve_taken_reg[i]),
+            .pht_index(serve_pht_reg[i]),
             .packet(packets[i]),
             .lane_type(lane_types[i])
         );
