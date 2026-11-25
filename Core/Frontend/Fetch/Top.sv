@@ -9,7 +9,8 @@ module FetchTop
     parameter unsigned FIFO_WORDS = 8,
     parameter unsigned ISSUE_WIDTH = 2,
     parameter unsigned RESET_VECTOR = 32'h0000_0000,
-    parameter unsigned USE_GSHARE = Parameters::USE_GSHARE
+    parameter unsigned USE_GSHARE = Parameters::USE_GSHARE,
+    parameter unsigned USE_RAS = Parameters::USE_RAS
 )(
 
     // Standard Inputs
@@ -54,6 +55,7 @@ module FetchTop
     output logic serve_taken_reg [ISSUE_WIDTH-1:0],
     output logic serve_branch_reg [ISSUE_WIDTH-1:0],
     output logic [DerivedParameters::PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
+    output logic [DerivedParameters::RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0],
 
     // GShare training (registered, fires once per resolved conditional branch).
     // Unused when USE_GSHARE = 0.
@@ -68,7 +70,11 @@ module FetchTop
 );
 
     Definitions::BranchInput_ branch_input [FETCH_WORDS*2-1:0];
-    Definitions::BranchOutput_ branch_output [FETCH_WORDS*2-1:0];
+    Definitions::BranchOutput_ branch_output [FETCH_WORDS*2-1:0]; // to the Queue (after the RAS override)
+    Definitions::BranchOutput_ raw_output [FETCH_WORDS*2-1:0];    // direction predictor
+    logic ras_commit;
+    Definitions::BranchInput_ ras_commit_payload [FETCH_WORDS*2-1:0];
+    logic ras_commit_keep [FETCH_WORDS*2-1:0], ras_commit_taken [FETCH_WORDS*2-1:0];
     logic [DerivedParameters::PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0];
     logic [31:0] req_address;
     logic req_valid;
@@ -124,6 +130,8 @@ module FetchTop
         .serve_taken_reg(serve_taken_reg),
         .serve_branch_reg(serve_branch_reg),
         .serve_pht_reg(serve_pht_reg),
+        .serve_ras_reg(serve_ras_reg),
+        .ras_commit, .ras_commit_payload, .ras_commit_keep, .ras_commit_taken,
 
         .branch_input(branch_input),
         .branch_output(branch_output),
@@ -140,7 +148,7 @@ module FetchTop
             .clk(clk),
             .reset(reset),
             .branch_input(branch_input),
-            .branch_output(branch_output),
+            .branch_output(raw_output),
             .branch_pht_index(branch_pht_index),
             .train_valid(train_valid),
             .train_taken(train_taken),
@@ -153,10 +161,46 @@ module FetchTop
                 .clk(clk),
                 .reset(reset),
                 .branch_input(branch_input[i]),
-                .branch_output(branch_output[i])
+                .branch_output(raw_output[i])
             );
             assign branch_pht_index[i] = '0;
         end
+    end
+
+    // Return address stack: overrides the direction predictor for JALR-class
+    // slots. A return predicts taken to the top of stack (a flop) when the
+    // stack is not empty; any other JALR predicts not taken. One 2:1 select
+    // after the predictor, in parallel decode from the staging data.
+    if (USE_RAS) begin : return_stack
+        logic slot_jalr [FETCH_WORDS*2-1:0], slot_return [FETCH_WORDS*2-1:0];
+        logic top_valid;
+        DerivedParameters::fetch_pc_t top;
+        RAS #(.FETCH_SLOTS(FETCH_WORDS*2)) ras (
+            .clk(clk),
+            .reset(reset),
+            .redirect_taken(redirect_taken),
+            .branch_input(branch_input),
+            .slot_jalr(slot_jalr),
+            .slot_return(slot_return),
+            .top_valid(top_valid),
+            .top(top),
+            .commit(ras_commit),
+            .commit_payload(ras_commit_payload),
+            .commit_keep(ras_commit_keep),
+            .commit_taken(ras_commit_taken)
+        );
+        always_comb begin
+            for (int unsigned i = 0; i < FETCH_WORDS*2; i++) begin
+                branch_output[i] = raw_output[i];
+                if (slot_jalr[i]) begin
+                    branch_output[i].bp_taken = branch_input[i].bp_branch && slot_return[i] && top_valid;
+                    branch_output[i].bp_redirect_pc = top;
+                    branch_output[i].bp_target_wrapped = 1'b0; // a pushed return address is in range
+                end
+            end
+        end
+    end else begin : no_return_stack
+        assign branch_output = raw_output;
     end
 
 

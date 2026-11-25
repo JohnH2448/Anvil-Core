@@ -2989,3 +2989,56 @@ Tradeoffs and known limits:
 - JAL/JALR do not train or shift the GHR.
 
 Validation: none. Not linted, simulated or synthesized. Timing impact unmeasured.
+
+## 2026-11-25 - GHR shifts every trained branch (TRAIN_SQUASHED_BRANCHES = 1)
+
+GShare's GHR update now depends on the parameter. With TRAIN_SQUASHED_BRANCHES = 1, every branch trained in a cycle shifts in, oldest first, so history follows program order regardless of how branches paired at resolution. With 0, the oldest-only shift is unchanged. The default is now 1.
+
+Measured (Verilator, SystemTop, 2000 Dhrystone runs):
+- Oldest-only training: 670 cycles/run.
+- Train all, oldest-only GHR: 545 cycles/run.
+- Train all, all-branch GHR: 535 cycles/run (1.063 DMIPS/MHz).
+- Static BTFNT: 577 cycles/run.
+- CoreMark (10 iterations): 2.318 -> 2.323 CoreMark/MHz.
+
+Root cause of the earlier gshare regression: with two BRU lanes, oldest-only training dropped the younger of every same-cycle branch pair, so its PHT entry never trained.
+
+## 2026-11-25 - Return address stack (USE_RAS, RAS_DEPTH)
+
+Reason: returns (JALR/C.JR through x1/x5) were never predicted, so every return redirected from the BRU. USE_RAS = 0 removes all of the RAS hardware below. Constant one-bit fields remain in the FIFO, serve and packet entries; synthesis removes them.
+
+Structure:
+- Fetch/RAS.sv (new):
+  - Circular stack of fetch_pc_t entries, RAS_DEPTH entries (power of two >= 2, checked at elaboration).
+  - A registered top, so the prediction read is a flop.
+  - A saturating count, where overflow overwrites the oldest entry.
+  - Per-slot decode of JALR-class instructions and returns.
+- Fetch/Top.sv: after the direction predictor (GShare or static), JALR-class slots are overridden:
+  - A return predicts taken to the top when the stack is not empty, with target_wrapped = 0.
+  - Any other JALR predicts not taken.
+  - The cost is one 2:1 select after the predictor; the slot decode runs in parallel from the staging data.
+- Queue:
+  - With USE_RAS, the predecode branch flag also marks JALR, C.JR and C.JALR, so those slots reach the prediction stage.
+  - The committing window (packet_commit, prediction_payload, packet_keep, packet_lane_taken) is exported for the RAS update.
+  - The predicted target is carried with each entry (fifo_ras, serve_ras_reg).
+- Update at Queue commit: the first RAS event among the kept slots of the committing window is applied.
+  - A call (JAL/JALR with rd x1/x5, C.JAL, C.JALR) pushes PC + length.
+  - A return that committed taken pops.
+  - Any other JALR (unpredicted) freezes the stack until the next redirect. Such a JALR always redirects in the BRU, so everything fetched behind it is wrong path.
+- Check:
+  - DecoderSlice computes ras_rs1 = target - imm, off the execute path.
+  - BranchUnit (CHECK_RETURN) adds `JALR && predicted_taken && rs1 != ras_rs1` to its redirect condition. This is an equality on the forwarded operand, with no adder on the redirect path.
+  - IntegerLane recovers to `taken ? target : next_pc` when USE_RAS, because a predicted-taken JALR can mispredict while actually taken.
+
+Invariants:
+- Every predicted return is verified by the BRU. A wrong RAS costs a redirect, never correctness.
+- No RAS update from a window fetched behind an unpredicted JALR.
+- Between a window's prediction read and its commit, no other window updates the RAS. A window that changes the RAS either ends in a taken prediction, which discards the next window, or freezes the stack.
+
+Tradeoffs and known limits:
+- There is no repair on conditional mispredicts or traps. Wrong-path calls or returns behind a mispredicted branch can corrupt the stack, and that costs only predictions.
+- C.JALR or JALR that both links and reads x1/x5 is treated as a call only (push, no pop).
+- A return that could only be predicted from a call in the same, not yet committed, window is not predicted. This needs an unpredicted JALR call followed by a return in one window, and is rare.
+- Queue.real_pc (unused) does not model taken JALR.
+
+Validation: none. Not linted, simulated or synthesized. Timing impact unmeasured.

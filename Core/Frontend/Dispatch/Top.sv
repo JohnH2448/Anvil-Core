@@ -39,6 +39,7 @@ module DispatchTop
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
+    input logic [RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
     output logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count,
 
@@ -124,6 +125,7 @@ module DispatchTop
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_pht_reg(serve_pht_reg),
+        .serve_ras_reg(serve_ras_reg),
         .serve_branch_reg(serve_branch_reg),
         .packets_out(packets_out),
         .lane_types_out(lane_types_out),

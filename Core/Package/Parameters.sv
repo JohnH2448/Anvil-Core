@@ -21,6 +21,11 @@ package Parameters;
     parameter unsigned GSHARE_PHT_DEPTH = 256;
     parameter unsigned TRAIN_SQUASHED_BRANCHES = 1; // 1 is better here trust
 
+    // Return address stack: predicts JALR/C.JR returns at fetch. USE_RAS = 0
+    // removes all of its hardware. RAS_DEPTH is an entry count (power of two >= 2).
+    parameter unsigned USE_RAS = 1;
+    parameter unsigned RAS_DEPTH = 8;
+
     // 1: a store waits for every older bus response, so bus errors are
     // precise. 0: stores may overtake an older load's error (imprecise).
     parameter bit PRECISE_BUS_FAULTS = 0;

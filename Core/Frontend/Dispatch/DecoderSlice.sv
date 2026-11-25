@@ -30,6 +30,7 @@ module DecoderSlice
     input logic is_compressed,
     input logic predicted_taken,
     input logic [DerivedParameters::PHT_INDEX_W-1:0] pht_index, // GShare index (0 when off)
+    input logic [DerivedParameters::RAS_TARGET_W-1:0] ras_target, // RAS predicted return target (0 when off)
 
     // Output Packet
     output DecoderPacket_ packet,
@@ -214,6 +215,13 @@ module DecoderSlice
     assign packet.bru.is_compressed = is_compressed;
     assign packet.bru.predicted_taken = predicted_taken;
     assign packet.bru.pht_index = pht_index;
+    // A predicted return is correct when rs1 + imm == target, i.e. rs1 == target - imm.
+    // Precomputing that here leaves the BRU a plain equality on its operand.
+    if (Parameters::USE_RAS) begin : ras_check
+        assign packet.bru.ras_rs1 = 32'(ras_target) - packet.common.immediate;
+    end else begin : no_ras_check
+        assign packet.bru.ras_rs1 = '0;
+    end
 
     // mul.operation
     always_comb begin

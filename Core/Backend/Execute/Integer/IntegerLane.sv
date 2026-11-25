@@ -334,13 +334,14 @@ module IntegerLane
         logic misaligned;
         logic taken;
         assign bru_misaligned = misaligned;
-        BranchUnit bru (
+        BranchUnit #(.CHECK_RETURN(Parameters::USE_RAS != 0)) bru (
             .operation(decoder_payload[1].bru.operation),
             .source_1(source_1),
             .source_2(source_2),
             .immediate(decoder_payload[1].common.immediate),
             .pc(decoder_payload[1].common.pc),
             .predicted_taken(decoder_payload[1].bru.predicted_taken),
+            .return_rs1(32'(decoder_payload[1].bru.ras_rs1)),
             .redirect(redirect),
             .target(target),
             .misaligned(misaligned),
@@ -352,8 +353,14 @@ module IntegerLane
         assign redirect_age_out = issuer_payload[1].input_age;
         // A redirect means direction disagreed with prediction. A predicted
         // taken branch therefore recovers to fall-through, otherwise target.
-        assign redirect_pc_out = decoder_payload[1].bru.predicted_taken ?
-            next_pc : target;
+        if (Parameters::USE_RAS) begin : ras_recovery
+            // A predicted-taken JALR can mispredict while actually taken (wrong
+            // return target), so recover by the resolved direction instead.
+            assign redirect_pc_out = taken ? target : next_pc;
+        end else begin : direction_recovery
+            assign redirect_pc_out = decoder_payload[1].bru.predicted_taken ?
+                next_pc : target;
+        end
         // Only conditional branches train (JAL/JALR use no PHT entry).
         if (Parameters::USE_GSHARE) begin : gen_train
             assign train_valid_out = condition &&

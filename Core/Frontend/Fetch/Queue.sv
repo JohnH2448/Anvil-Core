@@ -9,7 +9,8 @@ module Queue
     parameter unsigned SUPPORT_ATOMIC = Parameters::SUPPORT_ATOMIC,
     parameter unsigned FIFO_WORDS = 8,
     parameter unsigned SERVE_WORDS = 2,
-    parameter unsigned RESET_VECTOR = 32'h0000_0000
+    parameter unsigned RESET_VECTOR = 32'h0000_0000,
+    parameter unsigned USE_RAS = Parameters::USE_RAS
 )(
 
     // Standard Inputs
@@ -55,11 +56,18 @@ module Queue
     output logic serve_taken_reg [SERVE_WORDS-1:0],
     output logic serve_branch_reg [SERVE_WORDS-1:0],
     output logic [DerivedParameters::PHT_INDEX_W-1:0] serve_pht_reg [SERVE_WORDS-1:0],
+    output logic [DerivedParameters::RAS_TARGET_W-1:0] serve_ras_reg [SERVE_WORDS-1:0], // predicted return target (0 when off)
 
     // Branch Preditor Communication
     output BranchInput_ branch_input [FETCH_WORDS*2-1:0],
     input BranchOutput_ branch_output [FETCH_WORDS*2-1:0],
     input logic [DerivedParameters::PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0], // GShare index, captured with the result
+
+    // RAS update: the prediction window committing to the FIFO this edge.
+    output logic ras_commit,
+    output BranchInput_ ras_commit_payload [FETCH_WORDS*2-1:0],
+    output logic ras_commit_keep [FETCH_WORDS*2-1:0],
+    output logic ras_commit_taken [FETCH_WORDS*2-1:0],
 
     // Global backend stall. Applied only as the final select of serve, FIFO
     // pointer and real_pc next state, never inside their arithmetic.
@@ -99,6 +107,13 @@ module Queue
              (half_word[15:13] == 3'b001) ||
              (half_word[15:13] == 3'b110) ||
              (half_word[15:13] == 3'b111));
+    endfunction
+
+    // RAS: JALR, C.JR and C.JALR are marked as branches so the prediction stage
+    // sees them (from the low halfword, like is_branch32).
+    function automatic logic is_jalr(input logic [15:0] h);
+        is_jalr = h[6:0] == 7'b1100111 ||
+            (h[1:0] == 2'b10 && h[15:13] == 3'b100 && h[6:2] == 5'd0 && h[11:7] != 5'd0);
     endfunction
 
     // Calculates Cannonical Next PC Delta from Instruction Data
@@ -267,6 +282,7 @@ module Queue
     logic fifo_pc_wrapped [FIFO_WORDS-1:0];
     logic fifo_taken [FIFO_WORDS-1:0];
     logic [DerivedParameters::PHT_INDEX_W-1:0] fifo_pht [FIFO_WORDS-1:0];
+    logic [DerivedParameters::RAS_TARGET_W-1:0] fifo_ras [FIFO_WORDS-1:0];
 
     // Selected FIFO State and Registered Tail/Admission
     logic [FIFO_INDEX_W:0] fifo_occipied_slots;
@@ -278,7 +294,7 @@ module Queue
 
     localparam int unsigned TRAP_W = $bits(TrapType_);
     localparam int unsigned SERVE_ENTRY_W = DerivedParameters::FETCH_PC_WIDTH + 48 + 3 + 20 + $bits(DecodeCapability_) + TRAP_W
-        + DerivedParameters::PHT_INDEX_W;
+        + DerivedParameters::PHT_INDEX_W + DerivedParameters::RAS_TARGET_W;
     // Combinational outcomes feed a single set of serve and FIFO state registers.
     logic [SERVE_ENTRY_W-1:0] serve_next [SERVE_WORDS][SERVE_WORDS+1];
     logic [FIFO_INDEX_W:0] head_next [SERVE_WORDS+1];
@@ -392,6 +408,16 @@ module Queue
     // Packet Check-In Data to FIFO is Valid
     assign packet_commit = prediction_stage_valid && fifo_packet_room && !redirect_taken;
 
+    // RAS update interface: the committing window, straight from registers.
+    assign ras_commit = packet_commit;
+    always_comb begin
+        for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
+            ras_commit_payload[i] = prediction_payload[i];
+            ras_commit_keep[i] = packet_keep[i];
+            ras_commit_taken[i] = packet_lane_taken[i];
+        end
+    end
+
     // Staging Register to Prediction Register Transfer Gate Bit
     assign stage_transfer = fetch_staging_reg_valid &&
         (!prediction_stage_valid || packet_commit) &&
@@ -455,7 +481,7 @@ module Queue
                 for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
                     fetch_lane_pc[i] <= DerivedParameters::fetch_pc_t'(32'(response_pc_reg) + i*2);
                     fetch_c_reg[i] <= fetch_data[i*16 +: 2] != 2'b11;
-                    fetch_branch_reg[i] <= is_branch16(fetch_data[i*16 +: 16]) ||
+                    fetch_branch_reg[i] <= is_branch16(fetch_data[i*16 +: 16]) || (USE_RAS && is_jalr(fetch_data[i*16 +: 16])) ||
                         is_branch32(fetch_data[i*16 +: 16]);
                 end
                 fetch_staging_pc <= response_pc_reg;
@@ -592,6 +618,7 @@ module Queue
                     fifo_evaluated[index] <= 1'b1;
                     fifo_taken[index] <= packet_lane_taken[i];
                     fifo_pht[index] <= prediction_pht[i];
+                    fifo_ras[index] <= USE_RAS ? DerivedParameters::RAS_TARGET_W'(prediction_result[i].bp_redirect_pc) : '0;
                     fifo_pc_wrapped[index] <= prediction_pc_wrapped[i];
                 end
             end
@@ -614,10 +641,10 @@ module Queue
         logic [FIFO_INDEX_W-1:0] read_index;
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         wire TrapType_ pop_trap = fifo_pc_wrapped[read_index] ? INST_ACCESS_FAULT : fifo_trap[read_index];
-        assign fifo_candidate[lane] = {1'b1, fifo_pht[read_index], fifo_c[read_index], fifo_taken[read_index],
+        assign fifo_candidate[lane] = {1'b1, fifo_ras[read_index], fifo_pht[read_index], fifo_c[read_index], fifo_taken[read_index],
             fifo_branch[read_index], fifo_data[read_index], fifo_pc[read_index], fifo_fp_consumer[read_index], fifo_immediate_upper_select[read_index],
             fifo_rs1[read_index], fifo_rs2[read_index], fifo_rd[read_index], fifo_rs3[read_index], fifo_rs1_float[read_index], fifo_rs2_float[read_index], fifo_rs3_float[read_index], fifo_rd_float[read_index], fifo_rs1_used[read_index], fifo_rs2_used[read_index], fifo_rd_written[read_index], fifo_capability[read_index], pop_trap};
-        assign retained_candidate[lane] = {serve_valid_reg[lane], serve_pht_reg[lane], serve_c_reg[lane],
+        assign retained_candidate[lane] = {serve_valid_reg[lane], serve_ras_reg[lane], serve_pht_reg[lane], serve_c_reg[lane],
             serve_taken_reg[lane], serve_branch_reg[lane], serve_data_reg[lane], serve_pc_reg[lane], serve_fp_consumer[lane], serve_immediate_upper_select[lane],
             serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane], serve_rs1_float[lane], serve_rs2_float[lane], serve_rs3_float[lane], serve_rd_float[lane], serve_rs1_used[lane], serve_rs2_used[lane], serve_rd_written[lane], serve_capability[lane], serve_trap[lane]};
         always_ff @(posedge clk) begin
@@ -625,7 +652,7 @@ module Queue
                 serve_valid_reg[lane] <= 1'b0;
             else
                 serve_valid_reg[lane] <= serve_selected[lane][SERVE_ENTRY_W-1];
-            {serve_pht_reg[lane], serve_c_reg[lane], serve_taken_reg[lane], serve_branch_reg[lane],
+            {serve_ras_reg[lane], serve_pht_reg[lane], serve_c_reg[lane], serve_taken_reg[lane], serve_branch_reg[lane],
              serve_data_reg[lane], serve_pc_reg[lane],
              serve_fp_consumer[lane], serve_immediate_upper_select[lane],
              serve_rs1[lane], serve_rs2[lane], serve_rd[lane], serve_rs3[lane],

@@ -92,6 +92,7 @@ module FrontendTop
     logic serve_c_reg [ISSUE_WIDTH-1:0];
     logic serve_taken_reg [ISSUE_WIDTH-1:0];
     logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0];
+    logic [RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0];
     logic serve_branch_reg [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count;
 
@@ -128,6 +129,7 @@ module FrontendTop
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_pht_reg(serve_pht_reg),
+        .serve_ras_reg(serve_ras_reg),
         .serve_branch_reg(serve_branch_reg),
         .train_valid, .train_taken, .train_age, .train_pht,
         .stall(stall),
@@ -169,6 +171,7 @@ module FrontendTop
         .serve_c_reg(serve_c_reg),
         .serve_taken_reg(serve_taken_reg),
         .serve_pht_reg(serve_pht_reg),
+        .serve_ras_reg(serve_ras_reg),
         .serve_branch_reg(serve_branch_reg),
         .serve_normal_count(serve_normal_count),
         .decoder_packet(dispatch_packet),

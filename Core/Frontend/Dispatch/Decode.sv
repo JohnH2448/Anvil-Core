@@ -43,6 +43,7 @@ module DecodeStage
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
+    input logic [RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0],
     input logic serve_branch_reg [ISSUE_WIDTH-1:0],
 
     // Output to Issue Stage
@@ -154,6 +155,7 @@ module DecodeStage
             .is_compressed(serve_c_reg[i]),
             .predicted_taken(serve_taken_reg[i]),
             .pht_index(serve_pht_reg[i]),
+            .ras_target(serve_ras_reg[i]),
             .packet(packets[i]),
             .lane_type(lane_types[i])
         );

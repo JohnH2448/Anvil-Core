@@ -100,6 +100,10 @@ package DerivedParameters;
     // GShare PHT index carried with every instruction for training. One
     // constant-zero bit when GShare is off (synthesis removes it).
     localparam int unsigned PHT_INDEX_W = Parameters::USE_GSHARE ? $clog2(Parameters::GSHARE_PHT_DEPTH) : 1;
+    // RAS: predicted return target carried from fetch to Decode, and the rs1
+    // value Decode derives from it for the BRU check. One constant bit when off.
+    localparam int unsigned RAS_TARGET_W = Parameters::USE_RAS ? FETCH_PC_WIDTH : 1;
+    localparam int unsigned RAS_CHECK_W = Parameters::USE_RAS ? 32 : 1;
     localparam int unsigned TOTAL_INTEGER_STAGES = Parameters::EXECUTION_UNROLL + 2;
     localparam int unsigned UNROLLED_W = $clog2(Parameters::EXECUTION_UNROLL+2) + 1; // extra room bit just in case
 

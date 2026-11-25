@@ -1,12 +1,15 @@
 module BranchUnit
     import Enumerations::*;
-(
+#(
+    parameter bit CHECK_RETURN = 1'b0 // USE_RAS: a predicted-taken JALR must also hit its target
+)(
     input BranchOperation_ operation,
     input logic [31:0] source_1,
     input logic [31:0] source_2,
     input logic [31:0] immediate,
     input logic [31:0] pc,
     input logic predicted_taken,
+    input logic [31:0] return_rs1, // CHECK_RETURN: rs1 that makes the predicted target correct
     output logic redirect,
     output logic [31:0] target,
     output logic misaligned,
@@ -41,7 +44,10 @@ module BranchUnit
         taken = actual_taken;
         // already gated by misaligned
         redirect = (operation != BR_NONE) && !misaligned &&
-            (actual_taken != predicted_taken);
+            (actual_taken != predicted_taken ||
+             // RAS: a JALR is predicted taken only as a return. rs1 == target - imm
+             // is a plain operand equality (no adder on this path).
+             (CHECK_RETURN && operation == BR_JALR && predicted_taken && source_1 != return_rs1));
     end
 
 endmodule
