@@ -129,22 +129,38 @@ module GShare
     end
 
     // GHT Writes
-    always_ff @(posedge clk) begin
-        int unsigned oldest_index;
-        logic oldest_valid;
-        oldest_index = '0;
-        oldest_valid = 1'b0;
-        for (int unsigned i = 0; i < BRU_LANE_COUNT; i++) begin
-            if (train_valid[i] &&
-                (!oldest_valid || train_age[i] < train_age[oldest_index])) begin
-                oldest_index = i;
-                oldest_valid = 1'b1;
-            end
+    if (TRAIN_SQUASHED_BRANCHES) begin : ghr_all
+        // Every trained branch shifts in, oldest first, so the history follows
+        // program order regardless of how branches paired at resolution.
+        // Ages are distinct within a cycle; one pass per age keeps it a small
+        // fixed mux chain on a register that is off the prediction path.
+        always_ff @(posedge clk) begin
+            logic [GSHARE_GHR_DEPTH-1:0] next;
+            next = ghr;
+            for (int unsigned age = 0; age < 2**AGE_WIDTH; age++)
+                for (int unsigned i = 0; i < BRU_LANE_COUNT; i++)
+                    if (train_valid[i] && train_age[i] == AGE_WIDTH'(age))
+                        next = {next[GSHARE_GHR_DEPTH-2:0], train_taken[i]};
+            ghr <= next;
         end
-        if (train_valid[oldest_index]) begin
-            ghr <= {ghr[GSHARE_GHR_DEPTH-2:0], train_taken[oldest_index]};
-        end else begin
-            ghr <= ghr;
+    end else begin : ghr_oldest
+        always_ff @(posedge clk) begin
+            int unsigned oldest_index;
+            logic oldest_valid;
+            oldest_index = '0;
+            oldest_valid = 1'b0;
+            for (int unsigned i = 0; i < BRU_LANE_COUNT; i++) begin
+                if (train_valid[i] &&
+                    (!oldest_valid || train_age[i] < train_age[oldest_index])) begin
+                    oldest_index = i;
+                    oldest_valid = 1'b1;
+                end
+            end
+            if (train_valid[oldest_index]) begin
+                ghr <= {ghr[GSHARE_GHR_DEPTH-2:0], train_taken[oldest_index]};
+            end else begin
+                ghr <= ghr;
+            end
         end
     end
 

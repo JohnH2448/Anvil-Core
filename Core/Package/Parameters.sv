@@ -19,7 +19,7 @@ package Parameters;
     parameter unsigned USE_GSHARE = 1;
     parameter unsigned GSHARE_GHR_DEPTH = 8;
     parameter unsigned GSHARE_PHT_DEPTH = 256;
-    parameter unsigned TRAIN_SQUASHED_BRANCHES = 0;
+    parameter unsigned TRAIN_SQUASHED_BRANCHES = 1; // 1 is better here trust
 
     // 1: a store waits for every older bus response, so bus errors are
     // precise. 0: stores may overtake an older load's error (imprecise).
