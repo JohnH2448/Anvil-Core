@@ -15,19 +15,25 @@ module SystemTrapPredecode
         csr_legal = 1'b1;
         csr_read_only = 1'b0;
         writes_csr = funct3[1:0] == 1 || instruction[19:15] != 0;
-        case (address)
-            MSTATUS, MTVEC, MIP, MIE, MCYCLE, MCYCLEH, MINSTRET,
-            MINSTRETH, MSCRATCH, MEPC, MCAUSE, MISA: ;
-            12'h001, 12'h002, 12'h003: csr_legal = SUPPORT_FLOAT != 0;
+        // CSR whitelist for this M-mode-only core; every other address is
+        // ILLEGAL (S/U-mode CSRs such as medeleg/mideleg/mcounteren/menvcfg,
+        // PMP, Zihpm user counters, debug/trigger CSRs). The FP
+        // CSRs are ILLEGAL too: mstatus.FS is hardwired Off. Read-only means
+        // the address is in a read-only space (csr[11:10] == 2'b11); a write
+        // attempt is ILLEGAL. Read-only-zero CSRs in writable space (mstatush,
+        // mtval, mcountinhibit, mhpmevent3-31, mhpmcounter3-31(h)) ignore
+        // writes in the serial lane.
+        csr_read_only = address[11:10] == 2'b11;
+        csr_legal = address inside {
             MVENDORID, MARCHID, MIMPID, MHARTID, MCONFIGPTR,
-            MEDELEG, MIDELEG, MCOUNTEREN, MSTATUSH, MTVAL: csr_read_only = 1'b1;
-            default: begin
-                csr_read_only = 1'b1;
-                csr_legal = (address >= 12'hB03 && address <= 12'hB1F) ||
-                    (address >= 12'hB83 && address <= 12'hB9F) ||
-                    (address >= 12'h323 && address <= 12'h33F);
-            end
-        endcase
+            MSTATUS, MISA, MIE, MTVEC, MSTATUSH,
+            12'h320, [12'h323:12'h33F], // mcountinhibit, mhpmevent3-31
+            MSCRATCH, MEPC, MCAUSE, MTVAL, MIP,
+            MCYCLE, MINSTRET, [12'hB03:12'hB1F], // mhpmcounter3-31
+            MCYCLEH, MINSTRETH, [12'hB83:12'hB9F], // mhpmcounter3h-31h
+            12'hC00, 12'hC01, 12'hC02, // cycle, time, instret
+            12'hC80, 12'hC81, 12'hC82 // cycleh, timeh, instreth
+        };
         trap = NONE;
         if (funct3 == 0) begin
             case (instruction)

@@ -13,13 +13,33 @@ module BackendTop
     output logic redirect_fetch, redirect_taken,
     output logic [AGE_WIDTH-1:0] redirect_slot,
     output logic redirect_advanced, // Branch advanced between detection and recovery.
+    // Registered writeback trap (the trap skid cycle), pulsing with
+    // redirect_taken: full frontend flush (including the whole producer table)
+    // to redirect_pc = mtvec, mepc (MRET) or the refetch PC.
+    output logic redirect_trap,
+    // CLINT mtime for the time/timeh CSRs.
+    input logic [63:0] time_value,
+    // CLINT levels for mip.MTIP/mip.MSIP; an INT_EXTERNAL pulse sets mip.MEIP.
+    input logic timer_pending, software_pending,
+    input logic interrupt,
+    input Enumerations::InterruptType_ interrupt_type,
+    // Pending and enabled interrupt for Decode to tag onto a valid instruction.
+    output Enumerations::TrapType_ interrupt_request,
     output logic [31:0] redirect_pc,
     output logic result_trap [TOTAL_LANE_COUNT-1:0],
+    // Writeback-time trap: some final-slot instruction traps and every older
+    // final-slot instruction has its result. Not stall gated.
+    output logic trap,
 
-    // One aligned 32-bit bus. Every accepted load or store gets one response.
+    // One 32-bit bus. Every accepted load or store gets one response. The bus
+    // discovers every memory trap: it must answer a misaligned (address/size),
+    // out-of-range or failed access with response_error. request_address is
+    // the full byte address; request_data/request_mask are lane-shifted
+    // within the aligned word.
     output logic request_valid, request_write,
     output logic [31:0] request_address, request_data,
     output logic [3:0] request_mask,
+    output logic [1:0] request_size, // MemorySize_
     input logic request_ready,
     input logic response_valid, response_error,
     input logic [31:0] response_data,
@@ -44,47 +64,149 @@ module BackendTop
         return count;
     endfunction
     localparam int RF_LANES = ports_before(N);
-    logic [4:0] read_addr [2*RF_LANES-1:0], write_addr [RF_LANES-1:0];
-    logic [31:0] read_data [2*RF_LANES-1:0], write_data [RF_LANES-1:0];
-    logic [AGE_WIDTH-1:0] result_age [RF_LANES-1:0];
-    logic result_ready [RF_LANES-1:0], write_en [RF_LANES-1:0];
-    logic [4:0] next_write_addr [RF_LANES-1:0];
-    logic [AGE_WIDTH-1:0] next_result_age [RF_LANES-1:0];
+    // Writers: every RF-reading integer/memory lane, then the serial lane.
+    localparam int SERIAL_WRITER = RF_LANES;
+    localparam int WRITERS = RF_LANES + 1;
+    // Two read ports per RF lane, then the serial lane's rs1 port.
+    localparam int SERIAL_READ = 2*RF_LANES;
+    localparam int RETIRE_WIDTH = $clog2(WRITERS + 1);
+    logic [4:0] read_addr [2*RF_LANES:0];
+    logic [31:0] read_data [2*RF_LANES:0];
+    logic [4:0] result_destination [WRITERS];
+    logic [31:0] result_data [WRITERS];
+    logic [AGE_WIDTH-1:0] result_age [WRITERS];
+    logic result_ready [WRITERS], result_pending [WRITERS], writer_trap [WRITERS];
+    logic result_valid [WRITERS];
+    Enumerations::TrapType_ writer_trap_type [WRITERS];
+    logic [31:0] writer_pc [WRITERS];
+    logic serial_mret, serial_fence_i; // The serial writer's flush is an MRET/FENCE.I (it retires).
+    logic write_request [WRITERS];
+    // ISSUE_WIDTH physical write ports. A lockstep group holds at most
+    // ISSUE_WIDTH instructions, so at most ISSUE_WIDTH writers request at once.
+    logic [4:0] write_addr [ISSUE_WIDTH];
+    logic [31:0] write_data [ISSUE_WIDTH];
+    logic write_en [ISSUE_WIDTH];
 
     localparam int M = MEMORY_LANE_COUNT > 0 ? MEMORY_LANE_COUNT : 1;
     logic pending [M], candidate [M], returned [M], store [M];
+    logic return_error, cancel_checkin;
+    logic [31:0] return_data;
     logic [AGE_WIDTH-1:0] age [M];
     logic [31:0] address [M], data [M];
     logic [3:0] mask [M];
+    logic [1:0] size [M];
 
-    IntegerFile #(.READ_PORTS(2*RF_LANES), .WRITE_PORTS(RF_LANES)) integer_file (.*);
-    // Lockstep puts all retiring lanes in one group. Youngest writer wins WAW.
-    // conflict[i][j]: port j holds a younger instruction with the same rd. It is
-    // registered as the group enters the final slots and held under stall, since
-    // rd and age never change there. It deliberately ignores validity, rd_valid,
-    // traps and the redirect kill (stage_2_flush): those all live in
-    // result_ready[j], so a flushed, trapped or not-yet-ready younger writer
-    // never suppresses an older one. The write enable is then flops only.
-    logic conflict [RF_LANES-1:0][RF_LANES-1:0];
-    always_ff @(posedge clk) begin
-        if (!stall) begin
-            foreach (conflict[i, j])
-                conflict[i][j] <= i != j && next_write_addr[j] == next_write_addr[i] &&
-                    next_result_age[j] > next_result_age[i];
+    IntegerFile #(.READ_PORTS(2*RF_LANES+1), .WRITE_PORTS(ISSUE_WIDTH)) integer_file (.*);
+
+    // Writeback. Lockstep puts every retiring lane in one group and writeback
+    // commits it on an advancing edge only (suppressed under stall).
+    // - Trap kill: a writer younger than any trapping final-slot instruction
+    //   never writes. Raw writer_trap is used, so a younger instruction is
+    //   killed even while the trap itself waits on older pending work.
+    // - WAW: the youngest surviving writer of an rd wins.
+    // - Each issue position owns its correspondingly numbered RF port.
+    // The trap bit asserts when a final-slot instruction traps and no older
+    // final-slot instruction is pending (unfinished iterating or memory
+    // result), so an older unfinished result is never treated as done. It is
+    // not stall gated.
+    logic killed [WRITERS];
+    always_comb begin
+        foreach (killed[i]) begin
+            killed[i] = 1'b0;
+            foreach (writer_trap[j])
+                if (writer_trap[j] && result_age[j] < result_age[i]) killed[i] = 1'b1;
+        end
+        trap = 1'b0;
+        foreach (write_request[i]) begin
+            logic older_pending;
+            older_pending = 1'b0;
+            write_request[i] = result_ready[i] && !killed[i];
+            foreach (result_ready[j]) begin
+                if (j != i && result_ready[j] && !killed[j] &&
+                    result_destination[j] == result_destination[i] && result_age[j] > result_age[i])
+                    write_request[i] = 1'b0;
+                if (j != i && result_pending[j] && result_age[j] < result_age[i])
+                    older_pending = 1'b1;
+            end
+            trap |= writer_trap[i] && !older_pending;
+        end
+        if (reset) trap = 1'b0;
+    end
+
+    // Retirement, for minstret. A final-slot instruction retires on the edge
+    // its group leaves writeback ((!stall || trap), same as write_en) when it
+    // is valid, does not trap itself and is not killed by an older trap.
+    // Counts are formed without the edge so the serial lane's minstret read
+    // does not depend on stall; the edge only qualifies the update.
+    logic retire_edge;
+    logic retiring [WRITERS];
+    logic [RETIRE_WIDTH-1:0] retire_count, retire_older;
+    always_comb begin
+        retire_edge = (!stall || trap) && !reset;
+        retire_count = '0;
+        retire_older = '0;
+        foreach (retiring[i]) begin
+            retiring[i] = result_valid[i] && !killed[i] &&
+                (!writer_trap[i] || (i == SERIAL_WRITER && (serial_mret || serial_fence_i)));
+            retire_count += RETIRE_WIDTH'(retiring[i]);
+            if (i != SERIAL_WRITER && result_age[i] < result_age[SERIAL_WRITER])
+                retire_older += RETIRE_WIDTH'(retiring[i]);
         end
     end
-    for (genvar i = 0; i < RF_LANES; i++) begin : check_in
+    // Ages are the original issue slots. Select the payload independently
+    // of stall, trap and WAW arbitration; those only qualify the port enable.
+    for (genvar k = 0; k < ISSUE_WIDTH; k++) begin : wb_port
         always_comb begin
-            write_en[i] = result_ready[i] && !reset;
-            foreach (result_ready[j])
-                if (conflict[i][j] && result_ready[j])
-                    write_en[i] = 1'b0;
+            write_en[k] = 1'b0;
+            write_addr[k] = '0;
+            write_data[k] = '0;
+            foreach (result_ready[i]) begin
+                if (result_age[i] == AGE_WIDTH'(k) && result_ready[i]) begin
+                    write_addr[k] |= result_destination[i];
+                    write_data[k] |= result_data[i];
+                    write_en[k] |= write_request[i];
+                end
+            end
+            // On a trap edge the group retires even under stall: the flush
+            // clears it, so older survivors must commit now.
+            write_en[k] &= (!stall || trap) && !reset;
         end
     end
     for (genvar i = 0; i < N; i++) begin : lanes
         localparam int PORT = ports_before(i);
         localparam bit ACTIVE = ports_before(i+1) != PORT;
-        if (ACTIVE && i < MEMORY_BASE) begin : integer_lane
+        if (i == 0) begin : serial_lane
+            // No forwarding in or out of the serial lane.
+            for (genvar k = 0; k <= EXECUTION_UNROLL; k++) begin : no_forward
+                assign forward_data[i][k] = 'x;
+                assign forward_ready[i][k] = 1'b1;
+            end
+            assign bypass_data[i] = 'x;
+            assign redirect[i] = 1'b0;
+            assign redirect_age[i] = 'x;
+            assign target[i] = 'x;
+            assign writer_trap[SERIAL_WRITER] = result_trap[i];
+            SerialLane #(
+                .REGISTERED_INPUT(1), .EXECUTION_UNROLL(EXECUTION_UNROLL), .ISSUE_WIDTH(ISSUE_WIDTH),
+                .RETIRE_WIDTH(RETIRE_WIDTH)
+            ) lane (
+                .clk, .reset, .stall, .iteration_stall_out(iteration_stall[i]),
+                .decoder_packet(decoder_packet[i]), .issuer_packet(issuer_packet[i]), .accept(accept_vector[i]), .recovery_flush(redirect_taken),
+                .trap_flush(trap),
+                .interrupt, .interrupt_type, .interrupt_request, .time_value, .timer_pending, .software_pending,
+                .trap_entry(redirect_trap), .trap_entry_mret(entry_mret), .trap_entry_fence_i(entry_fence_i), .trap_entry_type(entry_type),
+                .trap_entry_pc(entry_pc), .trap_target,
+                .result_mret(serial_mret), .result_fence_i(serial_fence_i), .result_trap_type(writer_trap_type[SERIAL_WRITER]),
+                .result_pc(writer_pc[SERIAL_WRITER]),
+                .redirect_taken(redirect), .redirect_age,
+                .reg_address_1(read_addr[SERIAL_READ]), .read_data_1(read_data[SERIAL_READ]),
+                .retire_edge, .retire_self(retiring[SERIAL_WRITER]), .retire_count, .retire_older,
+                .result_valid(result_valid[SERIAL_WRITER]),
+                .result_data(result_data[SERIAL_WRITER]), .result_destination(result_destination[SERIAL_WRITER]),
+                .result_age(result_age[SERIAL_WRITER]), .result_ready(result_ready[SERIAL_WRITER]),
+                .result_pending(result_pending[SERIAL_WRITER]), .result_trap(result_trap[i])
+            );
+        end else if (ACTIVE && i < MEMORY_BASE) begin : integer_lane
             logic final_ready;
             for (genvar k = 0; k <= EXECUTION_UNROLL; k++)
                 assign forward_ready[i][k] = k == EXECUTION_UNROLL ? final_ready : 1'b1;
@@ -95,17 +217,19 @@ module BackendTop
                 .ISSUE_WIDTH(ISSUE_WIDTH), .BYPASS_ENABLED(BYPASS_ENABLED), .LANE_ID(i), .REGISTERED_INPUT(1)
             ) lane (
                 .clk, .reset, .stall, .iteration_stall_out(iteration_stall[i]),
-                .decoder_packet(decoder_packet[i]), .issuer_packet(issuer_packet[i]), .accept(accept_vector[i]), .recovery_flush(redirect_taken),
+                .decoder_packet(decoder_packet[i]), .issuer_packet(issuer_packet[i]), .accept(accept_vector[i]), .recovery_flush(redirect_taken), .trap_flush(trap),
                 .forward_data, .forward_ready, .forward_data_out(forward_data[i]), .forward_ready_out(final_ready),
                 .bypass_data, .bypass_data_out(bypass_data[i]),
                 .redirect_taken(redirect), .redirect_age, .redirect_taken_out(redirect[i]),
                 .redirect_age_out(redirect_age[i]), .redirect_pc_out(target[i]),
-                .result_ready(result_ready[PORT]), .result_trap(result_trap[i]), .result_age(result_age[PORT]),
-                .result_destination(write_addr[PORT]), .result_data(write_data[PORT]),
-                .next_result_destination(next_write_addr[PORT]), .next_result_age(next_result_age[PORT]),
+                .result_ready(result_ready[PORT]), .result_pending(result_pending[PORT]), .result_valid(result_valid[PORT]),
+                .result_trap(result_trap[i]), .result_trap_type(writer_trap_type[PORT]), .result_pc(writer_pc[PORT]),
+                .result_age(result_age[PORT]),
+                .result_destination(result_destination[PORT]), .result_data(result_data[PORT]),
                 .reg_address_1(read_addr[2*PORT]), .reg_address_2(read_addr[2*PORT+1]),
                 .read_data_1(read_data[2*PORT]), .read_data_2(read_data[2*PORT+1])
             );
+            assign writer_trap[PORT] = result_trap[i];
         end else if (ACTIVE) begin : memory_lane
             MemoryLane #(
                 .IS_MEMORY(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][0]), .IS_ATOMIC(0), .IS_FLOAT(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][2]),
@@ -118,21 +242,25 @@ module BackendTop
                 .bypass_data, .bypass_data_out(bypass_data[i]),
                 .redirect_taken(redirect), .redirect_age, .redirect_taken_out(redirect[i]),
                 .redirect_age_out(redirect_age[i]), .redirect_pc_out(target[i]),
-                .result_ready(result_ready[PORT]), .result_trap(result_trap[i]), .result_age(result_age[PORT]),
-                .result_destination(write_addr[PORT]), .result_data(write_data[PORT]),
-                .next_result_destination(next_write_addr[PORT]), .next_result_age(next_result_age[PORT]),
+                .result_ready(result_ready[PORT]), .result_pending(result_pending[PORT]), .result_valid(result_valid[PORT]),
+                .result_trap(result_trap[i]), .result_trap_type(writer_trap_type[PORT]), .result_pc(writer_pc[PORT]),
+                .result_age(result_age[PORT]),
+                .result_destination(result_destination[PORT]), .result_data(result_data[PORT]),
                 .reg_address_1(read_addr[2*PORT]), .reg_address_2(read_addr[2*PORT+1]),
                 .read_data_1(read_data[2*PORT]), .read_data_2(read_data[2*PORT+1]),
                 .request_valid(pending[i-MEMORY_BASE]), .request_candidate(candidate[i-MEMORY_BASE]), .request_age(age[i-MEMORY_BASE]),
-                .request_address(address[i-MEMORY_BASE]), .request_data(data[i-MEMORY_BASE]), .request_mask(mask[i-MEMORY_BASE]),
-                .request_write(store[i-MEMORY_BASE]), .response_valid(returned[i-MEMORY_BASE]),
-                .response_error, .response_data
+                .request_address(address[i-MEMORY_BASE]), .request_data(data[i-MEMORY_BASE]), .request_mask(mask[i-MEMORY_BASE]), .request_size(size[i-MEMORY_BASE]),
+                .wb_trap(trap), .cancel_checkin,
+                .request_write(store[i-MEMORY_BASE]),
+                .response_valid(returned[i-MEMORY_BASE]), .response_error(return_error), .response_data(return_data)
             );
+            assign writer_trap[PORT] = result_trap[i];
         end else begin : inactive
             assign iteration_stall[i] = 0;
-            if (i >= MEMORY_BASE && i < MEMORY_BASE + MEMORY_LANE_COUNT)
+            if (i >= MEMORY_BASE && i < MEMORY_BASE + MEMORY_LANE_COUNT) begin : no_requests
                 assign pending[i-MEMORY_BASE] = 0;
                 assign candidate[i-MEMORY_BASE] = 0;
+            end
             assign result_trap[i] = 0;
             assign redirect[i] = 0;
             for (genvar k = 0; k <= EXECUTION_UNROLL; k++) begin : no_forward
@@ -162,6 +290,37 @@ module BackendTop
         foreach (iteration_stall[i]) stall |= iteration_stall[i];
     end
 
+    // Trap skid buffers: one per writer, at the end of each lane. They absorb
+    // the writeback point every cycle with no enable, so the cycle after the
+    // trap edge (redirect_trap) has flops to work from. take marks the one
+    // writer whose trap fired: the oldest trapping writer (no older raw trap).
+    logic skid_take [WRITERS];
+    logic skid_mret, skid_fence_i;
+    Enumerations::TrapType_ skid_type [WRITERS];
+    logic [31:0] skid_pc [WRITERS];
+    always_ff @(posedge clk) begin
+        foreach (skid_take[i]) begin
+            skid_take[i] <= trap && writer_trap[i] && !killed[i];
+            skid_type[i] <= writer_trap_type[i];
+            skid_pc[i] <= writer_pc[i];
+        end
+        skid_mret <= serial_mret;
+        skid_fence_i <= serial_fence_i;
+    end
+    // One-hot select in the skid cycle.
+    logic entry_mret, entry_fence_i;
+    Enumerations::TrapType_ entry_type;
+    logic [31:0] entry_pc, trap_target;
+    always_comb begin
+        entry_mret = skid_take[SERIAL_WRITER] && skid_mret;
+        entry_fence_i = skid_take[SERIAL_WRITER] && skid_fence_i;
+        entry_type = Enumerations::TrapType_'('0);
+        entry_pc = '0;
+        foreach (skid_take[i]) begin
+            entry_type = Enumerations::TrapType_'(entry_type | ({$bits(entry_type){skid_take[i]}} & skid_type[i]));
+            entry_pc |= {32{skid_take[i]}} & skid_pc[i];
+        end
+    end
     logic redirect_q [N-1:0];
     logic [AGE_WIDTH-1:0] redirect_age_q [N-1:0];
     logic [31:0] redirect_pc_q [N-1:0];
@@ -172,12 +331,14 @@ module BackendTop
     end
     always_ff @(posedge clk) begin
         foreach (redirect_q[i]) begin
-            redirect_q[i] <= !reset && redirect[i] && !redirect_fired[i];
-            redirect_fired[i] <= !reset && stall && (redirect_fired[i] || redirect[i]);
+            // A trap edge drops every branch request; the trap recovery wins.
+            redirect_q[i] <= !reset && !trap && redirect[i] && !redirect_fired[i];
+            redirect_fired[i] <= !reset && !trap && stall && (redirect_fired[i] || redirect[i]);
             redirect_age_q[i] <= redirect_age[i];
             redirect_pc_q[i] <= target[i];
         end
         if (any_capture) redirect_advanced <= !stall;
+        redirect_trap <= !reset && trap;
     end
 
     always_comb begin
@@ -191,18 +352,25 @@ module BackendTop
                 redirect_slot = redirect_age_q[i];
             end
         end
+        // The trap is the oldest event in flight; slot/advanced are unused.
+        if (redirect_trap) begin
+            redirect_taken = 1'b1;
+            redirect_pc = trap_target;
+        end
     end
     assign redirect_fetch = redirect_taken;
 
     if (MEMORY_LANE_COUNT > 0) begin : memory_bus
-        LoadStoreUnit #(.LANES(MEMORY_LANE_COUNT), .STAGES(EXECUTION_UNROLL)) lsu (
-            .clk, .reset, .advance(!stall), .pending, .candidate, .age, .address, .data, .mask, .store,
-            .returned, .request_valid, .request_ready, .request_address, .request_data,
-            .request_mask, .request_write, .response_valid, .response_ready
+        LoadStoreUnit #(
+            .LANES(MEMORY_LANE_COUNT), .STAGES(EXECUTION_UNROLL), .PRECISE_BUS_FAULTS(PRECISE_BUS_FAULTS)
+        ) lsu (
+            .clk, .reset, .advance(!stall), .trap, .cancel_checkin, .pending, .candidate, .age, .address, .data, .mask, .size, .store,
+            .returned, .return_error, .return_data, .request_valid, .request_ready, .request_address, .request_data,
+            .request_mask, .request_size, .request_write, .response_valid, .response_error, .response_data, .response_ready
         );
     end else begin : no_memory_bus
         assign request_valid = 0;
         assign response_ready = 0;
-        assign {request_address, request_data, request_mask, request_write} = '0;
+        assign {request_address, request_data, request_mask, request_size, request_write} = '0;
     end
 endmodule

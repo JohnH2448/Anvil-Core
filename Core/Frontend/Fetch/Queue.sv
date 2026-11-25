@@ -538,9 +538,11 @@ module Queue
     TrapType_ prediction_trap [FETCH_SLOTS];
     TrapType_ fifo_trap [FIFO_WORDS];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : prediction_legality
-        assign prediction_pc_wrapped[lane] = packet_lane_taken[lane] ? prediction_result[lane].bp_target_wrapped :
+        // Wraps are legal when memory is the full address space.
+        assign prediction_pc_wrapped[lane] = !DerivedParameters::FULL_ADDRESS_SPACE &&
+            (packet_lane_taken[lane] ? prediction_result[lane].bp_target_wrapped :
             (DerivedParameters::fetch_pc_t'(~prediction_payload[lane].bp_pc) <
-             (prediction_payload[lane].bp_compressed ? 32'd2 : 32'd4));
+             (prediction_payload[lane].bp_compressed ? 32'd2 : 32'd4)));
         InstructionLegality #(
             .SUPPORT_MUL(SUPPORT_MUL),
             .SUPPORT_DIV(SUPPORT_DIV),

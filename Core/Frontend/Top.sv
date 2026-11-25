@@ -8,17 +8,27 @@ module FrontendTop
     parameter unsigned ISSUE_WIDTH = Parameters::ISSUE_WIDTH,
     parameter unsigned EXECUTION_UNROLL = Parameters::EXECUTION_UNROLL,
     parameter unsigned BYPASS_ENABLED = Parameters::BYPASS_ENABLED,
-    parameter unsigned RESET_VECTOR = Parameters::RESET_VECTOR,
-    parameter unsigned IMEM_DEPTH_WORDS = 512,
-    parameter IMEM_HEX_FILE = "Core/Frontend/Fetch/program.hex"
+    parameter unsigned RESET_VECTOR = Parameters::RESET_VECTOR
 )(
     input logic clk,
     input logic reset,
+
+    // Instruction fetch port to the shared RAM (via the system Crossbar).
+    // One request per cycle; the response arrives the next cycle. A cycle
+    // with fetch_valid low means the request was not served and Fetch
+    // re-requests the same address.
+    output logic fetch_request,
+    output logic [31:0] fetch_address,
+    input logic [FETCH_WORDS*32-1:0] fetch_data,
+    input logic fetch_valid,
+    input logic fetch_error,
     input logic [31:0] redirect_pc,
     input logic redirect_fetch, // Registered recovery launch; pulses with redirect_taken.
     input logic redirect_taken, // Registered recovery pulse.
     input logic [AGE_WIDTH-1:0] redirect_slot,
     input logic redirect_advanced, // Resolving group shifted once before recovery.
+    input logic redirect_trap, // Trap recovery: also clears the whole producer table.
+    input TrapType_ interrupt_request, // Pending enabled interrupt; Decode tags a valid instruction.
     input logic stall,
     input logic serial_active,
 
@@ -81,12 +91,11 @@ module FrontendTop
         .FETCH_WORDS(FETCH_WORDS),
         .FIFO_WORDS(FIFO_WORDS),
         .ISSUE_WIDTH(ISSUE_WIDTH),
-        .RESET_VECTOR(RESET_VECTOR),
-        .IMEM_DEPTH_WORDS(IMEM_DEPTH_WORDS),
-        .IMEM_HEX_FILE(IMEM_HEX_FILE)
+        .RESET_VECTOR(RESET_VECTOR)
     ) fetch (
         .clk(clk),
         .reset(reset),
+        .fetch_request, .fetch_address, .fetch_data, .fetch_valid, .fetch_error,
         .redirect_fetch(redirect_fetch),
         .redirect_pc(redirect_pc),
         .redirect_taken(redirect_taken),
@@ -125,6 +134,8 @@ module FrontendTop
         .redirect_taken(redirect_taken),
         .redirect_slot(redirect_slot),
         .redirect_advanced(redirect_advanced),
+        .redirect_trap(redirect_trap),
+        .interrupt_request,
         .stall(stall),
         .serial_active(serial_active),
         .serve_data_reg(serve_data_reg),

@@ -14,19 +14,22 @@ read_verilog -sv [anvil_sources Core/Frontend/Fetch/*.sv Core/Frontend/Dispatch/
 anvil_constraints frontend {
 create_clock -name frontend_clk -period 2.500 [get_ports clk]
 
-set late_controls [get_ports {stall redirect_fetch redirect_taken redirect_advanced redirect_slot[*] redirect_pc[*]}]
+set late_controls [get_ports {stall redirect_fetch redirect_taken redirect_advanced redirect_trap redirect_slot[*] redirect_pc[*]}]
 set_input_delay -clock frontend_clk -max 3.250 $late_controls 
 # set_input_delay -clock frontend_clk -max 2.500 $late_controls 
 set_input_delay -clock frontend_clk -min 2.000 $late_controls
 
 # Relaxed controls arrive at 20% of the period (4 ns remains internally).
-set easy_controls [get_ports {reset serial_active}]
+set easy_controls [get_ports {reset serial_active interrupt_request[*]}]
 set_input_delay -clock frontend_clk -max 1.000 $easy_controls
-set_input_delay -clock frontend_clk -min 0.500 [get_ports serial_active]
+set_input_delay -clock frontend_clk -min 0.500 [get_ports {serial_active interrupt_request[*]}]
 # Reset is modeled as arriving 1 ns after the reference edge for both checks.
 set_input_delay -clock frontend_clk -min 1.000 [get_ports reset]
 
 set_output_delay -clock frontend_clk -max 0.000 [all_outputs]
 set_output_delay -clock frontend_clk -min 0.000 [all_outputs]
+}
+proc frontend_post_synth {} {
+    anvil_fetch_constraints frontend_clk
 }
 anvil_implement frontend FrontendTop $frontend_part

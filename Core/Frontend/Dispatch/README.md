@@ -198,7 +198,7 @@ conversions, and integer lanes never do.
 precision selector, or 64-bit floating register file. D arithmetic, fused
 operations, comparisons, classification, conversions, FLD/FSD, and compressed
 C.FLD/C.FSD/C.FLDSP/C.FSDSP all decode with `common.trap_type = ILLEGAL`.
-FLW/FSW and compressed single-precision loads/stores remain supported under F.
+FLW/FSW and compressed single-precision loads/stores have F encodings. The current fixed-Off FS policy makes these instructions trap in DecoderSlice.
 
 ### Floating conversion capability and ports
 
@@ -282,8 +282,7 @@ per-lane `atomic` controls routing. See the
   selects dynamic FRM at execution. Modes 5/6 trap for rounding operations.
 - `csr.read_enable` and `write_enable` describe intent independently of rd.
   CSRRS/CSRRC write intent depends on the encoded rs1 number, not its value.
-  Unknown CSR addresses and writes to read-only-zero CSRs trap. Floating CSR
-  aliases and runtime privilege/FS/dynamic rounding checks belong in execution.
+  Unknown CSR addresses and writes to read-only-zero CSRs trap. With FS fixed Off, Decode raises ILLEGAL on FP instructions and FP CSR accesses.
 - SYS_MRET implies a read of MEPC by system execution; it does not require
   retaining the CSR chunk. Fences retain predecessor/successor masks;
   FENCE.TSO is conservatively treated as an ordinary fence.
@@ -291,6 +290,19 @@ per-lane `atomic` controls routing. See the
   ordinary operation payloads unspecified. `BR_NONE` remains defined to suppress
   the integer lane's parallel branch logic. The selected lane must deliver the
   trap even without a destination register.
+- Every frontend-trapped packet leaves DecoderSlice as CAP_SYSTEM with
+  lane type SERIAL, so the serial lane delivers it. Memory lanes never carry a
+  pre-bus trap; every memory trap comes from a bus error response.
+- Decode tags valid serve slot zero for a pending enabled interrupt. A known trap, MRET or FENCE.I is the last instruction admitted before redirect recovery. The window boundary (`ends_group`) is a conservative superset formed only from registered serve fields: fetch trap, CAP_SYSTEM/CAP_CSR, FP state access, and the slot-0 tag. It stays off DecoderSlice logic because it feeds Fetch's pop count. The recovery wait is set from the exact decoded trap/MRET as a flop input. There is no hold after mie/mstatus writes; trap entry re-checks the enables. Fetch consumption and FIFO validity use the same admitted prefix. In the trap-entry cycle the serial lane picks the highest-priority live source and acknowledges only that bit.
+- CSR legality is predecoded in Fetch (SystemTrapPredecode) as a whitelist for
+  this M-mode-only core. The list covers the ID CSRs, mstatus, misa, mie,
+  mtvec, mstatush, mcountinhibit, mhpmevent3-31, mscratch, mepc, mcause,
+  mtval, mip, mcycle/minstret and mhpmcounter3-31 (both halves), and the
+  cycle/time/instret aliases (both halves). Any other address is `ILLEGAL`,
+  including S/U-mode CSRs, PMP, debug and the FP CSRs (FS is Off).
+  Writing a read-only address (csr[11:10] == 2'b11; CSRRW always, CSRRS/CSRRC
+  when rs1/uimm != 0) is `ILLEGAL`. The cycle/instret aliases map to the
+  counter indices; time/timeh map to TIME_R/TIMEH_R (CLINT mtime). DecoderSlice adds only the FS-Off FP instruction trap.
 
 The floating register file has fixed 32-bit data paths; execution
 still must implement floating CSR aliases, fence ordering and fetch synchronization.
@@ -300,8 +312,8 @@ This packet refactor does not implement those execution mechanisms.
 
 `TrapType_` uses the project's four-bit internal encoding: `NONE`, `ILLEGAL`,
 `MIS_STORE`, `MIS_LOAD`, `MIS_INST`, `ECALL`, `EBREAK`, `ACCESS_STORE`,
-`ACCESS_LOAD`, `ACCESS_INST`, and `INTERRUPT`. These are not raw `mcause` values.
-Decode produces `NONE`, `ILLEGAL`, `ECALL`, or `EBREAK`; fetch/execution/memory
+`ACCESS_LOAD`, `ACCESS_INST`, `INTERRUPT`, and `BUS_FAULT` (memory bus error response). These are not raw `mcause` values.
+Decode produces `NONE`, `ILLEGAL`, `ECALL`, or `EBREAK`. Memory faults arrive from the bus; the memory lane reports them as misaligned or access-fault load/store (`BUS_FAULT` is unused); fetch/execution/memory
 fault detection and interrupt control supply the other causes. Adding enum
 members does not make instruction decode detect runtime access or alignment faults.
 Trap entry must resolve ECALL privilege and interrupt cause separately.

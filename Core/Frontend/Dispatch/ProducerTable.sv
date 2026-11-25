@@ -15,6 +15,8 @@ module ProducerTable
     input logic redirect_taken,
     input logic [AGE_WIDTH-1:0] redirect_slot,
     input logic redirect_advanced,
+    // Trap recovery (pulses with redirect_taken): every producer is dead.
+    input logic redirect_trap,
 
     // Register Source Read Inputs
     input logic [4:0] rs1 [ISSUE_WIDTH-1:0],
@@ -74,7 +76,7 @@ module ProducerTable
             assign trim = redirect_advanced ? TRIM_ADVANCED : TRIM_HELD;
             assign younger = redirect_advanced ? stage < 1 : 1'b0;
             assign surviving_valid[stage][slot] = valid[stage][slot] &&
-                (!redirect_taken || !(younger || (trim && slot > redirect_slot)));
+                (!redirect_taken || !(redirect_trap || younger || (trim && slot > redirect_slot)));
             owner_t incoming;
             logic incoming_valid;
             if (stage == 0) begin

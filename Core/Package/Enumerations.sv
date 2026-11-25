@@ -114,23 +114,25 @@ package Enumerations;
         MHPMEVENT31    = 12'h33F
     } CSR;
 
-    typedef enum logic [3:0] {
-        MSTATUS_R = 4'b0000, 
-        MTVEC_R = 4'b0001, 
-        MIP_R = 4'b0010, 
-        MIE_R = 4'b0011, 
-        MCYCLE_R = 4'b0100,
-        MCYCLEH_R = 4'b0101, 
-        MINSTRET_R = 4'b0110,
-        MINSTRETH_R = 4'b0111, 
-        MSCRATCH_R = 4'b1000, 
-        MEPC_R = 4'b1001, 
-        MCAUSE_R = 4'b1010,
-        MISA_R = 4'b1011,
-        ROZ_R = 4'b1100,
-        FFLAGS_R = 4'b1101,
-        FRM_R = 4'b1110,
-        FCSR_R = 4'b1111
+    typedef enum logic [4:0] {
+        MSTATUS_R = 5'b00000, 
+        MTVEC_R = 5'b00001, 
+        MIP_R = 5'b00010, 
+        MIE_R = 5'b00011, 
+        MCYCLE_R = 5'b00100,
+        MCYCLEH_R = 5'b00101, 
+        MINSTRET_R = 5'b00110,
+        MINSTRETH_R = 5'b00111, 
+        MSCRATCH_R = 5'b01000, 
+        MEPC_R = 5'b01001, 
+        MCAUSE_R = 5'b01010,
+        MISA_R = 5'b01011,
+        ROZ_R = 5'b01100,
+        FFLAGS_R = 5'b01101,
+        FRM_R = 5'b01110,
+        FCSR_R = 5'b01111,
+        TIME_R = 5'b10000, // Zicntr time: CLINT mtime low half
+        TIMEH_R = 5'b10001 // Zicntr timeh: CLINT mtime high half
     } CSR_R;
 
     typedef enum logic [1:0] {
@@ -216,7 +218,19 @@ package Enumerations;
         STORE_ACCESS_FAULT = 4'b0111,
         LOAD_ACCESS_FAULT = 4'b1000,
         INST_ACCESS_FAULT = 4'b1001,
-        INTERRUPT = 4'b1010
-    } TrapType_; 
+        TIMER_INTERRUPT = 4'b1010,
+        SOFTWARE_INTERRUPT = 4'b1011,
+        EXTERNAL_INTERRUPT = 4'b1100,
+        BUS_FAULT = 4'b1101 // Bus error response; mcause 24 (custom).
+    } TrapType_;
+
+    // External interrupt line type (CoreTop interrupt_type). Each pulse sets
+    // the matching mip bit.
+    typedef enum logic [1:0] {
+        INT_SOFTWARE = 2'b00,
+        INT_TIMER = 2'b01,
+        INT_EXTERNAL = 2'b10,
+        INT_RESERVED = 2'b11
+    } InterruptType_;
 
 endpackage

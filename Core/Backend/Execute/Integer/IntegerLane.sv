@@ -23,6 +23,7 @@ module IntegerLane
     input IssuerPacket_ issuer_packet,
     input logic accept,
     input logic recovery_flush, // Applies to the frontend-registered input.
+    input logic trap_flush, // Writeback trap: clears every valid bit on this edge.
 
     // Forwarding Inputs
     input logic [31:0] forward_data [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0], // used by all valid int forward points
@@ -55,14 +56,15 @@ module IntegerLane
     // Result Broadcast
     output logic [31:0] result_data,
     output logic [4:0] result_destination,
-    output logic [AGE_WIDTH-1:0] result_age, 
-    // Destination and age of the instruction that enters the final slot on the
-    // next advancing edge. BackendTop registers same-cycle WAW conflicts from
-    // these, so no address/age compare sits on the RF write enable.
-    output logic [4:0] next_result_destination,
-    output logic [AGE_WIDTH-1:0] next_result_age,
-    output logic result_ready, 
+    output logic [AGE_WIDTH-1:0] result_age,
+    output logic result_ready,
+    // Valid final-slot instruction still waiting on its result. Older pending
+    // work holds back writeback-time trap assertion for a younger trap.
+    output logic result_pending,
+    output logic result_valid, // Valid final-slot instruction (for retire counting).
     output logic result_trap,
+    output TrapType_ result_trap_type,
+    output logic [31:0] result_pc,
 
     // Register File Read Ports
     output logic [4:0] reg_address_1,
@@ -354,7 +356,7 @@ module IntegerLane
         logic valid;
         Multiplier #(.EXECUTION_UNROLL(EXECUTION_UNROLL)) multiplier (
             .clk(clk),
-            .reset(reset_active),
+            .reset(reset_active || trap_flush), // Resets only unit valid bits.
             .stall(stall),
             .flush(stage_2_flush),
             .valid_in(valid_payload[1] &&
@@ -373,7 +375,7 @@ module IntegerLane
         logic valid;
         Divider #(.EXECUTION_UNROLL(EXECUTION_UNROLL), .AUTO_PIPE(DIVIDER_AUTO_PIPE)) divider (
             .clk(clk),
-            .reset(reset_active),
+            .reset(reset_active || trap_flush), // Resets only unit valid/busy bits.
             .stall(stall),
             .flush(stage_2_flush), // In-flight redirect squashing remains lane-owned.
             .valid_in(valid_payload[1] &&
@@ -408,26 +410,33 @@ module IntegerLane
         assign div_result = 'x;
     end
     logic capture_mul, capture_div, final_completion;
-    // Early results advance with metadata. Iterating results must be captured
-    // while the final lane slot and its metadata are held by global stall.
-    // Unit pipelines hold under stall, so recapturing a held result rewrites the
-    // same value. Capture needs no stall term.
-    assign capture_mul = mul_result_valid;
-    assign capture_div = div_result_valid;
+    // Iterating results are captured in place: the owner waits in the final
+    // slot (held by its own iteration stall), so capture needs no stall term,
+    // and the unit retires its valid after that edge.
+    // A non-iterating unit's result belongs to the instruction one stage
+    // before the result stage, so capturing it is a pipeline transfer and
+    // must hold under stall. Otherwise a held stall would overwrite the older
+    // instruction waiting in the result stage (seen at EXECUTION_UNROLL = 2:
+    // a MUL in stage 2 overwrote the held stage-3 ALU result).
+    assign capture_mul = mul_result_valid && (MUL_ITERATES || !stall);
+    assign capture_div = div_result_valid && (DIV_ITERATES || !stall);
     assign final_completion = (capture_mul && MUL_RESULT_STAGE == LAST_EXECUTION_STAGE) ||
         (capture_div && DIV_RESULT_STAGE == LAST_EXECUTION_STAGE);
 
     // Registered final-slot readiness. Low on the edge an iterating op enters
     // the final slot, high on the edge its result is captured there.
     logic final_ready_q, entering_iterative;
-    assign entering_iterative =
+    // A trapped MUL/DIV never needs its result (the divider does not even
+    // start one), so it must not wait in the final slot: its trap has to reach
+    // writeback.
+    assign entering_iterative = decoder_payload[LAST_EXECUTION_STAGE-1].common.trap_type == NONE && (
         (IS_MUL && MUL_ITERATES && decoder_payload[LAST_EXECUTION_STAGE-1].common.capability == CAP_MUL) ||
-        (IS_DIV && DIV_ITERATES && decoder_payload[LAST_EXECUTION_STAGE-1].common.capability == CAP_DIV);
+        (IS_DIV && DIV_ITERATES && decoder_payload[LAST_EXECUTION_STAGE-1].common.capability == CAP_DIV));
     assign forward_ready_out = final_ready_q;
 
     // Sole owner of all data stages, including the one-execution-stage case.
     always_ff @(posedge clk) begin
-        if (reset_active) begin
+        if (reset_active || trap_flush) begin
             final_ready_q <= 1'b1;
         end else begin
             if (final_completion) final_ready_q <= 1'b1;
@@ -452,7 +461,7 @@ module IntegerLane
 
     // Sole owner of validity. Redirects are replayed externally during stalls.
     always_ff @(posedge clk) begin
-        if (reset_active) begin
+        if (reset_active || trap_flush) begin
             for (int i = 1; i <= LAST_EXECUTION_STAGE; i++) valid_payload[i] <= 1'b0;
         end else if (!stall) begin
             valid_payload[1] <= valid_payload[0];
@@ -481,10 +490,11 @@ module IntegerLane
     assign result_data = data_payload[LAST_EXECUTION_STAGE];
     assign result_destination = decoder_payload[LAST_EXECUTION_STAGE].common.rd;
     assign result_age = issuer_payload[LAST_EXECUTION_STAGE].input_age;
-    // The final slot loads stage LAST-1 on an advancing edge and holds otherwise.
-    assign next_result_destination = decoder_payload[LAST_EXECUTION_STAGE-1].common.rd;
-    assign next_result_age = issuer_payload[LAST_EXECUTION_STAGE-1].input_age;
-    // RF writes are idempotent while the final slot is held, so no stall term.
+    assign result_pending = valid_payload[LAST_EXECUTION_STAGE] && !final_ready_q;
+    assign result_valid = valid_payload[LAST_EXECUTION_STAGE];
+    assign result_trap_type = decoder_payload[LAST_EXECUTION_STAGE].common.trap_type;
+    assign result_pc = decoder_payload[LAST_EXECUTION_STAGE].common.pc;
+    // BackendTop qualifies the architectural write with group advance.
     // final_ready_q keeps an unfinished iterating result out of the RF. No reader
     // can depend on it: younger consumers map rd to this slot, not the RF.
     assign result_ready = valid_payload[LAST_EXECUTION_STAGE] && final_ready_q && !result_trap &&

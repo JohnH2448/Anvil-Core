@@ -2,6 +2,9 @@
 package DerivedParameters;
     localparam int unsigned MEMORY_ADDRESS_BITS =
         $clog2({1'b0, Parameters::MAX_MEMORY_ADDRESS} + 33'd1);
+    // The whole 32-bit space is memory: sequential and target PC wraps are
+    // legal and no address-range fault exists. Wrap/range hardware compiles out.
+    localparam bit FULL_ADDRESS_SPACE = Parameters::MAX_MEMORY_ADDRESS == 32'hFFFF_FFFF;
     localparam int unsigned FETCH_PC_WIDTH = MEMORY_ADDRESS_BITS > 0 ? MEMORY_ADDRESS_BITS : 1;
     typedef logic [FETCH_PC_WIDTH-1:0] fetch_pc_t;
 

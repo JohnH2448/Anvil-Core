@@ -1,16 +1,31 @@
 module CoreTop
     import DerivedParameters::*;
     import Definitions::*;
-#(
-    parameter unsigned IMEM_DEPTH_WORDS = 512,
-    parameter IMEM_HEX_FILE = "Core/Frontend/Fetch/program.hex"
-)(
+(
     input logic clk, reset,
+
+    // Instruction fetch port to the shared RAM (via the system Crossbar).
+    // One request per cycle, response next cycle; fetch_valid low = not served.
+    output logic fetch_request,
+    output logic [31:0] fetch_address,
+    input logic [Parameters::CACHE_LINE_WORDS*32-1:0] fetch_data,
+    input logic fetch_valid,
+    input logic fetch_error,
+
+    // Interrupt sources from outside the core. timer_pending/software_pending
+    // are the CLINT levels behind mip.MTIP/mip.MSIP; an INT_EXTERNAL pulse on
+    // interrupt/interrupt_type sets the sticky mip.MEIP.
+    input logic timer_pending, software_pending,
+    input logic interrupt,
+    input Enumerations::InterruptType_ interrupt_type,
+    // CLINT mtime, read by the time/timeh CSRs.
+    input logic [63:0] time_value,
 
     // Ordered integer data-memory bus. Stores also receive a response.
     output logic request_valid, request_write,
     output logic [31:0] request_address, request_data,
     output logic [3:0] request_mask,
+    output logic [1:0] request_size, // MemorySize_; the bus reports misaligned/out-of-range accesses as errors
     input logic request_ready,
     input logic response_valid, response_error,
     input logic [31:0] response_data,
@@ -22,15 +37,14 @@ module CoreTop
     logic watch [TOTAL_LANE_COUNT-1:0][Parameters::EXECUTION_UNROLL:0];
     logic stall, redirect_fetch, redirect_taken;
     logic [AGE_WIDTH-1:0] redirect_slot;
-    logic redirect_advanced;
+    logic redirect_advanced, redirect_trap;
     logic [31:0] redirect_pc;
+    Enumerations::TrapType_ interrupt_request;
 
-    FrontendTop #(
-        .IMEM_DEPTH_WORDS(IMEM_DEPTH_WORDS),
-        .IMEM_HEX_FILE(IMEM_HEX_FILE)
-    ) frontend (
-        .clk, .reset, .stall,
-        .redirect_fetch, .redirect_taken, .redirect_pc, .redirect_slot, .redirect_advanced,
+    FrontendTop frontend (
+        .clk, .reset,
+        .fetch_request, .fetch_address, .fetch_data, .fetch_valid, .fetch_error, .stall,
+        .redirect_fetch, .redirect_taken, .redirect_pc, .redirect_slot, .redirect_advanced, .redirect_trap, .interrupt_request,
         .serial_active(1'b0),
         .decoder_packet, .issuer_packet, .accept_vector, .watch
     );
@@ -38,9 +52,10 @@ module CoreTop
     BackendTop backend (
         .clk, .reset, .external_stall(1'b0), .stall,
         .decoder_packet, .issuer_packet, .accept_vector, .watch,
-        .redirect_fetch, .redirect_taken, .redirect_pc, .redirect_slot, .redirect_advanced, .result_trap(),
+        .redirect_fetch, .redirect_taken, .redirect_pc, .redirect_slot, .redirect_advanced, .redirect_trap, .result_trap(), .trap(),
+        .interrupt, .interrupt_type, .interrupt_request, .time_value, .timer_pending, .software_pending,
         .request_valid, .request_write, .request_address, .request_data,
-        .request_mask, .request_ready, .response_valid, .response_error,
+        .request_mask, .request_size, .request_ready, .response_valid, .response_error,
         .response_data, .response_ready
     );
 endmodule

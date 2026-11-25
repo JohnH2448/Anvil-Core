@@ -80,7 +80,12 @@ module DecoderSlice
     assign f3 = instruction[14:12];
     assign f7 = instruction[31:25];
     assign f5 = instruction[31:27];
-    assign trap = trap_in;
+    // CSR legality (whitelist, read-only writes) is predecoded in Fetch
+    // (SystemTrapPredecode) and arrives in trap_in.
+    // FS is hardwired Off: every FP instruction and FP load/store traps.
+    wire fp_state_access = SUPPORT_FLOAT && (capability_in inside {CAP_FP_F, CAP_FP_CONVERT} ||
+        (capability_in == CAP_MEMORY && (rd_float_in || rs2_float_in)));
+    assign trap = trap_in == NONE && fp_state_access ? ILLEGAL : trap_in;
     assign ok = trap == NONE;
 
     // Detailed encoding predicates remain local. Exact class predicates reuse
@@ -144,10 +149,15 @@ module DecoderSlice
     assign packet.common.rd_valid = ok && rd_written_in;
 
     // Encoding-only capability is carried from Fetch with the instruction.
-    assign packet.common.capability = capability_in;
+    // Every frontend-trapped instruction is rerouted to the serial lane, so
+    // memory lanes never carry a trap that exists before the bus. Trapped
+    // packets have no operands, destination or side effects, so the serial
+    // lane only has to raise the trap at writeback.
+    assign packet.common.capability = trap != NONE ?
+        CAP_SYSTEM : capability_in;
     always_comb begin
         lane_type = INTEGER;
-        case (capability_in)
+        case (packet.common.capability)
             CAP_MEMORY, CAP_ATOMIC: lane_type = MEMORY;
             CAP_FP_F, CAP_FP_CONVERT: lane_type = FLOATING;
             CAP_SYSTEM, CAP_CSR: lane_type = SERIAL;
@@ -426,13 +436,18 @@ module DecoderSlice
                 MCYCLEH: packet.csr.index = MCYCLEH_R;
                 MINSTRET: packet.csr.index = MINSTRET_R;
                 MINSTRETH: packet.csr.index = MINSTRETH_R;
+                // Zicntr read-only aliases (writes are ILLEGAL above).
+                // time/timeh mirror the CLINT's mtime.
+                12'hC00: packet.csr.index = MCYCLE_R; // cycle
+                12'hC80: packet.csr.index = MCYCLEH_R; // cycleh
+                12'hC01: packet.csr.index = TIME_R; // time
+                12'hC81: packet.csr.index = TIMEH_R; // timeh
+                12'hC02: packet.csr.index = MINSTRET_R; // instret
+                12'hC82: packet.csr.index = MINSTRETH_R; // instreth
                 MSCRATCH: packet.csr.index = MSCRATCH_R;
                 MEPC: packet.csr.index = MEPC_R;
                 MCAUSE: packet.csr.index = MCAUSE_R;
                 MISA: packet.csr.index = MISA_R;
-                12'd1: if (SUPPORT_FLOAT) packet.csr.index = FFLAGS_R;
-                12'd2: if (SUPPORT_FLOAT) packet.csr.index = FRM_R;
-                12'd3: if (SUPPORT_FLOAT) packet.csr.index = FCSR_R;
                 default: ;
             endcase
         end

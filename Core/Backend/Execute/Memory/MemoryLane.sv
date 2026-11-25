@@ -56,14 +56,19 @@ module MemoryLane
     // Result Broadcast
     output logic [31:0] result_data,
     output logic [4:0] result_destination,
-    output logic [AGE_WIDTH-1:0] result_age, 
-    // Destination and age of the instruction that enters the final slot on the
-    // next advancing edge. BackendTop registers same-cycle WAW conflicts from
-    // these, so no address/age compare sits on the RF write enable.
-    output logic [4:0] next_result_destination,
-    output logic [AGE_WIDTH-1:0] next_result_age,
-    output logic result_ready, 
+    output logic [AGE_WIDTH-1:0] result_age,
+    output logic result_ready,
+    // Valid final-slot instruction still waiting on its result. Older pending
+    // work holds back writeback-time trap assertion for a younger trap.
+    output logic result_pending,
+    output logic result_valid, // Valid final-slot instruction (for retire counting).
     output logic result_trap,
+    // Bus error response, classified here from the slot's own size and
+    // offset: misaligned load/store if the access was misaligned (the bus
+    // rejects those), otherwise load/store access fault. The trap is still
+    // discovered only by the bus.
+    output TrapType_ result_trap_type,
+    output logic [31:0] result_pc,
 
     // Register File Read Ports
     output logic [4:0] reg_address_1,
@@ -78,6 +83,11 @@ module MemoryLane
     output logic [31:0] request_address, request_data,
     output logic [3:0] request_mask,
     output logic request_write,
+    output logic [1:0] request_size, // MemorySize_
+
+    // Completion from the LSU (real or phantom). Phantom completions carry no
+    // error and garbage data.
+    input logic wb_trap, cancel_checkin,
     input logic response_valid, response_error,
     input logic [31:0] response_data
 );
@@ -131,8 +141,9 @@ module MemoryLane
         end
     end
 
+    // A writeback trap clears every valid bit on its edge, stall or not.
     always_ff @(posedge clk) begin
-        if (reset_active) valid_payload[1] <= 0;
+        if (reset_active || wb_trap) valid_payload[1] <= 0;
         else if (!stall) valid_payload[1] <= valid_payload[0];
         if (!stall) begin
             decoder_payload[1] <= decoder_payload[0];
@@ -242,7 +253,7 @@ module MemoryLane
 
     // AGU. Stage 1 operands produce a registered bus request in execution slot 1.
     typedef struct packed {
-        logic valid, done, trap, store, rd_valid, sign_extend;
+        logic valid, done, canceled, trap, store, rd_valid, sign_extend;
         logic ready; // Registered forwarding readiness of this slot.
         logic pending; // Registered valid && !done.
         MemorySize_ size;
@@ -250,6 +261,7 @@ module MemoryLane
         logic [AGE_WIDTH-1:0] age;
         logic [1:0] offset;
         logic [31:0] data;
+        logic [31:0] pc; // For trap entry (mepc).
     } Slot;
     logic [31:0] effective_address;
     Slot agu;
@@ -258,28 +270,35 @@ module MemoryLane
     always_comb begin
         effective_address = source_1 + decoder_payload[1].common.immediate;
         agu.size = decoder_payload[1].memory.size;
-        agu.trap = decoder_payload[1].common.trap_type != NONE ||
-            (agu.size == MEM_HALF && effective_address[0]) ||
-            (agu.size == MEM_WORD && |effective_address[1:0]);
+        agu.store = decoder_payload[1].memory.operation == MEM_STORE;
+        // Every memory trap is discovered by the bus (error response):
+        // misalignment, range and bus faults alike. Decode never routes a
+        // frontend-trapped instruction to a memory lane.
+        agu.trap = 1'b0;
         agu.valid = valid_payload[1] && !stage_2_flush;
         agu.offset = effective_address[1:0];
-        agu.done = agu.trap;
+        // Defensive: a request presented during the LSU check-in lock is
+        // canceled (a trap flush clears every older slot on the same edge).
+        agu.done = cancel_checkin;
+        agu.canceled = cancel_checkin;
         agu.ready = 1'b0;
         agu.pending = 1'b0;
         agu.data = 'x;
         agu.age = issuer_payload[1].input_age;
+        agu.pc = decoder_payload[1].common.pc;
         agu.rd = decoder_payload[1].common.rd;
         agu.rd_valid = decoder_payload[1].common.rd_valid;
-        agu.store = decoder_payload[1].memory.operation == MEM_STORE;
         agu.sign_extend = decoder_payload[1].memory.sign_extend;
     end
 
-    assign request_valid = agu.valid && !agu.trap && !reset_active;
+    assign request_valid = agu.valid && !reset_active;
     // Independent of the same-cycle redirect. Redirect kills only the youngest
     // part of a group, so surviving candidates keep their candidate rank.
-    assign request_candidate = valid_payload[1] && !agu.trap && !reset_active;
+    assign request_candidate = valid_payload[1] && !reset_active;
     assign request_age = agu.age;
-    assign request_address = {effective_address[31:2], 2'b00};
+    // Full byte address plus size, so the bus can check alignment and range.
+    assign request_address = effective_address;
+    assign request_size = agu.size;
     assign request_data = source_2 << {agu.offset, 3'b000};
     assign request_write = agu.store;
     always_comb begin
@@ -306,7 +325,7 @@ module MemoryLane
             updated[i] = slots[i];
             if (response_valid && pending && !older_pending[i]) begin
                 updated[i].done = 1'b1;
-                updated[i].trap = response_error;
+                if (response_error) updated[i].trap = 1'b1; // Load/store access fault
                 case (slots[i].size)
                     MEM_BYTE: updated[i].data = {{24{slots[i].sign_extend && shifted[7]}}, shifted[7:0]};
                     MEM_HALF: updated[i].data = {{16{slots[i].sign_extend && shifted[15]}}, shifted[15:0]};
@@ -324,15 +343,18 @@ module MemoryLane
             Slot held, shifted_in;
             held = updated[i];
             shifted_in = incoming;
-            held.ready = held.valid && held.done && !held.store && held.rd_valid && !held.trap;
+            // A faulted or phantom-completed load still reads ready (garbage
+            // data) so speculative consumers never deadlock before the trap
+            // reaches writeback. Only the RF write excludes traps.
+            held.ready = held.valid && held.done && !held.store && held.rd_valid;
             shifted_in.ready = shifted_in.valid && shifted_in.done && !shifted_in.store &&
-                shifted_in.rd_valid && !shifted_in.trap;
+                shifted_in.rd_valid;
             held.pending = held.valid && !held.done;
             shifted_in.pending = shifted_in.valid && !shifted_in.done;
             next_slot = stall ? held : shifted_in;
         end
         always_ff @(posedge clk) begin
-            if (reset_active) begin
+            if (reset_active || wb_trap) begin
                 slots[i].valid <= 1'b0;
                 slots[i].ready <= 1'b0;
                 slots[i].pending <= 1'b0;
@@ -352,19 +374,18 @@ module MemoryLane
     assign result_data = last.data;
     assign result_destination = last.rd;
     assign result_age = last.age;
-    // The final slot loads its predecessor on an advancing edge; rd and age never
-    // change while held. At unroll 1 the predecessor is the AGU stage.
-    if (EXECUTION_UNROLL == 1) begin : next_from_agu
-        assign next_result_destination = agu.rd;
-        assign next_result_age = agu.age;
-    end else begin : next_from_slot
-        assign next_result_destination = slots[EXECUTION_UNROLL-1].rd;
-        assign next_result_age = slots[EXECUTION_UNROLL-1].age;
-    end
-    assign result_trap = last.valid && last.trap;
-    // The registered ready bit is exactly a successful, completed load with rd.
-    // RF writes are idempotent while held, so no stall term.
-    assign result_ready = last.ready;
+    assign result_pending = last.pending;
+    assign result_valid = last.valid && !last.canceled;
+    wire last_misaligned = (last.size == MEM_HALF && last.offset[0]) ||
+        (last.size == MEM_WORD && last.offset != 2'b00);
+    assign result_trap_type = last_misaligned ? (last.store ? MISALIGNED_STORE : MISALIGNED_LOAD) :
+        (last.store ? STORE_ACCESS_FAULT : LOAD_ACCESS_FAULT);
+    assign result_pc = last.pc;
+    // A trap asserts only once its request has completed through the LSU, so
+    // the LSU flush never drops the completion this slot is waiting for.
+    assign result_trap = last.valid && last.done && !last.canceled && last.trap;
+    // A completed load with rd and no trap.
+    assign result_ready = last.ready && !last.canceled && !last.trap;
     assign bypass_data_out = 'x;
     assign redirect_taken_out = 1'b0;
     assign redirect_age_out = 'x;

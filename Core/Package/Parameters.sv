@@ -14,8 +14,14 @@ package Parameters;
     parameter unsigned CACHE_LINE_WORDS = 2;
     parameter unsigned FETCH_FIFO_WORDS = 8;
 
-    parameter logic [31:0] MAX_MEMORY_ADDRESS = 32'h0000_07ff;
-    parameter unsigned RESET_VECTOR = 32'h0000_0000;
+    // 1: a store waits for every older bus response, so bus errors are
+    // precise. 0: stores may overtake an older load's error (imprecise).
+    parameter bit PRECISE_BUS_FAULTS = 1;
+    // Address map: devices (CLINT) in [0, RAM_BASE), RAM in
+    // [RAM_BASE, MAX_MEMORY_ADDRESS]. Execution starts at the RAM base.
+    parameter logic [31:0] RAM_BASE = 32'h0000_0200;
+    parameter unsigned RESET_VECTOR = 32'h0000_0200;
+    parameter logic [31:0] MAX_MEMORY_ADDRESS = 32'h0000_FFFF;
 
     parameter unsigned DIVIDER_AUTO_PIPE = 2;
 

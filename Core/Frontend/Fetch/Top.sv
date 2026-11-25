@@ -8,14 +8,22 @@ module FetchTop
     parameter unsigned SUPPORT_ATOMIC = Parameters::SUPPORT_ATOMIC,
     parameter unsigned FIFO_WORDS = 8,
     parameter unsigned ISSUE_WIDTH = 2,
-    parameter unsigned RESET_VECTOR = 32'h0000_0000,
-    parameter unsigned IMEM_DEPTH_WORDS = 512,
-    parameter IMEM_HEX_FILE = "Core/Frontend/Fetch/program.hex"
+    parameter unsigned RESET_VECTOR = 32'h0000_0000
 )(
 
     // Standard Inputs
     input logic clk,
     input logic reset,
+
+    // Instruction fetch port to the shared RAM (via the system Crossbar).
+    // One request per cycle; the response arrives the next cycle. A cycle
+    // with fetch_valid low means the request was not served and Fetch
+    // re-requests the same address.
+    output logic fetch_request,
+    output logic [31:0] fetch_address,
+    input logic [FETCH_WORDS*32-1:0] fetch_data,
+    input logic fetch_valid,
+    input logic fetch_error,
 
     // Redirect Inputs
     input logic [31:0] redirect_pc,
@@ -55,9 +63,8 @@ module FetchTop
     logic [31:0] req_address;
     logic req_valid;
     logic req_ready;
-    logic [FETCH_WORDS*32-1:0] fetch_data;
-    logic fetch_valid;
-    logic fetch_error;
+    assign fetch_request = req_valid;
+    assign fetch_address = req_address;
 
     Queue #(
         .FETCH_WORDS(FETCH_WORDS),
@@ -123,17 +130,5 @@ module FetchTop
         );
     end
 
-    InstructionMemory #(
-        .FETCH_WORDS(FETCH_WORDS),
-        .DEPTH_WORDS(IMEM_DEPTH_WORDS),
-        .HEX_FILE(IMEM_HEX_FILE)
-    ) instruction_memory (
-        .clk(clk),
-        .reset(reset),
-        .req_address(req_address),
-        .fetch_data(fetch_data),
-        .fetch_valid(fetch_valid),
-        .fetch_error(fetch_error)
-    );
 
 endmodule

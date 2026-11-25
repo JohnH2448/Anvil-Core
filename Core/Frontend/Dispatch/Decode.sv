@@ -36,6 +36,8 @@ module DecodeStage
     input logic [6:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
     input logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
+    // Pending enabled interrupt (NONE if none) from the serial lane's flops.
+    input TrapType_ interrupt_request,
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
@@ -98,6 +100,28 @@ module DecodeStage
         reset_reg <= reset;
     end
 
+    // Admission ordering around traps and MRET. Once a decode-known trap
+    // (fetch trap, ILLEGAL, ECALL/EBREAK, interrupt tag) or an MRET is
+    // admitted, nothing younger is admitted until recovery, so no younger
+    // store can reach the bus before the trap reaches writeback. Older work
+    // finishes normally.
+    // - ends_group: a conservative superset computed only from registered
+    //   serve fields (no DecoderSlice logic), because it sits on the pop count
+    //   to Fetch. It ends the admitted window after the slot; a false positive
+    //   only splits a window.
+    // - wait_recovery: set from the exact decoded packet, which is a flop D
+    //   input and off the pop path.
+    // Trap entry re-checks interrupt enables, so a CSR write that disables an
+    // interrupt after tagging needs no decode hold (the instruction refetches).
+    logic wait_recovery;
+    wire admit = !wait_recovery;
+    wire inject_interrupt = admit && interrupt_request != NONE && serve_valid_reg[0];
+    TrapType_ trap_in [ISSUE_WIDTH-1:0];
+    always_comb begin
+        foreach (trap_in[i]) trap_in[i] = serve_trap[i];
+        if (inject_interrupt) trap_in[0] = interrupt_request;
+    end
+
     // Generate Decoders and Produce Packets
     DecoderPacket_ packets [ISSUE_WIDTH-1:0];
     LaneType_ lane_types [ISSUE_WIDTH-1:0];
@@ -120,7 +144,7 @@ module DecodeStage
             .capability_in(DecodeCapability_'(serve_capability[i])),
             .immediate_upper_select_in(serve_immediate_upper_select[i]),
             .fp_consumer_in(serve_fp_consumer[i]),
-            .trap_in(serve_trap[i]),
+            .trap_in(trap_in[i]),
             .rs1_used_in(serve_rs1_used[i]),
             .rs2_used_in(serve_rs2_used[i]),
             .rd_written_in(serve_rd_written[i]),
@@ -136,10 +160,30 @@ module DecodeStage
     // Fetch selects a registered speculative window after the clock edge.
     // Count that window's validity directly so metadata cannot lag its payload.
     logic [$clog2(ISSUE_WIDTH+1)-1:0] valid_inputs;
+    logic ends_group [ISSUE_WIDTH], recovers [ISSUE_WIDTH];
+    for (genvar i = 0; i < ISSUE_WIDTH; i++) begin : admission_boundary
+        // Superset of every decode-known trap and MRET: fetch traps, all
+        // SYSTEM/CSR encodings (ECALL, EBREAK, MRET, RO-CSR and FP-CSR
+        // ILLEGAL), FP state accesses (ILLEGAL while FS is Off), and the
+        // slot-0 interrupt tag. CSR/SYSTEM already issue one per group.
+        assign ends_group[i] = serve_trap[i] != NONE ||
+            DecodeCapability_'(serve_capability[i]) inside {CAP_SYSTEM, CAP_CSR} ||
+            (SUPPORT_FLOAT && (DecodeCapability_'(serve_capability[i]) inside {CAP_FP_F, CAP_FP_CONVERT} ||
+                serve_rd_float[i] || serve_rs2_float[i])) ||
+            (i == 0 && inject_interrupt);
+        // Exact: the decoded packet traps, or is MRET, FENCE or FENCE.I (all
+        // flush and redirect at writeback).
+        assign recovers[i] = packets[i].common.trap_type != NONE ||
+            packets[i].system.operation inside {SYS_MRET, SYS_FENCE, SYS_FENCE_I};
+    end
     always_comb begin
+        logic open_slot;
+        open_slot = admit;
         valid_inputs = '0;
-        for (int unsigned i = 0; i < ISSUE_WIDTH; i++)
-            valid_inputs += $clog2(ISSUE_WIDTH+1)'(serve_valid_reg[i]);
+        for (int i = 0; i < ISSUE_WIDTH; i++) begin
+            if (open_slot && serve_valid_reg[i]) valid_inputs++;
+            open_slot &= serve_valid_reg[i] && !ends_group[i];
+        end
     end
 
     // Normal FIFO counts are independent of flush. Only the outward-facing
@@ -155,6 +199,15 @@ module DecodeStage
     // Flush and stall are applied in Fetch: stall as a late 2:1 select between
     // the consumed-zero and normal outcomes, flush through queue validity.
     assign serve_normal_count = serve_consumed_normal;
+    always_ff @(posedge clk) begin
+        if (reset || reset_reg || redirect_taken) begin
+            wait_recovery <= 1'b0;
+        end else begin
+            for (int i = 0; i < ISSUE_WIDTH; i++)
+                if (!stall && i < int'(serve_consumed_normal) && recovers[i])
+                    wait_recovery <= 1'b1;
+        end
+    end
 
     always_ff @(posedge clk) begin
         if (reset || reset_reg || redirect_taken) empty_slots <= COUNT_W'(ISSUE_WIDTH);

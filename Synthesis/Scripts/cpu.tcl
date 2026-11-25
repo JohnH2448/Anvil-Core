@@ -15,16 +15,22 @@ set cpu_period [expr {[llength $argv] >= 2 ? [lindex $argv 1] : 5.000}]
 anvil_begin cpu
 create_project -in_memory -part $cpu_part
 read_verilog -sv [anvil_sources Core/Frontend/Fetch/*.sv Core/Frontend/Dispatch/*.sv Core/Frontend/Top.sv \
-    Core/Backend/Execute/Integer/*.sv Core/Backend/Execute/Memory/*.sv \
+    Core/Backend/Execute/Integer/*.sv Core/Backend/Execute/Memory/*.sv Core/Backend/Execute/Serial/*.sv \
     Core/Backend/Support/IntegerFile.sv Core/Backend/Top.sv Core/Top.sv]
 set cpu_constraints "create_clock -name cpu_clk -period $cpu_period \[get_ports clk\]\n"
 append cpu_constraints {
 # Reset: synchronized and registered elsewhere.
 set_input_delay -clock cpu_clk -max 1.000 [get_ports reset]
 set_input_delay -clock cpu_clk -min 1.000 [get_ports reset]
+# Interrupt lines and the CLINT's mtime: registered outside the core.
+set_input_delay -clock cpu_clk -max 1.000 [get_ports {time_value[*] timer_pending software_pending}]
+set_input_delay -clock cpu_clk -min 0.400 [get_ports {time_value[*] timer_pending software_pending}]
+set_input_delay -clock cpu_clk -max 1.000 [get_ports {interrupt interrupt_type[*]}]
+set_input_delay -clock cpu_clk -min 0.400 [get_ports {interrupt interrupt_type[*]}]
 }
 anvil_constraints cpu $cpu_constraints
 proc cpu_post_synth {} {
     anvil_bus_constraints cpu_clk
+    anvil_fetch_constraints cpu_clk
 }
 anvil_implement cpu CoreTop $cpu_part

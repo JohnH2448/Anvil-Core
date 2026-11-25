@@ -2799,3 +2799,170 @@ IntegerLane and MemoryLane export `next_result_destination`/`next_result_age`: t
 
 Invariant: the mask ignores validity, rd_valid, traps and the redirect kill (`stage_2_flush`), all of which are in `result_ready[j]`. A flushed, trapped or not-yet-ready younger writer therefore never suppresses an older one, which matches the previous behaviour, and the redirect stays out of the mask's cone. Cost: RF_LANES^2 flops (9 at three ports) and two small exports per lane. Static review only.
 
+## 2026-11-24 - Writeback trap bit, serial lane, ISSUE_WIDTH write ports, LSU lockdown
+
+Frontend part: Queue.sv gates `prediction_pc_wrapped` (sequential and predicted-target wraps, which become `INST_ACCESS_FAULT`) with `!DerivedParameters::FULL_ADDRESS_SPACE`. The new constant is `MAX_MEMORY_ADDRESS == 32'hFFFF_FFFF`; wraps are legal there and the wrap hardware compiles out. Enumerations adds `BUS_FAULT`.
+
+Backend part:
+- SerialLane is a lockstep lane-0 pipeline with the same stage numbering and redirect kill as IntegerLane, and no forwarding. It has named blank CSRs (`ControlRegisters_`; all others ROZ), no CSR behaviour and no RF write. Trapped packets raise `result_trap` at the final slot.
+- BackendTop reverts the registered WAW conflict mask (2026-11-23). Writeback now age-compares the final-slot writers each cycle:
+  - Writes are denied to anything younger than any raw trap.
+  - Youngest wins WAW, among surviving ready writers.
+  - Writes are suppressed under stall.
+  - The k-th requesting writer drives port k of ISSUE_WIDTH IntegerFile write ports (previously one per lane).
+- New output `trap`: a final-slot trap with no older pending final-slot result. It is not stall gated. Lanes export `result_pending`; `next_result_*` is removed.
+- IntegerLane: a trapped MUL/DIV no longer lowers `final_ready_q`. Before, a trapped DIV could wait forever, because the divider never starts trapped operations.
+- MemoryLane and LoadStoreUnit lockdown:
+  - The AGU detects frontend traps, misalignment and the access range (`last_byte > MAX_MEMORY_ADDRESS`, compiled out at full address space).
+  - Trapped requests are enqueued, are pending until the LSU completes them, and lock the LSU at the send head. Bus errors set `BUS_FAULT` and lock it too.
+  - While locked, entries pass without the bus and complete locally, with no error and garbage data. Slot readiness no longer excludes traps, so consumers never deadlock; `result_ready` still does.
+  - Memory `result_trap` requires completion. On `trap` the LSU drops all entries, discards responses still owed, and blocks check-ins for 3 cycles.
+- The inactive-lane `pending`/`candidate` ties were fixed: the second assign sat outside the `if`.
+- SerialLane is added to cpu.tcl and backend.tcl; backend.tcl constrains `trap`.
+
+Invariants: there are no redirect overrides at writeback. A redirect kills younger group members on entry to stage 2 (or at the AGU/LSU squash), so writeback instructions are always older than any in-flight redirect, at unroll 1 too. Trap kill uses the raw lane trap bits, so younger writes are denied even while an older pending result holds `trap` low. Flush is not implemented: after a trap, dropped LSU entries leave their lane slots pending until flush exists.
+
+Tradeoffs: the address/age compare and the stall term are back on the RF write enable, with port compaction behind them (timing deferred by request). Static review only; not simulated or synthesized.
+
+## 2026-11-24 - Writeback trap flushes the pipeline
+
+Changes since the previous entry also include ChatGPT review fixes, already in the tree:
+- The LSU flushes once per held trap.
+- Memory AGUs arriving during the check-in lock are canceled.
+- An outstanding-only error cancels a send, which removes the combinational handshake loop.
+- Stores wait until no response is outstanding, making bus faults precise. This is a throughput cost on load-to-store sequences and still awaits a decision.
+- Write port k is now selected by issue age k instead of the k-th-writer compaction.
+
+Backend flush on the `trap` edge, stall or not. The trap fans out to valid bits only:
+- integer, memory and serial `valid_payload`
+- memory slot valid/ready/pending
+- MUL/DIV valid and busy bits, through the unit `reset`
+- IntegerLane `final_ready_q`, set back to 1
+
+Older survivors in the trapping group commit on that edge even under stall (`write_en` uses `!stall || trap`). The slot-wide `wb_trap` cancel added by the review is removed, because the valid clear supersedes it. Pending branch captures (`redirect_q`, `redirect_fired`) are dropped on the trap edge.
+
+Frontend: BackendTop registers the trap as `redirect_trap` and ORs it into `redirect_taken`/`redirect_fetch`, with `redirect_pc` = SerialLane `trap_vector` (blank mtvec, zero). This is the full branch-recovery flush. FrontendTop and DispatchTop pass `redirect_trap` to ProducerTable, which then drops every entry instead of trimming by slot. Producers between group 1 and writeback are flushed too, so a positional trim would leave stale forwarding owners.
+
+Invariants: the trap is the oldest event in flight, so it overrides any same-cycle branch recovery. A stage-0 packet captured on the trap edge is killed by `recovery_flush` in the recovery cycle. A spurious one-cycle operand stall from that packet's registered watch bits is harmless, because recovery runs under stall. frontend.tcl and backend.tcl add `redirect_trap` to the late controls. Static review only.
+
+## 2026-11-24 - Bus-discovered memory traps, CSR read/write, counters
+
+Reason: a frontend-trapped instruction in a memory lane needed barrier and phantom machinery in the LSU. Removing the case is simpler.
+
+Decode (frontend): DecoderSlice rewrites a trapped CAP_MEMORY/CAP_ATOMIC packet to CAP_SYSTEM, and lane type follows, so it issues to the serial lane. This adds a trap compare in front of the capability and lane-type outputs, an unmeasured timing cost. A CSR write to a read-only address (csr[11:10] == 2'b11) now decodes as ILLEGAL. cycle/cycleh/instret/instreth map to the counter indices.
+
+Memory: every memory trap is now discovered by the bus. The AGU misaligned and range checks, the request trap, the LSU barrier entries and barrier lock are removed. The bus gets the full byte address and a new `request_size` (CoreTop/BackendTop port), and must return `response_error` for misaligned, out-of-range and failed accesses. All three are BUS_FAULT for now, so the precise cause is lost until cause mapping exists. Bus-error lockdown, phantom completions, the flush and the 3-cycle lock are unchanged. `Parameters::PRECISE_BUS_FAULTS` (default 1) keeps the store gate; 0 opens it (imprecise). FULL_ADDRESS_SPACE now only gates the fetch PC wrap logic.
+
+Serial lane: it has its own rs1 RF read port (IntegerFile READ_PORTS = 2*RF_LANES+1). The CSRs are a generic register file: the final slot reads the old value into rd, and CSRRW/RS/RC write on the retiring edge. mcycle and minstret are 64-bit counters. A CSR write replaces the written half after the instruction completes. A minstret write lands after older and self retirements, and younger same-group retirements count after it. Lane outputs `result_valid`, and BackendTop forms per-writer retirement (valid, not trapping, not killed), `retire_count`, `retire_older` and `retire_edge` ((!stall || trap) && !reset). trap_vector is the stored mtvec.
+
+Invariants: one serial instruction per group (Issue's serial hazard) and in-order serial issue make a final-slot CSR read see every older write. Static review only; nothing linted, simulated or synthesized.
+
+## 2026-11-24 - Interrupts, trap entry CSRs, trap skid buffers, MRET
+
+Frontend: DecodeStage gets `interrupt_request` (TrapType_, from serial-lane flops through BackendTop, CoreTop, FrontendTop and DispatchTop). If slot 0 is valid and no tag is in flight, slot 0's `trap_in` becomes the interrupt type. This puts a 2:1 mux on slot 0's trap input, ahead of the existing trap logic (legality `ok`, the memory reroute and the RO-CSR check); the timing cost is unmeasured. `interrupt_in_flight` sets when slot 0 is consumed (`!stall && serve_consumed_normal != 0`) and clears on any `redirect_taken`. Interrupt tags take priority over fetch traps. The frontend.tcl easy controls now include `interrupt_request`.
+
+Backend: CoreTop/BackendTop take `interrupt` and `interrupt_type` (InterruptType_: software, timer, external). Each pulse sets an mip bit (sticky). The request is `mip & mie & mstatus.MIE`, with priority MEI, MSI, MTI.
+
+Lanes export final-slot `result_trap_type` and `result_pc`; the memory slot gains a pc field and always reports BUS_FAULT. BackendTop adds a per-writer trap skid with no enable: type, PC, and take = `trap && writer_trap && !killed`. In the skid cycle (`redirect_trap`) a one-hot select feeds the serial lane's trap entry. Trap entry writes mepc and mcause, sets MPIE = MIE and MIE = 0, and clears the taken mip bit. MRET sets MIE = MPIE and MPIE = 1. An interrupt is checked again against the live enables; if it is no longer enabled, nothing is written and the redirect goes to its own PC. `redirect_pc` = `trap_target` replaces `trap_vector_q`. MRET raises `result_trap` (flush at writeback) and `result_mret`, so it still retires.
+
+CSRs: mstatus (MIE/MPIE only; MPP = M, FS = 0), mie/mip (3 bits each), mtvec (direct only), mepc (bit 0 zero), mcause (BUS_FAULT = 24, custom), and misa (read-only constant).
+
+Invariants: the skid cycle follows a trap flush, so no CSR instruction can commit in it. An interrupt-tagged packet has no side effects, and its PC is the correct mepc. Static review only; nothing linted, simulated or synthesized.
+
+## 2026-11-24 - Order decode admission around interrupt boundaries
+
+DecodeStage now admits a prefix ending at the first decoded trap, MRET or write to mie/mstatus. A trap or MRET holds younger packets in Fetch until redirect. This prevents a younger store from reaching the bus while the trap travels to WB. A mask write releases admission on a registered serial-lane commit indication so the next instruction sees the new enables. Older redirects clear both holds. Fetch consumption, decode validity and occupancy use the same prefix under stall and partial refill. DecoderSlice sends all frontend traps to the serial lane and enforces the fixed-Off FS policy on FP instructions and FP CSR accesses. SerialLane arbitrates live interrupt priority at entry and clears only the serviced source.
+
+CoreTop, both backend/frontend tops and DispatchTop carry the commit pulse. The existing relaxed frontend Tcl input group and backend output group include it. These boundaries cost refill bandwidth around mask writes and add combinational work to Decode admission. Timing is unmeasured. Validation was static inspection of slot consumption, squash, CSR commit, priority and port wiring, plus a diff whitespace check.
+
+## 2026-11-24 - Decode admission boundary off the pop path, mask-write hold removed
+
+Review of the previous entry. Its window boundary `ends_group` used DecoderSlice outputs: final trap_type (behind the interrupt mux, RO-CSR and FP-state checks), system.operation and csr.index/write_enable. That boundary feeds `valid_inputs`, then `serve_consumed_normal`, then `serve_normal_count`, the select on Fetch Queue's head/occupied/serve muxes, so it put full decode on a known critical path.
+
+Change (Decode.sv): `ends_group` is now a conservative superset formed only from registered serve fields. It covers a fetch trap, CAP_SYSTEM/CAP_CSR, FP state access when SUPPORT_FLOAT, and the slot-0 interrupt tag. A false positive only splits a window; CSR/SYSTEM already issue one per group. `wait_recovery` is set from the exact decoded packet (trap_type != NONE or MRET) as a flop D input.
+
+Removed the mie/mstatus write hold (`wait_irq_csr`) and the SerialLane `irq_csr_committed` output, plus its BackendTop, CoreTop, FrontendTop and DispatchTop plumbing and tcl constraints. The disable case was already safe through trap-entry re-check and refetch. The hold only advanced an enabled interrupt by a few cycles, which the spec does not require, at the cost of a refill per mie/mstatus write.
+
+Kept from the review: the post-trap admission stop, trap-entry priority re-selection, and FP state ILLEGAL while FS is Off.
+
+Expected effect, unmeasured: the pop count depends on registered serve fields plus `interrupt_request` (serial-lane flops) and `wait_recovery`. Static review only.
+
+## 2026-11-24 - CSR whitelist in Fetch, FENCE.I refetch, serial lane cleanup
+
+Fetch (SystemTrapPredecode): the CSR case is now a whitelist for an M-mode-only core. Fixes:
+- cycle/cycleh/instret/instreth were ILLEGAL, which left Decode's alias mapping dead. They are now legal.
+- medeleg/mideleg/mcounteren were legal read-only. They are now ILLEGAL (no S/U mode).
+- mcountinhibit was ILLEGAL. It is now legal read-only zero.
+- mtval, mstatush and mhpmcounter/mhpmevent were read-only, so writes trapped. They now live in writable space as zero, and writes are ignored.
+- FP CSRs are ILLEGAL (FS Off).
+- time/timeh stay ILLEGAL.
+- Read-only is now the architectural `csr[11:10] == 2'b11`.
+
+DecoderSlice drops its duplicate RO-write and FP-CSR checks, leaving only the FS-Off FP instruction trap behind trap_in. That shortens the decode trap path.
+
+Serial lane: FENCE.I raises result_trap (a writeback flush) plus result_fence_i. It retires, and the skid cycle redirects to PC + 4 with no CSR change. Decode's `recovers` includes FENCE.I, so younger instructions are not admitted before the refetch. FENCE and WFI remain no-ops: memory goes in order through one LSU, and WFI may complete immediately. The FP index mapping in Decode is removed. Static review only.
+
+## 2026-11-24 - Reset vector at RAM base, time/timeh CSRs, system peripherals
+
+Frontend-visible changes:
+- `Parameters::RESET_VECTOR` = `RAM_BASE` = 0x200. Fetch starts at word 0x80 of the instruction memory, and program.hex now begins with `@80`.
+- The SystemTrapPredecode whitelist adds time/timeh (0xC01/0xC81). DecoderSlice maps them to the new TIME_R/TIMEH_R; CSR_R is widened to 5 bits.
+
+Backend: CoreTop/BackendTop take a `time_value` input (CLINT mtime), which the serial lane reads for time/timeh.
+
+New system files: Core/SystemTop.sv, Core/Peripherals/CLINT.sv, RAM.sv and Crossbar.sv.
+- The crossbar performs bus fault discovery: misaligned and out-of-range accesses get `response_error`.
+- Both targets take one cycle, so responses stay in order.
+- Interrupts reach the core as rising-edge pulses. This deviates from the spec's level MTIP when software leaves mtime >= mtimecmp.
+
+Static review only.
+
+## 2026-11-24 - Level-sensitive MTIP/MSIP
+
+This fixes the spec deviation recorded in the previous entry. CoreTop/BackendTop/SerialLane take CLINT `timer_pending` and `software_pending`, which mip.MTIP/MSIP mirror directly. Software clears them at the source by writing mtimecmp or msip, and trap entry no longer clears them. A timer left at mtime >= mtimecmp re-interrupts after MRET, as the spec requires. The pulse interface now sets only mip.MEIP (type INT_EXTERNAL, sticky, cleared on entry); other pulse types are ignored. SystemTop's edge arbiter is reduced to an external rising-edge pulse. No frontend change. Static review only.
+
+## 2026-11-24 - Instruction fetch moved to the shared system RAM
+
+Reason: separate instruction and data memories at the same addresses broke ordinary C images, for example `.rodata` loads.
+
+Frontend:
+- FetchTop no longer instantiates InstructionMemory. Queue's memory interface (req_address = prefetch_pc_next, one-cycle response, fetch_valid low = retry the same address) is exported through FrontendTop and CoreTop as `fetch_request`, `fetch_address`, `fetch_data`, `fetch_valid` and `fetch_error`.
+- The IMEM_DEPTH_WORDS/IMEM_HEX_FILE parameters are removed. program.hex loses its `@80`, so word 0 = RAM_BASE.
+- Queue is unchanged. It already tolerated fetch_valid gaps by re-requesting prefetch_pc.
+
+System:
+- RAM.sv is 4 word-interleaved single-port banks with a data port and a 3-word fetch port. A bank serves the data access if the data word is in that bank, otherwise its fetch word.
+- Crossbar arbitrates data first: the fetch is denied only on a bank conflict.
+- Crossbar registers fetch_valid and captures data responses on their first cycle, because a later fetch can overwrite a bank output.
+- Out-of-RAM fetch words read zero (ILLEGAL).
+
+Timing, unmeasured:
+- fetch_address (combinational prefetch_pc_next) now feeds the Crossbar conflict check and a per-bank address mux before the BRAM.
+- fetch_data adds a bank rotate ahead of the halfword select.
+- frontend.tcl and cpu.tcl add anvil_fetch_constraints (assumed fetch_data arrival 2.0 ns, address output delay 1.0 ns). Frontend runs from here on are a new comparison series, because the instruction BRAM is no longer inside FrontendTop.
+
+Static review only.
+
+## 2026-11-24 - First full simulation: riscv-tests, directed tests, configuration sweep
+
+First simulation since 0acff01. The run used Verilator 5.020 on SystemTop with a scratch testbench; the shipped Parameters were unchanged, and only MAX_MEMORY_ADDRESS was raised to 0xFFFF for test images. Suites:
+- rv32ui, rv32um, rv32uc, and rv32mi minus Sdtrig and PMP.
+- Directed tests: timer level re-pend, msip with mie/mstatus masking, CLINT never firing before it is programmed, time vs mtime, out-of-range access faults, ecall, RO and nonexistent CSRs, misa, mstatus.MPP, an external interrupt, and 3000-iteration load/store/mul/div loops under hundreds of timer interrupts at varied offsets (no lost or duplicated stores).
+
+Bugs found and fixed:
+1. IntegerLane: at EXECUTION_UNROLL >= 2, a non-iterating MUL/DIV result capture was not stall gated, so it overwrote the older instruction held in the result stage. Capture is now `valid && (ITERATES || !stall)`.
+2. SerialLane: a write to minstret/minstreth counted the writing instruction. The spec and riscv-tests require that the next read returns the written value.
+3. MemoryLane: bus errors reported custom mcause 24. They now report misaligned load/store when the slot's size and offset are misaligned, otherwise load/store access fault. The trap is still discovered by the bus.
+4. FENCE was a no-op, so an older `csrr time` could be ordered after a younger device load at unroll >= 3. FENCE now drains like FENCE.I (writeback flush, PC + 4); Decode's `recovers` includes SYS_FENCE.
+
+Results after the fixes:
+- Default configuration: 70/70.
+- EXECUTION_UNROLL 2, 3, 4 and 20 (the divider stops iterating at 20), ISSUE_WIDTH 1, PRECISE_BUS_FAULTS 0 and BYPASS_ENABLED 0 were swept with the same suite.
+
+Expected failures, not run in the sweep:
+- rv32ui-ma_data needs hardware misaligned access.
+- rv32mi-breakpoint needs Sdtrig.
+- rv32mi-pmpaddr needs PMP.
+
+No synthesis was run.
+

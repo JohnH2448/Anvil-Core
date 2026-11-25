@@ -5,7 +5,15 @@ See the [CPU stall and redirect protocol](Core/STALL_AND_REDIRECT.md) for stage-
 Anvil-Core opts for a highly parameterizable backend, the crux of which being the concept of heterogenous "lane" instantiation at compile time. Long story short:
 FP lanes only forward to other FP lanes, they dynamically search for operands. No integer forwarding goes to them nor integer outputs come from them.
 Integer and memory lanes are served static tags to fetch operands from at issue time. Memory lanes broadcast ready bits, integer lanes are guarenteed ready.
-Serial lanes back stall all other serial operations and run one at a time. All dependencies generally are also back stalled.
+The single serial lane (lane 0) is lockstep and stalls like every other lane. It has no forwarding in or out, so its consumers and its own sources use the register file. It reads rs1 through its own RF read port. CSRRW/CSRRS/CSRRC and the immediate forms read the old value at the final slot and write on the retiring edge. Implemented CSRs:
+- mstatus: only MIE and MPIE are stored; MPP reads as M, FS reads 0.
+- mie and mip: only MSI, MTI and MEI (bits 3, 7, 11). mip is read-only to software; CoreTop's `interrupt`/`interrupt_type` pulses set its bits, and taking the interrupt clears the bit.
+- mtvec: direct mode only. mepc: bit 0 reads 0.
+- mcause: standard codes. A bus error is reported as misaligned load/store (4/6) when the access was misaligned, otherwise load/store access fault (5/7).
+- misa: a read-only constant derived from the SUPPORT_* parameters (MXL=1, plus I, C, M, and A/F when enabled).
+- mscratch is writable. FS is fixed Off in all configurations. FP instructions and FP CSR accesses raise ILLEGAL, and FP CSRs require no storage.
+
+Interrupts: the serial lane presents the highest-priority pending and enabled interrupt (`mip & mie & mstatus.MIE`; priority MEI, MSI, MTI) to Decode. Decode tags the oldest valid served instruction with it, which travels through the serial lane. Decode stops admitting younger instructions after a known trap or MRET until recovery. No decode hold follows a write to mie or mstatus: if an older write disables an interrupt after tagging, trap entry's re-check refetches the instruction. Trap entry selects the highest-priority source still enabled and pending. Trap entry and MRET run one cycle after the writeback trap, from per-writer trap skid buffers in BackendTop. That cycle writes mepc/mcause/mstatus/mip and drives the frontend redirect PC from flops: mtvec for a trap, mepc for MRET, or the instruction's own PC when no interrupt remains enabled and pending (refetch, no CSR change). MRET flushes at writeback like a trap but retires. mcycle/mcycleh and minstret/minstreth are spec 64-bit counters, with read-only cycle/cycleh/instret/instreth aliases. minstret counts the instructions retiring at writeback. Fetch predecodes a CSR whitelist: nonexistent CSRs and writes to read-only addresses raise `ILLEGAL`. FENCE.I flushes at writeback, retires, and refetches PC + 4. FENCE drains the same way (it orders time reads and other CSR effects against younger memory accesses); WFI is a no-op. The serial lane handles every trap discovered before issue.
 
 ## Memory Lanes
 Memory operations, in particular loads, must be handled differently than most other instructions due to their variable latency nature. Given that the pipeline design is strictly in order, an instruction dependent on load data MUST stall itself and everything younger to prevent correctness issues. There is no replay mechanism to otherwise repair an instruction if it were to continue past its operand selection stage missing its dependency data. Additionally, even in the case where a load does not have any immediate dependencies on its result, it still must stall the pipeline to maintain in-order semantics before it commits to the register file. No younger instruction may commit to the register file until the load has completed and commit entirely. Without this, unintentional WAW among other correctness issues are possible, corrupting the register file state and breaking flush recovery. Given these invariants, the memory architecture must satisfy them in a way that preserves correctness while also minimizing backend stall cycles.
@@ -17,7 +25,22 @@ Stalls are still possible in several scenarios. Primarily, stalls will occur on 
 The other possibility of a stall is a memory operation reaching the iteration point without a valid result. In this case, the pipeline will globally stall until the LSU checks in a result. This maintains ordering, which is a primary correctness concern.
 
 
-BackendTop connects the issuer packet arrays to the configured integer and memory lanes and their shared integer file. LoadStoreUnit queues one request per registered memory forwarding point per lane. On pipeline advance it appends the AGU candidates in issue-age order, before the same-cycle redirect squash is known. Candidates killed by that redirect are counted into a registered squash count, never sent, and retracted from the tail on the next edge; they are always the youngest entries. Its aligned 32-bit bus can issue one request per cycle and requires one response per load or store, strictly in request order. The bus peer must discard outstanding transfers on reset. The LSU keeps the owner until the response handshake. That lane captures the result in its oldest unfinished slot, including during a stall. Consumers forward from the registered slot on the following cycle. A misaligned access raises a lane trap before a request is sent. A bus error raises a lane trap on response. Precise exception retirement remains pending.
+BackendTop connects the issuer packet arrays to the configured integer and memory lanes and their shared integer file. LoadStoreUnit queues one request per registered memory forwarding point per lane. On pipeline advance it appends the AGU candidates in issue-age order, before the same-cycle redirect squash is known. Candidates killed by that redirect are counted into a registered squash count, never sent, and retracted from the tail on the next edge; they are always the youngest entries. Its 32-bit bus can issue one request per cycle and requires one response per load or store, strictly in request order. The bus peer must discard outstanding transfers on reset. The LSU keeps the owner until the response handshake. That lane captures the result in its oldest unfinished slot, including during a stall. Consumers forward from the registered slot on the following cycle. System (Core/SystemTop.sv): CoreTop plus a data-side Crossbar, a small CLINT and RAM, all in Core/Peripherals.
+- Address map: the CLINT occupies [0, 0x100) and a register-only UART occupies [0x100, `RAM_BASE` = 0x200). RAM spans [0x200, `MAX_MEMORY_ADDRESS`].
+- UART registers (word offsets, low byte used): TX_DATA 0x00 (write-only byte buffer), TX_BUSY 0x04 (read-only, tied low), RX_DATA 0x08 (read-only byte buffer), RX_READY 0x0C (read-only, registered, cleared by reading RX_DATA). There is no serial hardware yet, so nothing sets RX_READY or loads RX_DATA.
+- Above that range, and for misaligned accesses, the crossbar returns `response_error`.
+- `RESET_VECTOR` = `RAM_BASE`.
+- Instructions and data share the RAM. CoreTop exports a fetch port (`fetch_request`/`fetch_address` out, `fetch_data`/`fetch_valid` in, one-cycle response), and the Crossbar arbitrates it with the data bus, data first.
+- The RAM is word-interleaved into 4 single-port banks (the next power of two at or above the 3-word fetch window), so a fetch loses only when the data access hits one of the banks it needs. A denied fetch returns `fetch_valid = 0` and Fetch re-requests.
+- Fetch words outside the RAM read zero, which decodes as ILLEGAL.
+- SystemTop's `HEX_FILE` loads the RAM; its word 0 is 0x200.
+- The frontend's InstructionMemory is no longer instantiated; tests that used it via FetchTop need a memory model.
+- CLINT registers use ACLINT semantics at compacted offsets: msip 0x00, mtimecmp 0x08/0x0C, mtime 0x10/0x14.
+- mtimecmp resets to all ones, so the timer cannot fire until it is programmed.
+- mtime feeds the time/timeh CSRs.
+- The CLINT timer and software levels drive mip.MTIP and mip.MSIP directly, so they follow spec level semantics: they stay pending until software writes mtimecmp or msip, and trap entry does not clear them. A rising edge of `external_interrupt` becomes an INT_EXTERNAL pulse that sets the sticky mip.MEIP, which trap entry clears.
+
+Every memory trap is discovered by the bus. Requests carry the full byte address and `request_size`, and the bus must answer misaligned, out-of-range (above `MAX_MEMORY_ADDRESS`) and failed accesses with `response_error`. Nothing traps in a memory lane before the bus. The memory lane classifies the error at writeback from its own size and offset (misaligned load/store, else load/store access fault), and the error locks the LSU. While locked, younger entries complete locally with garbage until the writeback `trap` flushes the LSU and blocks check-ins for 3 cycles. See the [stall and redirect protocol](Core/STALL_AND_REDIRECT.md). `Parameters::PRECISE_BUS_FAULTS` (default 1) makes a store wait for all older bus responses, so bus faults are precise. With 0, the store gate is always open and a store may overtake an older load's error. Each writeback port corresponds to one original issue slot, selected by the registered instruction age. The writeback trap clears every backend valid bit, and the skid cycle recovers the frontend to the trap target.
 
 ## Integer Lanes
 ![IntegerLane](Docs/IntegerLane.png)
@@ -95,10 +118,11 @@ set_output_delay -clock frontend_clk -min 0.000 [all_outputs]
 ## Additional implementation TODOs
 
 - [ ] Implement FP dependencies, including rs3 and lane operand search.
-- [ ] Extend integer memory execution with precise fault retirement, atomics and floating-point loads/stores.
+- [ ] Extend integer memory execution with atomics and floating-point loads/stores.
+- [ ] Decide on mtval contents and vectored mtvec.
 - [ ] Implement FloatingLane arithmetic, conversions, rounding, exceptions and result delivery.
-- [ ] Implement SerialLane CSR/system execution and trap/interrupt control.
-- [ ] Integrate the full CPU top, backend stall/advancement, writeback and precise recovery.
+- [ ] Remaining SerialLane work: a writable mstatus.FS with fcsr/fflags/frm (aliased) once FP lanes exist, mtval contents.
+- [ ] Decide whether `serial_active` (tied low in CoreTop) is still needed.
 - [ ] Support issue widths above two if required.
 
 FP load forwarding policy is prepared as Parameters.FP_LOAD_RF_ONLY, default 0.

@@ -130,13 +130,28 @@ proc anvil_bus_constraints {clock} {
     set_input_delay -clock $clock -reference_pin $reference -max 0.400 $bus_flags
     set_input_delay -clock $clock -reference_pin $reference -min 0.300 $bus_flags
     # Requests are captured on RAM address/data/WE pins (setup ~0.45 ns plus routing).
-    set request_payload [get_ports {request_address[*] request_data[*] request_mask[*] request_write}]
+    set request_payload [get_ports {request_address[*] request_data[*] request_mask[*] request_size[*] request_write}]
     set_output_delay -clock $clock -max 1.000 $request_payload
     set_output_delay -clock $clock -min 0.000 $request_payload
     # Valid and response_ready also pass through one LUT level of peer handshake logic.
     set request_handshake [get_ports {request_valid response_ready}]
     set_output_delay -clock $clock -max 1.300 $request_handshake
     set_output_delay -clock $clock -min 0.000 $request_handshake
+}
+
+# Shared-RAM fetch port (CoreTop/FrontendTop since instruction memory moved
+# into the system RAM). Assumptions, unmeasured: fetch_data comes from the
+# RAM bank DO pins through the window rotate/halfword mux; fetch_valid is a
+# Crossbar flop; fetch_address feeds the Crossbar bank-conflict check and
+# the RAM's per-bank address mux before the BRAM address pins.
+proc anvil_fetch_constraints {clock} {
+    set reference [anvil_reference_pin]
+    set_input_delay -clock $clock -reference_pin $reference -max 2.000 [get_ports {fetch_data[*]}]
+    set_input_delay -clock $clock -reference_pin $reference -min 0.600 [get_ports {fetch_data[*]}]
+    set_input_delay -clock $clock -reference_pin $reference -max 0.400 [get_ports {fetch_valid fetch_error}]
+    set_input_delay -clock $clock -reference_pin $reference -min 0.300 [get_ports {fetch_valid fetch_error}]
+    set_output_delay -clock $clock -max 1.000 [get_ports {fetch_address[*] fetch_request}]
+    set_output_delay -clock $clock -min 0.000 [get_ports {fetch_address[*] fetch_request}]
 }
 
 # Write constraint text to Build/<flow>/<flow>.xdc and read it.

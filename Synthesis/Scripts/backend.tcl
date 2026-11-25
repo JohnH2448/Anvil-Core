@@ -20,7 +20,7 @@ set backend_part [expr {[llength $argv] >= 1 ? [lindex $argv 0] : $anvil_default
 set backend_period [expr {[llength $argv] >= 2 ? [lindex $argv 1] : 5.000}]
 anvil_begin backend
 create_project -in_memory -part $backend_part
-read_verilog -sv [anvil_sources Core/Backend/Execute/Integer/*.sv Core/Backend/Execute/Memory/*.sv \
+read_verilog -sv [anvil_sources Core/Backend/Execute/Integer/*.sv Core/Backend/Execute/Memory/*.sv Core/Backend/Execute/Serial/*.sv \
     Core/Backend/Support/IntegerFile.sv Core/Backend/Top.sv]
 
 # Frontend contract (frontend.tcl late_controls): the frontend closes with these
@@ -47,6 +47,13 @@ set_input_delay -clock backend_clk -min 1.000 [get_ports reset]
 # --- external_stall: tied to 1'b0 in CoreTop -------------------------------------
 set_input_delay -clock backend_clk -max 1.000 [get_ports external_stall]
 set_input_delay -clock backend_clk -min 0.400 [get_ports external_stall]
+# Interrupt lines: asynchronous sources are synchronized outside the core.
+set_input_delay -clock backend_clk -max 1.000 [get_ports {interrupt interrupt_type[*]}]
+set_input_delay -clock backend_clk -min 0.400 [get_ports {interrupt interrupt_type[*]}]
+# interrupt_request is a few LUTs after serial-lane flops. Frontend assumes a 1.0 ns arrival;
+# this output budget is looser than that and is a placeholder until a backend run.
+set_output_delay -clock backend_clk -max 1.000 [get_ports {interrupt_request[*]}]
+set_output_delay -clock backend_clk -min 0.000 [get_ports {interrupt_request[*]}]
 set_case_analysis 0 [get_ports external_stall]
 
 # --- Same-cycle controls consumed by the frontend ---------------------------------
@@ -54,13 +61,15 @@ set_case_analysis 0 [get_ports external_stall]
 # so these must reach the port by the arrival time the frontend was closed against.
 # The frontend's -min 2.0 assumption is not mirrored: it would force hold padding on
 # registered outputs (redirect_taken, redirect_slot).
-set frontend_controls [get_ports {stall redirect_fetch redirect_taken redirect_advanced redirect_slot[*] redirect_pc[*]}]
+set frontend_controls [get_ports {stall redirect_fetch redirect_taken redirect_advanced redirect_trap redirect_slot[*] redirect_pc[*]}]
 set_output_delay -clock backend_clk -max $frontend_control_delay $frontend_controls
 set_output_delay -clock backend_clk -min 0.000 $frontend_controls
 
 # --- result_trap: unconnected in CoreTop until precise exceptions exist ----------
 set_output_delay -clock backend_clk -max 0.000 [get_ports {result_trap[*]}]
 set_output_delay -clock backend_clk -min 0.000 [get_ports {result_trap[*]}]
+set_output_delay -clock backend_clk -max 0.000 [get_ports trap]
+set_output_delay -clock backend_clk -min 0.000 [get_ports trap]
 
 # --- Data bus: applied after synthesis by anvil_bus_constraints (common.tcl) ---
 }
