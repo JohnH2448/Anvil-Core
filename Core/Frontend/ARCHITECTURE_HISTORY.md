@@ -3042,3 +3042,300 @@ Tradeoffs and known limits:
 - Queue.real_pc (unused) does not model taken JALR.
 
 Validation: none. Not linted, simulated or synthesized. Timing impact unmeasured.
+
+## 2026-11-25 - Branch target buffer experiment (USE_BTB, BTB_ENTRIES)
+
+Reason: after the RAS, Dhrystone redirects fell to about 2 per run, but serve was still empty about 11% of cycles. These were taken-branch fetch bubbles: a correctly predicted taken branch was only acted on at Queue commit, about 2 cycles after its window was requested. USE_BTB = 0 removes all BTB hardware. Verified: the BTB-off build reproduces the pre-BTB Dhrystone loop cycles exactly (830345).
+
+Structure:
+- Fetch/BTB.sv (new): direct-mapped, halfword-indexed, keyed by full fetch-window start address. Each entry holds valid, key and target.
+- Lookup: from the registered prefetch_pc (the window whose data is arriving). On a hit, the next request is the target instead of PC + window. This is a parallel input to the existing prefetch select; nothing is added in front of req_address's existing logic.
+- The steer (hit, target) is carried with the window through staging into the prediction register.
+- Verification at commit compares next fetch addresses:
+  - real = taken ? predicted target : window + 8
+  - steered = hit ? BTB target : window + 8
+  - A mismatch is a fix: refetch real, flush staging, block transfer.
+  - Comparing addresses is exact for the fetch stream regardless of the slot or instruction boundary the entry was learned under, including straddling 32-bit instructions.
+  - Without the BTB, a fix is exactly packet_taken, so behavior is unchanged.
+- Partial halfwords: with the BTB, a partial after a taken branch is dropped at stage transfer (tail_partial <= new_partial && !taken), because a correct steer keeps the target window behind it. A fix no longer clears the prediction register's partial, so a sequential fix resumes into the second half of a straddling instruction.
+- Update at commit:
+  - A taken direct branch or jump writes the entry.
+  - A hit that was not taken, or was taken by a JALR, invalidates it.
+  - JALR-class instructions are never written.
+- RAS: with the BTB, the target window of a correctly steered call is predicted before the call commits its push. RAS.FORWARD_PUSH forwards the pending push of the window in the prediction register to the read.
+
+Measured (Dhrystone, 2000 runs, loop cycles; baseline 830345):
+
+| BTB_ENTRIES | Loop cycles | serve_empty |
+|---|---|---|
+| 16 | 850366 | 88k (thrashing: 74k fixes, mostly misses) |
+| 64 | 826391 | 64k |
+| 256 | 816439 (-1.7%) | 52k (was 91k) |
+
+CoreMark (16 entries): 2.367 -> 2.379.
+
+Finding: at every size, backend JALR redirects rise from about 0 to about 2 per run. Trace (Proc_3 -> beqz mispredicted taken -> wrong-path tail-jump into Proc_7):
+- The faster frontend commits the wrong-path return's RAS pop before the backend redirect for the older beqz arrives.
+- The RAS has no mispredict repair, so it is left one entry short, and the next two returns mispredict.
+- Without the BTB, the fetch bubbles almost always let the redirect arrive first.
+
+The BTB itself is correct. Its gain is capped until the RAS is checkpointed and restored on backend redirects.
+
+Validation: Dhrystone and CoreMark pass (self-checking), and the BTB-off build is cycle-identical to the baseline. Not synthesized; timing unmeasured.
+
+## 2026-11-25 - BTB out of the JALR path; RAS mispredict repair (RAS_REPAIR)
+
+BTB: a window whose taken slot is a JALR no longer invalidates an entry (a JALR never writes one). The BTB is entirely out of the JALR path; returns are redirected only by the RAS through the normal commit-time fix.
+
+RAS repair (RAS_REPAIR = 1, requires USE_RAS; 0 removes it):
+
+Carry:
+- At commit, the RAS's {pointer, count} from before the window's update (7 bits at depth 8) is stored with every instruction of the window.
+- It travels through fifo_snap, serve_snap_reg, Decode and DecoderSlice into DecoderPacket_.bru.ras_snap, the same path as the PHT index.
+
+Restore mode, decided by the BRU lane from registered packet fields:
+- A conditional branch or JAL restores the snapshot.
+- A predicted-taken JALR (a RAS return with the wrong target) restores the snapshot and then repeats its pop.
+- An unpredicted JALR does not restore. It froze the RAS at commit, so no wrong-path operation touched it.
+
+Return path:
+- {enable, pop, snapshot} is registered in redirect_ras_q next to redirect_pc_q.
+- It is selected by the same redirect selector and forced to 0 on a trap.
+
+Applying the restore:
+- The pointer and count are loaded on redirect_taken, with the rest of the frontend flush.
+- top_reg reloads from the stack one cycle later, so the stack-index mux is not behind the redirect selector. Nothing reads the top in that cycle because the flush has emptied staging and prediction.
+- Entries survive pops; only wrong-path pushes can leave stale values.
+
+Measured (Dhrystone, 2000 runs, loop cycles; pre-BTB baseline 830345 = 1.371 DMIPS/MHz):
+
+| Configuration | Loop cycles | JALR redirects | serve_empty |
+|---|---|---|---|
+| BTB 64, no repair | 826391 | 4014 | 64k |
+| BTB 16, repair | 810278 (-2.4%) | 2 | 56k |
+| BTB 64, repair | 786282 (-5.3%, 1.448 DMIPS/MHz) | 2 | 34k |
+| BTB 256, repair | 780306 (-6.0%, 1.459 DMIPS/MHz) | 2 | 32k |
+
+CoreMark (BTB 64, repair): 2.421 CoreMark/MHz (was 2.367 before the BTB).
+
+Validation: Dhrystone and CoreMark pass. Not synthesized; timing unmeasured.
+
+## 2026-11-26 - Timing pass (CoreTop OOC, 5 ns, xc7a100t-3)
+
+These are mostly retimings of hint and steering logic, plus a few conservative bounds. All Dhrystone and CoreMark runs pass.
+
+Frontend:
+- **BTB verify computed in staging and registered** (prediction_fix, prediction_fix_pc). The commit-time prefetch select reads flops. The equalities (steered == each slot target, steered == sequential) are formed from targets that do not depend on the direction predictor, in parallel with the PHT read; the late taken bits only select.
+- **BTB lookup moved earlier.** It uses prefetch_pc_next (the address being requested), with hit and target registered for the next cycle's steer. A same-cycle write is seen one lookup later.
+- **GShare early PHT read.** The PHT is read one cycle before prediction, from the arriving window's slot PCs (response_pc_reg + 2i), and the index and counter MSB are registered with the staging data. A slot-0 partial reuses the previous window's last-slot read, captured at transfer. The history is one cycle older.
+- **Queue:**
+  - prediction_write_slot stores only the in-window offset; the FIFO base (fifo_tail) is added at commit.
+  - fifo_packet_room uses the staging window's valid count, a predictor-free upper bound on its push count.
+
+Backend (for reference):
+- **minstret:**
+  - Retirements are added one cycle late (retire_q).
+  - The view is carry-select, with the upper increment kept.
+  - The write select comes after a kept increment.
+  - retire_older counts valid older group members, with no trap or kill logic.
+- **LSU:**
+  - response_ready = outstanding.
+  - The direct-send decision comes from flops: a base-register device check replaces the adder-based RAM test, and the idle check uses the registered lock only.
+- **Store buffer:** one-hot (an insert drops the older copy of the word), so the hit data is an AND-OR.
+
+Measured (routed WNS / TNS):
+
+| Run | WNS (ns) | TNS (ns) |
+|---|---|---|
+| Baseline | -3.046 | -7506 |
+| R1 | -2.801 | -6381 |
+| R2 | -2.455 | -5174 |
+| R3 | -2.821 | -7183 (placement variance plus the PHT change, before the R4 fixes) |
+| R4 | -2.341 | -5653 |
+
+R5 (the kept carry-select increment) was not completed.
+
+Performance: Dhrystone 346.1 -> 349.2 cycles/run (1.644 -> 1.630 DMIPS/MHz) and CoreMark 2.753 -> 2.739, from the conservative FIFO room check and the one-cycle-older PHT read.
+
+Remaining top paths at R4:
+- CSR read (minstret view) -> CSR mux -> register file
+- the minstret write
+- request_valid through the writeback trap. Stores need the same-cycle trap gate, so this is structural.
+
+### 2026-11-26 - Timing pass, continued (R5-R11)
+
+Frontend:
+- **GShare training pipelined.** Stage A selects the lanes and registers the index, outcome and old counter; stage B writes the saturated value. A same-entry read in stage A takes stage B's new value, so no update is lost.
+- **RAS pending push registered** when the staging window transfers into the prediction register (FORWARD_PUSH). The staging verify no longer decodes the prediction register.
+
+Backend (for reference):
+- **minstret:**
+  - Carry-select with a kept upper increment.
+  - The CSR read selects minstret after every other CSR.
+  - The older-group-member count is formed at issue and carried down the serial lane. For a retiring CSR it equals the writeback count, and it comes from flops.
+- **Direct-send device check** formed in the operand stage and registered.
+- **LSU entry write enable** from a flop-only "memory op present"; only the push/squash counts see the store-buffer hit. A store-buffer hit is now retracted like a same-cycle squash (counted in squashed, removed via squashed_q).
+- **Store buffer: one-entry pending stage.** The insert or invalidate is registered with the branch squash and applied next cycle. A load checks the pending entry first.
+
+Measured:
+
+| Run | WNS (ns) | TNS (ns) |
+|---|---|---|
+| R5 | -2.317 | -5143 |
+| R6 | -1.823 | -4180 |
+| R7 | -1.868 | -3649 |
+| R8 | -1.709 | -2525 |
+| R9 | -1.786 | -1926 |
+| R10 | -1.557 | -1567 |
+| R11 | -1.582 | -1878 (noise) |
+
+Failing endpoints: 7152 at baseline, 3308 at R11.
+
+Performance (STORE_BUFFER_DEPTH = 7, set by the user): 1.621 DMIPS/MHz, 2.730 CoreMark/MHz.
+
+Remaining top paths:
+- **Writeback trap -> LSU blocked -> request_valid.** About 5 LUTs; most of the slack is the 1.3 ns output-delay model. Stores need the same-cycle trap gate.
+- **CSR read -> register file.** The low add, the select and the register-file write mux, from flops.
+- **AGU -> store-buffer compare -> slot data.**
+
+Further gains need structural changes, such as earlier trap detection or a two-stage store-buffer lookup.
+
+### 2026-11-26 - Hardware reduction pass and further timing (R12-R14)
+
+Reduction:
+- **GShare PHT moved to distributed (LUT) RAM.** It has one write per cycle: training updates go through a 2-entry write queue in age order, and stage-A reads forward the newest pending value. There is no reset; the initial value is weakly not-taken.
+- **The integer register file** moved to LUT RAM, with one bank per write port and a live-value table (backend).
+- **Deleted the dead Fetch/InstructionMemory.sv**, left over from before the shared RAM.
+
+Timing (backend, for reference):
+- **Imprecise-fault mode:** the request side ignores a same-cycle bus error. The direct send ignores it in all modes.
+- **Store-buffer hits limited to aligned word loads**, so there is no shift or sign-extend on the hit path. Dhrystone -1.1%.
+- **The LSU direct send is settled one cycle later** (kept: advance the queue; dropped: absorb the response), so the store-buffer hit and squash only reach flops. Dhrystone -1.1%, CoreMark +0.4%.
+
+Measured:
+
+| Run | LUTs | FFs | WNS (ns) | TNS (ns) |
+|---|---|---|---|---|
+| Pre-pass | 19132 | 8189 | | |
+| R12 | 14611 | 6712 | -1.584 | -1117 |
+| R13 | 14546 | | -1.118 | -722 |
+| R14 | 14697 | 6716 | -0.923 | -726 |
+
+Overall since the timing pass began: WNS -3.046 -> -0.923, TNS -7506 -> -726, failing endpoints 7152 -> 2313, LUTs -23%, FFs -18%.
+
+Performance (STORE_BUFFER_DEPTH 7): 1.585 DMIPS/MHz, 2.740 CoreMark/MHz.
+
+Remaining top paths:
+- serial CSR -> register-file bank write data (writeback merge)
+- LSU discard -> request_address/request_valid (output-delay model)
+- redirect_trap -> fetch_address (output-delay model)
+
+Not touched (the user's own tuned designs):
+- the Multiplier, built from LUTs (about 1.4k LUTs, no DSP48)
+- the Divider (about 1.5k FFs at DIVIDER_AUTO_PIPE = 2)
+
+## 2026-11-26 - Shared dual-push store buffer; direct send on two memory lanes
+
+Why: issue-slot accounting showed slot 1 losing 31% of Dhrystone cycles to pairing (one memory lane). Two memory lanes were blocked by the store buffer (`MEMORY_LANE_COUNT = 1` only) and by direct send (single lane only).
+
+Changes:
+- **New `Backend/Execute/Memory/StoreBuffer.sv`**, instantiated once in `BackendTop` and shared by every memory lane. `MemoryLane` no longer holds the buffer; it exports its AGU-stage intent (`sb_lookup/insert/invalidate/squash/word/data`) and takes back `sb_hit_in/sb_hit_data`. The single-lane check is gone.
+- **Dual push.** Each lane has its own pending-stage register (same timing scheme as before: the same-cycle squash only reaches a flop D). On the apply edge, inserts shift the entries by their count (0..LANES), the youngest insert (highest issue age) newest. Any pending op drops older copies of its word, including an older insert of the same group, so each word still has at most one valid entry and hit data stays a parallel AND-OR.
+- **Lookup per lane.** The pending ops are checked first; the youngest matching one decides (insert hits, invalidate misses).
+- **Same-group hit rules** (flops only, no address compare). A lane may not hit when another lane of its group holds an older store (not in the buffer yet) or a younger memory op (the LSU retracts a hit like a squash, which is correct only at the tail). Both rules are vacuous with one lane, so single-lane behavior is unchanged.
+- **Direct send on 2+ lanes:** lane 0 only, and only when no other lane holds an older memory op (`present`/`age`, flops). The direct load is then the oldest of its group and becomes the queue head; the settlement and absorb logic are unchanged. `request_address`/`request_size` keep their 2:1 mux.
+
+Tradeoffs: two-load groups let only the younger load hit the buffer; a load paired with a younger store or an older store always misses. The direct send is lost whenever lane 0 holds the younger op.
+
+Validation: none yet (not simulated or synthesized). Unmeasured expectation: single-lane results unchanged; two-lane performance to be benchmarked.
+
+## 2026-11-26 - Two-lane store-buffer rules replaced: same-group bypass, dead LSU entries
+
+Why: with `MEMORY_LANE_COUNT = 2`, the entry above measured Dhrystone 1.493 DMIPS/MHz and CoreMark 2.691 /MHz, against 1.585 and 2.740 on one lane. Its two same-group hit blocks were the suspected main cause.
+
+Changes:
+- **Same-group bypass (`StoreBuffer.sv`), replacing the "older store" block.** The lanes' word addresses are compared in the AGU stage. The youngest older store of the group to the load's word decides, ahead of pending ops and entries: an insert-eligible store forwards its `source_2`; an ineligible one makes the load miss and queue behind it. Cost: a 30-bit compare between the two AGU adders, plus one more mux level on the hit data (AGU -> `request_valid`/`agu.done`).
+- **Dead entries (`LoadStoreUnit.sv`), replacing the "younger memory op" block.** A non-pending candidate with a younger pending candidate (an older lane's hit) is no longer counted in `squashed` (it is not at the tail). It is enqueued with `dead = 1`, passed at the send head without the bus and without a phantom completion (`pass_dead`), counted in `dead_passed`, and popped silently at the return head (`silent_pop`). Real and phantom returns are gated off a dead return head. A youngest-of-group hit is still retracted as before, so single-lane behavior is unchanged.
+- Correctness invariant (dead pop): sends are in order, so a passed dead entry at the return head is the oldest passed one. With fixed one-cycle bus latency no real response can arrive while it is there (the next entry is sent at the earliest on the cycle it is passed, and answers a cycle after it pops). A variable-latency target would need the return path to skip dead entries instead.
+
+Tradeoffs: a kept dead entry costs one send turn (the younger op behind it goes out one cycle later). That is still far cheaper than the RAM round trip the hit saves.
+
+Validation: none (not simulated or synthesized).
+
+## 2026-11-26 - Reverted: two-lane store buffer, same-group bypass, dead entries, lane-0 direct send
+
+Why: measured with `MEMORY_LANE_COUNT = 2` and both entries above in place: Dhrystone 1.501 DMIPS/MHz, CoreMark 2.684 /MHz, against 1.585 / 2.740 on one lane. Issue-slot accounting (scratch probe) showed Dhrystone pairing losses dropping from 15.6% to 0, but backend stall rising from 10.3% to 30.1%. The bus sends one request per cycle, so the second memory op of a pair always answers a cycle late and stalls the lockstep backend. The store buffer worked on both lanes (12k/10k hits), and only 3 dead entries were passed. Two lanes cannot pay without posted stores or a second data port.
+
+Reverted to the state before the two entries above:
+- `StoreBuffer.sv` deleted; the buffer is back inside `MemoryLane`, single lane (`$fatal` on `MEMORY_LANE_COUNT != 1`).
+- `LoadStoreUnit.sv`: no dead entries; direct send is again `DIRECT_SEND && LANES == 1`.
+- `BackendTop` store-buffer wiring removed; `MEMORY_LANE_COUNT = 1`.
+
+Two memory lanes remain possible as before: set `USE_STORE_BUFFER = 0`; direct send turns itself off.
+
+Validation: none after the revert (not simulated).
+
+## 2026-11-26 - No bus faults: AGU fault detection, posted stores, bus-error machinery removed
+
+Why: the user redefined the memory model. The bus never reports errors and only adds latency (a cache miss is latency; an out-of-range access is caught in the AGU). That matches the cores surveyed (CV32E40X, VeeR EL2, SiFive/Rocket, CVA6), which check architectural faults from the address and post stores. Each store previously cost about two backend-stall cycles waiting for a response that, in imprecise mode, could not stop younger work anyway.
+
+Changes:
+- **AGU fault check (`MemoryLane.sv`):** `agu_fault` = misaligned for the access size (reserved size included) or a word above `MAX_MEMORY_ADDRESS`, mirroring the crossbar. It is exported as `request_fault`.
+- **Posted stores:** a non-faulting store's slot is done in the AGU stage and completes when it enters the LSU. Its bus response is popped silently.
+- **LSU rewritten (`LoadStoreUnit.sv`):**
+  - Fault marker: a faulting request is enqueued with `fault = 1`. At the send head, once `awaiting_response == 0`, it completes its slot with `return_error` and sets `locked`; nothing more is sent. The memory trap (trap while locked) flushes the queue. Everything left is younger than the fault, and every older request, posted stores included, was sent before the marker reached the head.
+  - Any other trap (frontend traps, interrupts, MRET, FENCE/FENCE.I) does not flush. Nothing younger was admitted, and older loads hold the trap back via `result_pending`, so the queue holds only retired stores, which keep draining. The 3-cycle check-in lock applies after every trap.
+  - Removed: phantom completions/pass, the precise-mode store gate, `older_error`, bus-error returns, `PRECISE_BUS_FAULTS`.
+  - Depth is now `LANES*(STAGES+3)`, because posted entries outlive their slots. A registered `full` flag stalls the backend when the queue cannot take another group, and a registered `busy` flag means the queue is not empty.
+  - Direct send: a faulting direct load is dropped (`direct_kept` requires `!fault`); its response is absorbed and the entry stays as the marker.
+- **FENCE/FENCE.I drain (`BackendTop`):** a FENCE/FENCE.I at writeback with `lsu_busy` stalls the backend and does not trap until the LSU is empty, so the refetch (shared RAM) and later accesses see every posted store.
+- **Ports removed:** data `response_error` (Crossbar, SystemTop, CoreTop, BackendTop, LSU) and `fetch_error` (Crossbar, SystemTop, CoreTop, FrontendTop, FetchTop, Fetch Queue, where it only gated `fetch_valid`; it was tied 0). `Synthesis/Scripts/common.tcl` constraints were updated. The crossbar still performs no access for misaligned or out-of-range requests, as a safeguard for discarded direct loads.
+
+Correctness invariants:
+- No store younger than a faulting access reaches the bus: the marker locks before anything younger is sent.
+- Retired stores are never dropped: only a memory trap flushes, and its marker passed only after everything older.
+- One queue, in order, so RAM and device ordering are unchanged.
+
+Not covered: `sim/verilator/CoreBench.sv` (older harness, already out of date) still drives `response_error`. Store-to-load ordering is unchanged (single in-order queue).
+
+Validation: none (not compiled, simulated or synthesized).
+
+## 2026-11-26 - Early word forward from the bus response (load-to-use)
+
+Why: slot accounting charged load-use with 12.3% (Dhrystone) and 17.7% (CoreMark) of issue slots. A load's result reached consumers only from the registered memory slot, a cycle after its response arrived.
+
+Change:
+- `LoadStoreUnit` outputs `load_response[lane]`: a load response for that lane is arriving. It equals `returned` without the trap kill and fault markers, and is built from flops only.
+- `MemoryLane`: in that cycle, an aligned word load (rd, not a store) drives `forward_data_out` with the raw `response_data` and raises `forward_ready_out`, one cycle before the slot registers it. Sub-word loads still forward from the slot. No issue-side change is needed: issue already treats a load as ready at its forward slot, and the backend watch/stall waits on `forward_ready`, which now goes high a cycle earlier.
+
+Timing risk: a new path from the BRAM output through the crossbar response mux and the consumer forward mux into the operand registers. `forward_ready` now carries a few gates of flops (response_valid, awaiting count, discard, owner, slot state) into the global stall OR, instead of being a pure flop.
+
+Validation: benchmarks below; not synthesized.
+
+## 2026-11-26 - Return-kind BTB entries: returns steered at fetch from the RAS top
+
+Why: frontend-empty attribution (scratch probe) charged 78% of Dhrystone's empty slots (9.2% of all slots) to taken-branch fixes at commit. A BTB sweep (256 and 1024 entries) left about 16 fixes per run, which is the return count: returns could never be steered, because the BTB was kept out of the JALR path, so each one paid a commit-time fix.
+
+Change:
+- `BTB.sv`: a `return` bit per entry (`update_return` in, `hit_return` out).
+- `Queue.sv`:
+  - With USE_RAS, the only JALR predicted taken is a RAS return, so a window committing with a taken JALR writes a return-kind entry. Indirect JALRs are still never taken at fetch and never write.
+  - `btb_return` is registered with `btb_hit`. `steer_target = btb_return ? ras_top : btb_target` drives the advance branch of `prefetch_pc_next` and `staging_btb_target`.
+- `Fetch/Top.sv`: the RAS `top` (registered top or forwarded pending push) is routed to the Queue as `ras_top`.
+
+Invariants:
+- The RAS remains the only source of return targets; the BTB only marks where a return is.
+- Every steer is still verified in the prediction stage against the real prediction (the RAS read at that time). A stale or empty RAS at steer time costs one fix, the same as before.
+
+Known limit: the steer reads the RAS before the windows still in staging/prediction have applied their pushes and pops, beyond the forwarded push. A return whose window directly follows another call/return window may steer to a stale top and be fixed.
+
+Timing: one more 2:1 select (flop-level inputs) on the advance branch of `prefetch_pc_next` -> `fetch_address`. Not synthesized.
+
+Measured (BTB_ENTRIES 64):
+
+| | Dhrystone DMIPS/MHz | CoreMark /MHz |
+|---|---|---|
+| Before | 1.585 | 2.842 |
+| Return steering | 1.659 (+4.7%) | 2.852 (+0.4%) |
+
+Both pass. Not synthesized.

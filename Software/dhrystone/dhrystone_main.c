@@ -21,6 +21,7 @@
 #define setStats(enable) ((void)0)
 /* Unused part of the UART device window [0x110, RAM_BASE): the Crossbar
    accepts these stores and the UART ignores them. The testbench watches. */
+#define EXIT_RUNS   REG32(0x1F4) /* Number_Of_Runs (for the score) */
 #define EXIT_CYCLES REG32(0x1F8) /* Dhrystone loop cycles (End - Begin mcycle) */
 #define EXIT_STATUS REG32(0x1FC) /* written last: 1 = pass, 2 = fail */
 
@@ -254,6 +255,7 @@ int main (int argc, char** argv)
              Int_1_Loc == 5 && Int_2_Loc == 13 && Int_3_Loc == 7 && Enum_Loc == 1 &&
              strcmp(Str_1_Loc, "DHRYSTONE PROGRAM, 1'ST STRING") == 0 &&
              strcmp(Str_2_Loc, "DHRYSTONE PROGRAM, 2'ND STRING") == 0;
+    EXIT_RUNS = (uint32_t)Number_Of_Runs;
     EXIT_CYCLES = (uint32_t)User_Time;
     EXIT_STATUS = ok ? 1u : 2u;
   }

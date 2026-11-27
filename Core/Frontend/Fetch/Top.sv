@@ -25,7 +25,6 @@ module FetchTop
     output logic [31:0] fetch_address,
     input logic [FETCH_WORDS*32-1:0] fetch_data,
     input logic fetch_valid,
-    input logic fetch_error,
 
     // Redirect Inputs
     input logic [31:0] redirect_pc,
@@ -56,6 +55,9 @@ module FetchTop
     output logic serve_branch_reg [ISSUE_WIDTH-1:0],
     output logic [DerivedParameters::PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
     output logic [DerivedParameters::RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0],
+    output logic [DerivedParameters::RAS_SNAP_W-1:0] serve_snap_reg [ISSUE_WIDTH-1:0],
+    // RAS repair: {enable, pop, snapshot} with the registered branch redirect.
+    input logic [DerivedParameters::RAS_RESTORE_W-1:0] redirect_ras,
 
     // GShare training (registered, fires once per resolved conditional branch).
     // Unused when USE_GSHARE = 0.
@@ -73,6 +75,12 @@ module FetchTop
     Definitions::BranchOutput_ branch_output [FETCH_WORDS*2-1:0]; // to the Queue (after the RAS override)
     Definitions::BranchOutput_ raw_output [FETCH_WORDS*2-1:0];    // direction predictor
     logic ras_commit;
+    DerivedParameters::fetch_pc_t early_lookup_pc [FETCH_WORDS*2-1:0];
+    logic early_lookup_capture, early_partial_capture, early_use_partial;
+    logic ras_stage_transfer, ras_prediction_valid;
+    logic ras_stage_keep [FETCH_WORDS*2-1:0];
+    logic [DerivedParameters::RAS_SNAP_W-1:0] ras_snapshot;
+    DerivedParameters::fetch_pc_t ras_top; // RAS top for return-kind BTB steers
     Definitions::BranchInput_ ras_commit_payload [FETCH_WORDS*2-1:0];
     logic ras_commit_keep [FETCH_WORDS*2-1:0], ras_commit_taken [FETCH_WORDS*2-1:0];
     logic [DerivedParameters::PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0];
@@ -95,6 +103,7 @@ module FetchTop
         .clk(clk),
         .flush(1'b0), // Reserved queue interface; redirects perform the active flush.
         .reset(reset),
+        .ras_top(ras_top),
 
         .redirect_fetch(redirect_fetch),
         .redirect_pc(redirect_pc),
@@ -106,7 +115,6 @@ module FetchTop
 
         .fetch_data(fetch_data),
         .fetch_valid(fetch_valid),
-        .fetch_error(fetch_error),
 
         .serve_data_reg(serve_data_reg),
         .serve_rs1(serve_rs1),
@@ -131,7 +139,11 @@ module FetchTop
         .serve_branch_reg(serve_branch_reg),
         .serve_pht_reg(serve_pht_reg),
         .serve_ras_reg(serve_ras_reg),
+        .serve_snap_reg(serve_snap_reg),
+        .ras_snapshot,
         .ras_commit, .ras_commit_payload, .ras_commit_keep, .ras_commit_taken,
+        .early_lookup_pc, .early_lookup_capture, .early_partial_capture, .early_use_partial,
+        .ras_stage_transfer, .ras_prediction_valid, .ras_stage_keep,
 
         .branch_input(branch_input),
         .branch_output(branch_output),
@@ -150,6 +162,10 @@ module FetchTop
             .branch_input(branch_input),
             .branch_output(raw_output),
             .branch_pht_index(branch_pht_index),
+            .lookup_pc(early_lookup_pc),
+            .lookup_capture(early_lookup_capture),
+            .partial_capture(early_partial_capture),
+            .use_partial(early_use_partial),
             .train_valid(train_valid),
             .train_taken(train_taken),
             .train_age(train_age),
@@ -175,7 +191,7 @@ module FetchTop
         logic slot_jalr [FETCH_WORDS*2-1:0], slot_return [FETCH_WORDS*2-1:0];
         logic top_valid;
         DerivedParameters::fetch_pc_t top;
-        RAS #(.FETCH_SLOTS(FETCH_WORDS*2)) ras (
+        RAS #(.FETCH_SLOTS(FETCH_WORDS*2), .FORWARD_PUSH(Parameters::USE_BTB != 0)) ras (
             .clk(clk),
             .reset(reset),
             .redirect_taken(redirect_taken),
@@ -187,8 +203,14 @@ module FetchTop
             .commit(ras_commit),
             .commit_payload(ras_commit_payload),
             .commit_keep(ras_commit_keep),
-            .commit_taken(ras_commit_taken)
+            .commit_taken(ras_commit_taken),
+            .stage_transfer(ras_stage_transfer),
+            .stage_keep(ras_stage_keep),
+            .prediction_valid(ras_prediction_valid),
+            .snapshot(ras_snapshot),
+            .restore(redirect_ras)
         );
+        assign ras_top = top;
         always_comb begin
             for (int unsigned i = 0; i < FETCH_WORDS*2; i++) begin
                 branch_output[i] = raw_output[i];
@@ -201,6 +223,8 @@ module FetchTop
         end
     end else begin : no_return_stack
         assign branch_output = raw_output;
+        assign ras_snapshot = '0;
+        assign ras_top = '0;
     end
 
 

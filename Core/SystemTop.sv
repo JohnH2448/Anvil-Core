@@ -22,7 +22,7 @@ module SystemTop
     logic [31:0] request_address, request_data;
     logic [3:0] request_mask;
     logic [1:0] request_size;
-    logic response_valid, response_error, response_ready;
+    logic response_valid, response_ready;
     logic [31:0] response_data;
 
     logic interrupt, timer_pending, software_pending;
@@ -30,20 +30,20 @@ module SystemTop
     logic [63:0] mtime;
 
     localparam int unsigned FETCH_WORDS = Parameters::CACHE_LINE_WORDS;
-    logic fetch_request, fetch_valid, fetch_error, ram_fetch_enable;
+    logic fetch_request, fetch_valid, ram_fetch_enable;
     logic [31:0] fetch_address, ram_fetch_address;
     logic [FETCH_WORDS*32-1:0] fetch_data, ram_fetch_data;
 
     CoreTop core (
         .clk, .reset,
-        .fetch_request, .fetch_address, .fetch_data, .fetch_valid, .fetch_error, .interrupt, .interrupt_type, .time_value(mtime),
+        .fetch_request, .fetch_address, .fetch_data, .fetch_valid, .interrupt, .interrupt_type, .time_value(mtime),
         .timer_pending, .software_pending,
         .request_valid, .request_write, .request_address, .request_data,
         .request_mask, .request_size, .request_ready, .response_valid,
-        .response_error, .response_data, .response_ready
+        .response_data, .response_ready
     );
 
-    logic clint_enable, clint_write, ram_data_enable, ram_data_write;
+    logic clint_enable, clint_write, ram_data_claim, ram_data_enable, ram_data_write;
     logic [31:0] clint_address, clint_wdata, clint_rdata, ram_data_address, ram_data_wdata, ram_data_rdata;
     logic [3:0] clint_mask, ram_data_mask;
     logic uart_enable, uart_write;
@@ -54,11 +54,11 @@ module SystemTop
         .clk, .reset,
         .request_valid, .request_write, .request_address, .request_data,
         .request_mask, .request_size, .request_ready, .response_valid,
-        .response_error, .response_data, .response_ready,
-        .fetch_request, .fetch_address, .fetch_data, .fetch_valid, .fetch_error,
+        .response_data, .response_ready,
+        .fetch_request, .fetch_address, .fetch_data, .fetch_valid,
         .clint_enable, .clint_write, .clint_address, .clint_wdata, .clint_mask, .clint_rdata,
         .uart_enable, .uart_write, .uart_address, .uart_wdata, .uart_mask, .uart_rdata,
-        .ram_data_enable, .ram_data_write, .ram_data_address, .ram_data_wdata, .ram_data_mask, .ram_data_rdata,
+        .ram_data_claim, .ram_data_enable, .ram_data_write, .ram_data_address, .ram_data_wdata, .ram_data_mask, .ram_data_rdata,
         .ram_fetch_enable, .ram_fetch_address, .ram_fetch_data
     );
 
@@ -77,7 +77,7 @@ module SystemTop
 
     RAM #(.HEX_FILE(HEX_FILE)) ram (
         .clk,
-        .data_enable(ram_data_enable), .data_write(ram_data_write), .data_address(ram_data_address),
+        .data_claim(ram_data_claim), .data_enable(ram_data_enable), .data_write(ram_data_write), .data_address(ram_data_address),
         .data_wdata(ram_data_wdata), .data_mask(ram_data_mask), .data_rdata(ram_data_rdata),
         .fetch_enable(ram_fetch_enable), .fetch_address(ram_fetch_address), .fetch_data(ram_fetch_data)
     );

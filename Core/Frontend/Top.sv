@@ -21,7 +21,6 @@ module FrontendTop
     output logic [31:0] fetch_address,
     input logic [FETCH_WORDS*32-1:0] fetch_data,
     input logic fetch_valid,
-    input logic fetch_error,
     input logic [31:0] redirect_pc,
     input logic redirect_fetch, // Registered recovery launch; pulses with redirect_taken.
     input logic redirect_taken, // Registered recovery pulse.
@@ -38,6 +37,8 @@ module FrontendTop
     input logic train_taken [BRU_LANE_COUNT-1:0],
     input logic [AGE_WIDTH-1:0] train_age [BRU_LANE_COUNT-1:0],
     input logic [PHT_INDEX_W-1:0] train_pht [BRU_LANE_COUNT-1:0],
+    // RAS repair: {enable, pop, snapshot} with the registered branch redirect.
+    input logic [RAS_RESTORE_W-1:0] redirect_ras,
 
     output DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0],
     output IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0],
@@ -93,6 +94,7 @@ module FrontendTop
     logic serve_taken_reg [ISSUE_WIDTH-1:0];
     logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0];
     logic [RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0];
+    logic [RAS_SNAP_W-1:0] serve_snap_reg [ISSUE_WIDTH-1:0];
     logic serve_branch_reg [ISSUE_WIDTH-1:0];
     logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count;
 
@@ -104,7 +106,7 @@ module FrontendTop
     ) fetch (
         .clk(clk),
         .reset(reset),
-        .fetch_request, .fetch_address, .fetch_data, .fetch_valid, .fetch_error,
+        .fetch_request, .fetch_address, .fetch_data, .fetch_valid,
         .redirect_fetch(redirect_fetch),
         .redirect_pc(redirect_pc),
         .redirect_taken(redirect_taken),
@@ -130,8 +132,9 @@ module FrontendTop
         .serve_taken_reg(serve_taken_reg),
         .serve_pht_reg(serve_pht_reg),
         .serve_ras_reg(serve_ras_reg),
+        .serve_snap_reg(serve_snap_reg),
         .serve_branch_reg(serve_branch_reg),
-        .train_valid, .train_taken, .train_age, .train_pht,
+        .train_valid, .train_taken, .train_age, .train_pht, .redirect_ras,
         .stall(stall),
         .serve_normal_count(serve_normal_count)
     );
@@ -172,6 +175,7 @@ module FrontendTop
         .serve_taken_reg(serve_taken_reg),
         .serve_pht_reg(serve_pht_reg),
         .serve_ras_reg(serve_ras_reg),
+        .serve_snap_reg(serve_snap_reg),
         .serve_branch_reg(serve_branch_reg),
         .serve_normal_count(serve_normal_count),
         .decoder_packet(dispatch_packet),

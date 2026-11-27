@@ -122,7 +122,7 @@ proc anvil_reference_pin {} {
 proc anvil_bus_constraints {clock} {
     set reference [anvil_reference_pin]
     # Read data straight from RAMB36 DO pins, no output register (clk->DO ~1.8 ns).
-    set response_payload [get_ports {response_data[*] response_error}]
+    set response_payload [get_ports {response_data[*]}]
     set_input_delay -clock $clock -reference_pin $reference -max 1.800 $response_payload
     set_input_delay -clock $clock -reference_pin $reference -min 0.600 $response_payload
     # Peer handshake flags come from flops.
@@ -148,8 +148,8 @@ proc anvil_fetch_constraints {clock} {
     set reference [anvil_reference_pin]
     set_input_delay -clock $clock -reference_pin $reference -max 2.000 [get_ports {fetch_data[*]}]
     set_input_delay -clock $clock -reference_pin $reference -min 0.600 [get_ports {fetch_data[*]}]
-    set_input_delay -clock $clock -reference_pin $reference -max 0.400 [get_ports {fetch_valid fetch_error}]
-    set_input_delay -clock $clock -reference_pin $reference -min 0.300 [get_ports {fetch_valid fetch_error}]
+    set_input_delay -clock $clock -reference_pin $reference -max 0.400 [get_ports {fetch_valid}]
+    set_input_delay -clock $clock -reference_pin $reference -min 0.300 [get_ports {fetch_valid}]
     set_output_delay -clock $clock -max 1.000 [get_ports {fetch_address[*] fetch_request}]
     set_output_delay -clock $clock -min 0.000 [get_ports {fetch_address[*] fetch_request}]
 }

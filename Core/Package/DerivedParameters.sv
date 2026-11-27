@@ -104,6 +104,12 @@ package DerivedParameters;
     // value Decode derives from it for the BRU check. One constant bit when off.
     localparam int unsigned RAS_TARGET_W = Parameters::USE_RAS ? FETCH_PC_WIDTH : 1;
     localparam int unsigned RAS_CHECK_W = Parameters::USE_RAS ? 32 : 1;
+    // RAS repair: snapshot = {pointer, count} before a window's RAS update;
+    // restore = {enable, pop, snapshot}, sent back with a branch redirect.
+    localparam bit RAS_REPAIR_ON = Parameters::USE_RAS && Parameters::RAS_REPAIR;
+    localparam int unsigned RAS_PTR_W = $clog2(Parameters::RAS_DEPTH > 1 ? Parameters::RAS_DEPTH : 2);
+    localparam int unsigned RAS_SNAP_W = RAS_REPAIR_ON ? 2 * RAS_PTR_W + 1 : 1;
+    localparam int unsigned RAS_RESTORE_W = RAS_SNAP_W + 2;
     localparam int unsigned TOTAL_INTEGER_STAGES = Parameters::EXECUTION_UNROLL + 2;
     localparam int unsigned UNROLLED_W = $clog2(Parameters::EXECUTION_UNROLL+2) + 1; // extra room bit just in case
 

@@ -66,6 +66,11 @@ module SerialLane
     // retire_older: those of them older than this lane's instruction.
     input logic retire_edge, retire_self,
     input logic [RETIRE_WIDTH-1:0] retire_count, retire_older,
+    // Older group members counted at issue (aligned with the issue packet).
+    // For an instruction that retires, every older valid member retires too,
+    // so the count carried to the final slot equals retire_older there, from
+    // flops (timing: replaces the writeback-time popcount on the CSR path).
+    input logic [RETIRE_WIDTH-1:0] issue_older,
 
     // CLINT mtime, mirrored read-only by the Zicntr time/timeh CSRs.
     input logic [63:0] time_value,
@@ -118,6 +123,7 @@ module SerialLane
     IssuerPacket_ issuer_payload [LAST_EXECUTION_STAGE:0];
     logic valid_payload [LAST_EXECUTION_STAGE:0];
     logic [31:0] operand [LAST_EXECUTION_STAGE:1];
+    logic [RETIRE_WIDTH-1:0] older_pipe [LAST_EXECUTION_STAGE:1]; // issue_older, carried
 
     logic any_redirect, stage_2_flush;
     always_comb begin
@@ -163,6 +169,8 @@ module SerialLane
     always_ff @(posedge clk) begin
         if (!stall) begin
             operand[1] <= decoder_payload[0].common.rs1_valid ? read_data_1 : '0;
+            older_pipe[1] <= issue_older;
+            for (int unsigned i = 2; i <= LAST_EXECUTION_STAGE; i++) older_pipe[i] <= older_pipe[i-1];
             for (int unsigned i = 2; i <= LAST_EXECUTION_STAGE; i++) operand[i] <= operand[i-1];
             for (int unsigned i = 1; i <= LAST_EXECUTION_STAGE; i++) begin
                 decoder_payload[i] <= decoder_payload[i-1];
@@ -171,6 +179,8 @@ module SerialLane
         end
     end
 
+    logic [RETIRE_WIDTH-1:0] carried_older;
+    assign carried_older = older_pipe[LAST_EXECUTION_STAGE];
     // Final slot.
     DecoderPacket_ last;
     assign last = decoder_payload[LAST_EXECUTION_STAGE];
@@ -221,12 +231,33 @@ module SerialLane
     // read-only cycle/cycleh/instret/instreth aliases, mapped by Decode) are
     // the low and high halves.
     logic [63:0] cycle_counter, instret_counter;
+    // Timing: retirements are added one cycle late. retire_q holds the last
+    // edge's count; the architectural minstret is instret_counter + retire_q,
+    // so the counter's own update sees registered inputs only.
+    logic [RETIRE_WIDTH-1:0] retire_q;
+    // Kept separate so synthesis selects after the adder: the late write value
+    // then only passes a mux, instead of entering the increment's carry chain.
+    (* keep = "true" *) logic [63:0] instret_increment;
+    assign instret_increment = instret_counter + 64'(retire_q);
 
     // minstret as seen by this instruction: every older instruction retires
     // before it, including older members of its own group, which retire on
     // the same edge and are not in instret_counter yet.
     logic [63:0] instret_view;
-    assign instret_view = instret_counter + 64'(retire_older);
+    // Carry-select (timing): the upper bits are incremented from flops in
+    // parallel with the small low add that takes the late retire_older; the
+    // low carry only selects. retire_q + retire_older <= 2 * WRITERS, far below
+    // 2**9, so at most one carry leaves the low part.
+    localparam int unsigned VIEW_LOW = 9;
+    logic [VIEW_LOW:0] view_low;
+    logic [63-VIEW_LOW:0] view_high;
+    // keep: stops synthesis re-merging the select into a ripple with the late
+    // low carry as carry-in.
+    (* keep = "true" *) logic [63-VIEW_LOW:0] view_high_plus;
+    assign view_low = {1'b0, instret_counter[VIEW_LOW-1:0]} + (VIEW_LOW+1)'(retire_q) + (VIEW_LOW+1)'(carried_older);
+    assign view_high = instret_counter[63:VIEW_LOW];
+    assign view_high_plus = view_high + 1'b1;
+    assign instret_view = {view_low[VIEW_LOW] ? view_high_plus : view_high, view_low[VIEW_LOW-1:0]};
 
     logic [31:0] csr_read, csr_source, csr_write;
     always_comb begin
@@ -242,8 +273,7 @@ module SerialLane
             MIE_R: csr_read = spread(mie_bits);
             MCYCLE_R: csr_read = cycle_counter[31:0];
             MCYCLEH_R: csr_read = cycle_counter[63:32];
-            MINSTRET_R: csr_read = instret_view[31:0];
-            MINSTRETH_R: csr_read = instret_view[63:32];
+            MINSTRET_R, MINSTRETH_R: csr_read = '0; // selected last (below)
             MSCRATCH_R: csr_read = mscratch_value;
             MEPC_R: csr_read = {mepc_value, 1'b0};
             MCAUSE_R: csr_read = mcause_value;
@@ -254,6 +284,10 @@ module SerialLane
             TIME_R: csr_read = time_value[31:0];
             TIMEH_R: csr_read = time_value[63:32];
         endcase
+        // Timing: minstret is the late input (retire_older), so it is selected
+        // after every other CSR: one LUT level instead of the whole read mux.
+        if (last.csr.index == MINSTRET_R) csr_read = instret_view[31:0];
+        if (last.csr.index == MINSTRETH_R) csr_read = instret_view[63:32];
         csr_source = last.csr.use_immediate ? {27'd0, last.common.immediate[4:0]} : operand[LAST_EXECUTION_STAGE];
         csr_write = 'x;
         unique case (last.csr.operation)
@@ -394,20 +428,26 @@ module SerialLane
         instret_base = instret_view;
         if (writes(MINSTRET_R)) instret_base[31:0] = csr_write;
         if (writes(MINSTRETH_R)) instret_base[63:32] = csr_write;
-        retire_after = retire_count - retire_older - RETIRE_WIDTH'(1);
+        retire_after = retire_count - carried_older - RETIRE_WIDTH'(1);
     end
     always_ff @(posedge clk) begin
         if (reset_active) begin
             cycle_counter <= '0;
             instret_counter <= '0;
+            retire_q <= '0;
         end else begin
             if (writes(MCYCLE_R)) cycle_counter[31:0] <= csr_write;
             else if (writes(MCYCLEH_R)) cycle_counter[63:32] <= csr_write;
             else cycle_counter <= cycle_counter + 64'd1;
-            if (writes(MINSTRET_R) || writes(MINSTRETH_R))
-                instret_counter <= instret_base + 64'(retire_after);
-            else if (retire_edge)
-                instret_counter <= instret_counter + 64'(retire_count);
+            if (writes(MINSTRET_R) || writes(MINSTRETH_R)) begin
+                // The written value (pending older retirements are in the view),
+                // then the younger survivors one cycle late.
+                instret_counter <= instret_base;
+                retire_q <= retire_after;
+            end else begin
+                instret_counter <= instret_increment;
+                retire_q <= retire_edge ? retire_count : '0;
+            end
         end
     end
 

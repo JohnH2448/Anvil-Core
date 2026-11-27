@@ -60,6 +60,7 @@ package Definitions;
         logic predicted_taken;
         logic [DerivedParameters::PHT_INDEX_W-1:0] pht_index; // GShare index (0 when off)
         logic [DerivedParameters::RAS_CHECK_W-1:0] ras_rs1; // RAS: rs1 that makes a predicted return correct (0 when off)
+        logic [DerivedParameters::RAS_SNAP_W-1:0] ras_snap; // RAS repair: window snapshot (0 when off)
         logic is_compressed;
     } DecodeBru_;
 

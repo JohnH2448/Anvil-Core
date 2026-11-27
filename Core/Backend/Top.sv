@@ -39,18 +39,20 @@ module BackendTop
     output logic train_taken [BRU_LANE_COUNT-1:0],
     output logic [AGE_WIDTH-1:0] train_age [BRU_LANE_COUNT-1:0],
     output logic [PHT_INDEX_W-1:0] train_pht [BRU_LANE_COUNT-1:0],
+    // RAS repair: {enable, pop, snapshot} of the selected branch redirect,
+    // from the same registers and selector as redirect_pc. 0 on a trap.
+    output logic [RAS_RESTORE_W-1:0] redirect_ras,
 
-    // One 32-bit bus. Every accepted load or store gets one response. The bus
-    // discovers every memory trap: it must answer a misaligned (address/size),
-    // out-of-range or failed access with response_error. request_address is
-    // the full byte address; request_data/request_mask are lane-shifted
-    // within the aligned word.
+    // One 32-bit bus. Every accepted load or store gets one response, in order,
+    // after any latency. The bus never reports errors: memory traps are
+    // detected in the AGU. request_address is the full byte address;
+    // request_data/request_mask are lane-shifted within the aligned word.
     output logic request_valid, request_write,
     output logic [31:0] request_address, request_data,
     output logic [3:0] request_mask,
     output logic [1:0] request_size, // MemorySize_
     input logic request_ready,
-    input logic response_valid, response_error,
+    input logic response_valid,
     input logic [31:0] response_data,
     output logic response_ready
 );
@@ -61,6 +63,7 @@ module BackendTop
     logic [31:0] bypass_data [N-1:0], target [N-1:0];
     logic iteration_stall [N-1:0], redirect [N-1:0];
     logic [AGE_WIDTH-1:0] redirect_age [N-1:0];
+    logic [RAS_RESTORE_W-1:0] redirect_ras_lane [N-1:0];
     logic redirect_fired [N-1:0];
     // Compact RF ports while keeping forwarding and issue tags in physical lane order.
     function automatic int ports_before(int lane);
@@ -105,7 +108,13 @@ module BackendTop
     logic write_en [ISSUE_WIDTH];
 
     localparam int M = MEMORY_LANE_COUNT > 0 ? MEMORY_LANE_COUNT : 1;
-    logic pending [M], candidate [M], returned [M], store [M];
+    logic pending [M], candidate [M], early_load [M], present [M], returned [M], store [M], fault [M];
+    logic load_response [M]; // early word forward strobe per memory lane
+    logic lsu_full; // registered LSU queue-full flag (posted stores)
+    logic lsu_busy; // registered: LSU still holds entries
+    // FENCE/FENCE.I at writeback waits (stall, no trap) until every posted
+    // store has left the LSU, so the refetch and later accesses see them.
+    wire fence_drain = writer_trap[SERIAL_WRITER] && serial_fence_i && lsu_busy;
     logic return_error, cancel_checkin;
     logic [31:0] return_data;
     logic [AGE_WIDTH-1:0] age [M];
@@ -145,7 +154,7 @@ module BackendTop
                 if (j != i && result_pending[j] && result_age[j] < result_age[i])
                     older_pending = 1'b1;
             end
-            trap |= writer_trap[i] && !older_pending;
+            trap |= writer_trap[i] && !older_pending && !(i == SERIAL_WRITER && fence_drain);
         end
         if (reset) trap = 1'b0;
     end
@@ -157,7 +166,16 @@ module BackendTop
     // does not depend on stall; the edge only qualifies the update.
     logic retire_edge;
     logic retiring [WRITERS];
-    logic [RETIRE_WIDTH-1:0] retire_count, retire_older;
+    logic [RETIRE_WIDTH-1:0] retire_count;
+    logic [RETIRE_WIDTH-1:0] retire_older; // older valid group members of the serial instruction
+    // The same count formed at issue from the registered issue packets
+    // (every non-serial lane is a writer), carried down the serial lane.
+    logic [RETIRE_WIDTH-1:0] issue_older;
+    always_comb begin
+        issue_older = '0;
+        for (int j = 1; j < N; j++)
+            issue_older += RETIRE_WIDTH'(accept_vector[j] && issuer_packet[j].input_age < issuer_packet[0].input_age);
+    end
     always_comb begin
         retire_edge = (!stall || trap) && !reset;
         retire_count = '0;
@@ -166,8 +184,12 @@ module BackendTop
             retiring[i] = result_valid[i] && !killed[i] &&
                 (!writer_trap[i] || (i == SERIAL_WRITER && (serial_mret || serial_fence_i)));
             retire_count += RETIRE_WIDTH'(retiring[i]);
+            // Only used by a serial instruction that itself retires, and then
+            // every older valid group member retires too (an older trap would
+            // have killed it). So validity alone suffices: no trap/kill logic
+            // on the minstret read path.
             if (i != SERIAL_WRITER && result_age[i] < result_age[SERIAL_WRITER])
-                retire_older += RETIRE_WIDTH'(retiring[i]);
+                retire_older += RETIRE_WIDTH'(result_valid[i]);
         end
     end
     // Ages are the original issue slots. Select the payload independently
@@ -208,6 +230,7 @@ module BackendTop
             end
             assign bypass_data[i] = 'x;
             assign redirect[i] = 1'b0;
+            assign redirect_ras_lane[i] = '0;
             assign redirect_age[i] = 'x;
             assign target[i] = 'x;
             assign writer_trap[SERIAL_WRITER] = result_trap[i];
@@ -225,7 +248,7 @@ module BackendTop
                 .result_pc(writer_pc[SERIAL_WRITER]),
                 .redirect_taken(redirect), .redirect_age,
                 .reg_address_1(read_addr[SERIAL_READ]), .read_data_1(read_data[SERIAL_READ]),
-                .retire_edge, .retire_self(retiring[SERIAL_WRITER]), .retire_count, .retire_older,
+                .retire_edge, .retire_self(retiring[SERIAL_WRITER]), .retire_count, .retire_older, .issue_older,
                 .result_valid(result_valid[SERIAL_WRITER]),
                 .result_data(result_data[SERIAL_WRITER]), .result_destination(result_destination[SERIAL_WRITER]),
                 .result_age(result_age[SERIAL_WRITER]), .result_ready(result_ready[SERIAL_WRITER]),
@@ -250,6 +273,7 @@ module BackendTop
                 .redirect_taken(redirect), .redirect_age, .redirect_taken_out(redirect[i]),
                 .redirect_age_out(redirect_age[i]), .redirect_pc_out(target[i]),
                 .train_valid_out(raw_train_valid), .train_taken_out(raw_train_taken), .train_pht_out(raw_train_pht),
+                .redirect_ras_out(redirect_ras_lane[i]),
                 .result_ready(result_ready[PORT]), .result_pending(result_pending[PORT]), .result_valid(result_valid[PORT]),
                 .result_trap(result_trap[i]), .result_trap_type(writer_trap_type[PORT]), .result_pc(writer_pc[PORT]),
                 .result_age(result_age[PORT]),
@@ -276,6 +300,7 @@ module BackendTop
                 end
             end
         end else if (ACTIVE) begin : memory_lane
+            assign redirect_ras_lane[i] = '0; // no BRU
             MemoryLane #(
                 .IS_MEMORY(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][0]), .IS_ATOMIC(0), .IS_FLOAT(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][2]),
                 .EXECUTION_UNROLL(EXECUTION_UNROLL), .ISSUE_WIDTH(ISSUE_WIDTH),
@@ -293,18 +318,23 @@ module BackendTop
                 .result_destination(result_destination[PORT]), .result_data(result_data[PORT]),
                 .reg_address_1(read_addr[2*PORT]), .reg_address_2(read_addr[2*PORT+1]),
                 .read_data_1(read_data[2*PORT]), .read_data_2(read_data[2*PORT+1]),
-                .request_valid(pending[i-MEMORY_BASE]), .request_candidate(candidate[i-MEMORY_BASE]), .request_age(age[i-MEMORY_BASE]),
-                .request_address(address[i-MEMORY_BASE]), .request_data(data[i-MEMORY_BASE]), .request_mask(mask[i-MEMORY_BASE]), .request_size(size[i-MEMORY_BASE]),
+                .request_valid(pending[i-MEMORY_BASE]), .request_candidate(candidate[i-MEMORY_BASE]), .request_early(early_load[i-MEMORY_BASE]), .request_present(present[i-MEMORY_BASE]), .request_age(age[i-MEMORY_BASE]),
+                .request_address(address[i-MEMORY_BASE]), .request_data(data[i-MEMORY_BASE]), .request_mask(mask[i-MEMORY_BASE]), .request_size(size[i-MEMORY_BASE]), .request_fault(fault[i-MEMORY_BASE]),
                 .wb_trap(trap), .cancel_checkin,
                 .request_write(store[i-MEMORY_BASE]),
-                .response_valid(returned[i-MEMORY_BASE]), .response_error(return_error), .response_data(return_data)
+                .response_valid(returned[i-MEMORY_BASE]), .response_error(return_error), .response_data(return_data),
+                .response_early(load_response[i-MEMORY_BASE])
             );
             assign writer_trap[PORT] = result_trap[i];
         end else begin : inactive
+            assign redirect_ras_lane[i] = '0;
             assign iteration_stall[i] = 0;
             if (i >= MEMORY_BASE && i < MEMORY_BASE + MEMORY_LANE_COUNT) begin : no_requests
                 assign pending[i-MEMORY_BASE] = 0;
                 assign candidate[i-MEMORY_BASE] = 0;
+                assign early_load[i-MEMORY_BASE] = 0;
+                assign present[i-MEMORY_BASE] = 0;
+                assign fault[i-MEMORY_BASE] = 0;
             end
             assign result_trap[i] = 0;
             assign redirect[i] = 0;
@@ -333,6 +363,7 @@ module BackendTop
                     stall |= watch[lane][index] && !forward_ready[lane][index];
         // Structural holds: registered busy/pending flops.
         foreach (iteration_stall[i]) stall |= iteration_stall[i];
+        stall |= lsu_full || fence_drain;
     end
 
     // Trap skid buffers: one per writer, at the end of each lane. They absorb
@@ -369,6 +400,7 @@ module BackendTop
     logic redirect_q [N-1:0];
     logic [AGE_WIDTH-1:0] redirect_age_q [N-1:0];
     logic [31:0] redirect_pc_q [N-1:0];
+    logic [RAS_RESTORE_W-1:0] redirect_ras_q [N-1:0];
     logic any_capture;
     always_comb begin
         any_capture = 1'b0;
@@ -381,6 +413,7 @@ module BackendTop
             redirect_fired[i] <= !reset && !trap && stall && (redirect_fired[i] || redirect[i]);
             redirect_age_q[i] <= redirect_age[i];
             redirect_pc_q[i] <= target[i];
+            redirect_ras_q[i] <= redirect_ras_lane[i];
         end
         if (any_capture) redirect_advanced <= !stall;
         redirect_trap <= !reset && trap;
@@ -390,10 +423,12 @@ module BackendTop
         redirect_taken = 1'b0;
         redirect_slot = '1;
         redirect_pc = 'x;
+        redirect_ras = '0;
         foreach (redirect_q[i]) begin
             if (redirect_q[i] && redirect_age_q[i] <= redirect_slot) begin
                 redirect_taken = 1'b1;
                 redirect_pc = redirect_pc_q[i];
+                redirect_ras = redirect_ras_q[i];
                 redirect_slot = redirect_age_q[i];
             end
         end
@@ -401,21 +436,26 @@ module BackendTop
         if (redirect_trap) begin
             redirect_taken = 1'b1;
             redirect_pc = trap_target;
+            redirect_ras = '0; // traps do not restore the RAS
         end
     end
     assign redirect_fetch = redirect_taken;
 
     if (MEMORY_LANE_COUNT > 0) begin : memory_bus
         LoadStoreUnit #(
-            .LANES(MEMORY_LANE_COUNT), .STAGES(EXECUTION_UNROLL), .PRECISE_BUS_FAULTS(PRECISE_BUS_FAULTS)
+            .LANES(MEMORY_LANE_COUNT), .STAGES(EXECUTION_UNROLL),
+            .DIRECT_SEND(LSU_DIRECT_SEND != 0)
         ) lsu (
-            .clk, .reset, .advance(!stall), .trap, .cancel_checkin, .pending, .candidate, .age, .address, .data, .mask, .size, .store,
-            .returned, .return_error, .return_data, .request_valid, .request_ready, .request_address, .request_data,
-            .request_mask, .request_size, .request_write, .response_valid, .response_error, .response_data, .response_ready
+            .clk, .reset, .advance(!stall), .trap, .cancel_checkin, .pending, .candidate, .early_load, .present, .fault, .age, .address, .data, .mask, .size, .store,
+            .returned, .load_response, .return_error, .return_data, .request_valid, .request_ready, .request_address, .request_data,
+            .request_mask, .request_size, .request_write, .response_valid, .response_data, .response_ready,
+            .full(lsu_full), .busy(lsu_busy)
         );
     end else begin : no_memory_bus
         assign request_valid = 0;
         assign response_ready = 0;
+        assign lsu_full = 0;
+        assign lsu_busy = 0;
         assign {request_address, request_data, request_mask, request_size, request_write} = '0;
     end
 endmodule

@@ -6,18 +6,27 @@
 //   above LIMIT              data: error; fetch: reads zero
 //
 // Arbitration for the RAM: data first, then fetch. The RAM is banked, so the
-// fetch loses only when the data access hits a bank the fetch window needs.
+// fetch loses only when a data request claims a bank the fetch window needs.
 // A denied fetch returns fetch_valid = 0 the next cycle and Fetch re-requests
 // the same address.
 //
-// The core requires the bus to discover every memory trap, so misaligned
-// (address/size) and out-of-range data accesses get response_error and
-// perform no access.
+// The bus never reports errors: the core detects every memory trap in the
+// AGU. As a safeguard, misaligned (address/size) and out-of-range data
+// accesses (which only a discarded direct-send load can present) perform no
+// access.
 //
-// Both targets have one-cycle synchronous access, so data responses return in
-// request order. One response register: a new data request is accepted only
-// when it is empty or draining. RAM bank outputs can be overwritten by a
-// later fetch, so the response data is captured on its first cycle and held.
+// Timing structure:
+//   - Fetch arbitration and the RAM bank address select use an early data
+//     "claim" (request valid + bank bits), never the region/fault decode. A
+//     device or faulting request still claims its bank for that cycle, which
+//     only costs a fetch retry.
+//   - The region/fault decode (high address bits, arriving last from the AGU)
+//     drives only the target enables and the registered response flags.
+//   - No response backpressure: every target answers in one cycle, and the
+//     LSU accepts a response whenever one is owed (response_ready is high
+//     whenever anything is outstanding). So request_ready is constant and the
+//     response is the target's output in its single response cycle, with no
+//     hold register. A simulation check guards the assumption.
 module Crossbar
     import Enumerations::*;
 #(
@@ -34,7 +43,7 @@ module Crossbar
     input logic [3:0] request_mask,
     input logic [1:0] request_size, // MemorySize_
     output logic request_ready,
-    output logic response_valid, response_error,
+    output logic response_valid,
     output logic [31:0] response_data,
     input logic response_ready,
 
@@ -43,7 +52,6 @@ module Crossbar
     input logic [31:0] fetch_address,
     output logic [FETCH_WORDS*32-1:0] fetch_data,
     output logic fetch_valid,
-    output logic fetch_error,
 
     // CLINT
     output logic clint_enable, clint_write,
@@ -58,7 +66,7 @@ module Crossbar
     input logic [31:0] uart_rdata,
 
     // RAM
-    output logic ram_data_enable, ram_data_write,
+    output logic ram_data_claim, ram_data_enable, ram_data_write,
     output logic [31:0] ram_data_address, ram_data_wdata,
     output logic [3:0] ram_data_mask,
     input logic [31:0] ram_data_rdata,
@@ -70,13 +78,14 @@ module Crossbar
     localparam int unsigned BANK_W = $clog2(BANKS);
     localparam int unsigned WINDOW = FETCH_WORDS + 1;
 
-    // ------------------------------------------------------------ data decode
     initial begin
         if (UART_BASE + 32'h20 > RAM_BASE) $error("Crossbar: the UART window must end at or below RAM_BASE");
     end
 
+    // ------------------------------------------------------------ data decode
+    // Only aligned accesses proceed, so the word address bounds the access:
+    // an aligned access never crosses its word, and LIMIT ends a word.
     logic misaligned, out_of_range, to_ram, to_clint, to_uart;
-    logic [31:0] last_byte;
     always_comb begin
         misaligned = 1'b1; // Reserved size encoding faults.
         unique case (MemorySize_'(request_size))
@@ -84,44 +93,43 @@ module Crossbar
             MEM_HALF: misaligned = request_address[0];
             MEM_WORD: misaligned = request_address[1:0] != 2'b00;
         endcase
-        // Only used when aligned, so the access never straddles a boundary.
-        last_byte = request_address | 32'(request_size == MEM_WORD ? 3 : request_size == MEM_HALF ? 1 : 0);
-        out_of_range = !DerivedParameters::FULL_ADDRESS_SPACE && last_byte > LIMIT;
-        to_clint = request_address < UART_BASE;
-        to_uart = !to_clint && request_address < RAM_BASE;
+        out_of_range = !DerivedParameters::FULL_ADDRESS_SPACE && request_address[31:2] > LIMIT[31:2];
+        to_clint = request_address[31:2] < UART_BASE[31:2];
+        to_uart = !to_clint && request_address[31:2] < RAM_BASE[31:2];
         to_ram = !to_clint && !to_uart && !out_of_range;
     end
 
-    wire accept = request_valid && request_ready;
     wire fault = misaligned || out_of_range;
+    assign request_ready = 1'b1;
 
-    assign clint_enable = accept && !fault && to_clint;
-    assign uart_enable = accept && !fault && to_uart;
-    assign uart_write = request_write;
-    assign uart_address = request_address - UART_BASE;
-    assign uart_wdata = request_data;
-    assign uart_mask = request_mask;
-    assign ram_data_enable = accept && !fault && to_ram;
+    assign clint_enable = request_valid && !fault && to_clint;
+    assign uart_enable = request_valid && !fault && to_uart;
+    assign ram_data_enable = request_valid && !fault && to_ram;
+    assign ram_data_claim = request_valid;
     assign clint_write = request_write;
+    assign uart_write = request_write;
     assign ram_data_write = request_write;
     assign clint_address = request_address;
+    assign uart_address = request_address - UART_BASE;
     assign ram_data_address = request_address;
     assign clint_wdata = request_data;
+    assign uart_wdata = request_data;
     assign ram_data_wdata = request_data;
     assign clint_mask = request_mask;
+    assign uart_mask = request_mask;
     assign ram_data_mask = request_mask;
 
     // ------------------------------------------------------------ arbitration
-    // Banks are word index mod BANKS; RAM_BASE is BANKS-word aligned, so the
-    // bank is address[BANK_W+1:2]. The fetch window covers WINDOW consecutive
-    // banks starting at the fetch word.
+    // Banks are word index mod BANKS = address[BANK_W+1:2]. The fetch window
+    // covers WINDOW consecutive banks starting at the fetch word. Uses the
+    // early claim only (valid + low address bits).
     logic [BANK_W-1:0] data_bank, fetch_bank, distance;
     logic conflict;
     always_comb begin
         data_bank = request_address[BANK_W+1:2];
         fetch_bank = fetch_address[BANK_W+1:2];
         distance = data_bank - fetch_bank;
-        conflict = ram_data_enable && distance < BANK_W'(WINDOW);
+        conflict = ram_data_claim && distance < BANK_W'(WINDOW);
     end
     assign ram_fetch_enable = fetch_request && !conflict;
     assign ram_fetch_address = fetch_address;
@@ -131,30 +139,26 @@ module Crossbar
         else fetch_valid <= ram_fetch_enable;
     end
     assign fetch_data = ram_fetch_data;
-    assign fetch_error = 1'b0; // Out-of-range fetch words read zero (illegal instruction).
+    // Out-of-range fetch words read zero (illegal instruction).
 
     // ------------------------------------------------------------ data response
-    logic from_ram, from_uart, fresh;
-    logic [31:0] target_data;
-    assign target_data = from_ram ? ram_data_rdata : from_uart ? uart_rdata : clint_rdata;
-    logic [31:0] held_data;
-    assign request_ready = !response_valid || response_ready;
+    // One response cycle per accepted request; the target outputs are valid in
+    // exactly that cycle.
+    logic from_ram, from_uart;
     always_ff @(posedge clk) begin
         if (reset) begin
             response_valid <= 1'b0;
-            fresh <= 1'b0;
         end else begin
-            fresh <= accept;
-            if (accept) begin
-                response_valid <= 1'b1;
-                response_error <= fault;
-                from_ram <= to_ram;
-                from_uart <= to_uart;
-            end else if (response_ready) begin
-                response_valid <= 1'b0;
-            end
+            response_valid <= request_valid;
+            from_ram <= to_ram;
+            from_uart <= to_uart;
         end
-        if (fresh) held_data <= target_data;
     end
-    assign response_data = fresh ? target_data : held_data;
+    assign response_data = from_ram ? ram_data_rdata : from_uart ? uart_rdata : clint_rdata;
+
+    // synthesis translate_off
+    always @(posedge clk)
+        if (!reset && response_valid && !response_ready)
+            $error("Crossbar: response not accepted in its cycle (no hold register)");
+    // synthesis translate_on
 endmodule

@@ -47,6 +47,8 @@ module IntegerLane
     output logic redirect_taken_out,
     output logic [AGE_WIDTH-1:0] redirect_age_out,
     output logic [31:0] redirect_pc_out,
+    // RAS repair: {enable, pop, snapshot} for this redirect (0 when off).
+    output logic [RAS_RESTORE_W-1:0] redirect_ras_out,
 
     // GShare training (raw, unregistered): a valid conditional branch at the
     // resolution stage. BackendTop registers it and fires it once. Age is
@@ -361,6 +363,17 @@ module IntegerLane
             assign redirect_pc_out = decoder_payload[1].bru.predicted_taken ?
                 next_pc : target;
         end
+        // RAS repair mode, from registered packet fields only. A predicted-taken
+        // JALR is a RAS return with a wrong target: restore, then redo its pop.
+        // An unpredicted JALR froze the RAS when it committed, so nothing
+        // wrong-path touched it: no restore. Everything else restores.
+        if (RAS_REPAIR_ON) begin : ras_repair
+            wire jalr = decoder_payload[1].bru.operation == BR_JALR;
+            assign redirect_ras_out = {!jalr || decoder_payload[1].bru.predicted_taken,
+                jalr, decoder_payload[1].bru.ras_snap};
+        end else begin : no_ras_repair
+            assign redirect_ras_out = '0;
+        end
         // Only conditional branches train (JAL/JALR use no PHT entry).
         if (Parameters::USE_GSHARE) begin : gen_train
             assign train_valid_out = condition &&
@@ -378,6 +391,7 @@ module IntegerLane
         assign redirect_taken_out = 1'b0;
         assign redirect_age_out = 'x;
         assign redirect_pc_out = 'x;
+        assign redirect_ras_out = '0;
         assign train_valid_out = 1'b0;
         assign train_taken_out = 1'b0;
         assign train_pht_out = '0;

@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
-| Date         : Tue Nov 24 21:18:56 2026
+| Date         : Thu Nov 26 23:16:10 2026
 | Host         : JohnsComputer running 64-bit major release  (build 9200)
 | Command      : report_timing -delay_type min -max_paths 20 -path_type full_clock_expanded -file C:/Users/johnc/Downloads/Anvil-Core/Synthesis/Reports/cpu/worst_hold.rpt
 | Design       : CoreTop
@@ -12,8 +12,8 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (VIOLATED) :        -0.488ns  (arrival time - required time)
-  Source:                 interrupt_type[0]
+Slack (VIOLATED) :        -0.453ns  (arrival time - required time)
+  Source:                 interrupt
                             (input port clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Destination:            backend/lanes[0].serial_lane.lane/external_pending_reg/D
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
@@ -21,10 +21,10 @@ Slack (VIOLATED) :        -0.488ns  (arrival time - required time)
   Path Type:              Hold (Min at Slow Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
   Data Path Delay:        0.747ns  (logic 0.078ns (10.445%)  route 0.669ns (89.555%))
-  Logic Levels:           1  (LUT5=1)
+  Logic Levels:           1  (LUT6=1)
   Input Delay:            0.400ns
-  Clock Path Skew:        1.355ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    1.355ns
+  Clock Path Skew:        1.369ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    1.369ns
     Source Clock Delay      (SCD):    0.000ns
     Clock Pessimism Removal (CPR):    -0.000ns
   Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
@@ -37,110 +37,30 @@ Slack (VIOLATED) :        -0.488ns  (arrival time - required time)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                          input delay                  0.400     0.400    
-                                                      0.000     0.400 f  interrupt_type[0] (IN)
-                         net (fo=0)                   0.669     1.069    backend/lanes[0].serial_lane.lane/interrupt_type[0]
-    SLICE_X60Y32         LUT5 (Prop_lut5_I2_O)        0.078     1.147 r  backend/lanes[0].serial_lane.lane/external_pending_i_1/O
-                         net (fo=1, routed)           0.000     1.147    backend/lanes[0].serial_lane.lane/external_pending_i_1_n_0
-    SLICE_X60Y32         FDRE                                         r  backend/lanes[0].serial_lane.lane/external_pending_reg/D
+                                                      0.000     0.400 r  interrupt (IN)
+                         net (fo=0)                   0.669     1.069    backend/lanes[0].serial_lane.lane/interrupt
+    SLICE_X53Y156        LUT6 (Prop_lut6_I4_O)        0.078     1.147 r  backend/lanes[0].serial_lane.lane/external_pending_i_1/O
+                         net (fo=1, routed)           0.000     1.147    backend/lanes[0].serial_lane.lane/external_pending0
+    SLICE_X53Y156        FDRE                                         r  backend/lanes[0].serial_lane.lane/external_pending_reg/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         1.355     1.355    backend/lanes[0].serial_lane.lane/clk
-    SLICE_X60Y32         FDRE                                         r  backend/lanes[0].serial_lane.lane/external_pending_reg/C
-                         clock pessimism              0.000     1.355    
-                         clock uncertainty            0.035     1.390    
-    SLICE_X60Y32         FDRE (Hold_fdre_C_D)         0.244     1.634    backend/lanes[0].serial_lane.lane/external_pending_reg
+                         net (fo=7901, unset)         1.369     1.369    backend/lanes[0].serial_lane.lane/clk
+    SLICE_X53Y156        FDRE                                         r  backend/lanes[0].serial_lane.lane/external_pending_reg/C
+                         clock pessimism              0.000     1.369    
+                         clock uncertainty            0.035     1.404    
+    SLICE_X53Y156        FDRE (Hold_fdre_C_D)         0.195     1.599    backend/lanes[0].serial_lane.lane/external_pending_reg
   -------------------------------------------------------------------
-                         required time                         -1.634    
+                         required time                         -1.599    
                          arrival time                           1.147    
   -------------------------------------------------------------------
-                         slack                                 -0.488    
+                         slack                                 -0.453    
 
-Slack (MET) :             0.065ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[4]/C
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][4]_srl2/D
-                            (rising edge-triggered cell SRL16E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Path Group:             cpu_clk
-  Path Type:              Hold (Min at Fast Process Corner)
-  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.196ns  (logic 0.141ns (71.991%)  route 0.055ns (28.009%))
-  Logic Levels:           0  
-  Clock Path Skew:        0.014ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.828ns
-    Source Clock Delay      (SCD):    0.559ns
-    Clock Pessimism Removal (CPR):    0.255ns
-
-    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
-  -------------------------------------------------------------------    -------------------
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.559     0.559    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X47Y82         FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[4]/C
-  -------------------------------------------------------------------    -------------------
-    SLICE_X47Y82         FDRE (Prop_fdre_C_Q)         0.141     0.700 r  backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[4]/Q
-                         net (fo=1, routed)           0.055     0.755    backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg_n_0_[4]
-    SLICE_X46Y82         SRL16E                                       r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][4]_srl2/D
-  -------------------------------------------------------------------    -------------------
-
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.828     0.828    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X46Y82         SRL16E                                       r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][4]_srl2/CLK
-                         clock pessimism             -0.255     0.573    
-    SLICE_X46Y82         SRL16E (Hold_srl16e_CLK_D)
-                                                      0.117     0.690    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][4]_srl2
-  -------------------------------------------------------------------
-                         required time                         -0.690    
-                         arrival time                           0.755    
-  -------------------------------------------------------------------
-                         slack                                  0.065    
-
-Slack (MET) :             0.065ns  (arrival time - required time)
-  Source:                 backend/lanes[3].memory_lane.lane/decoder_payload_reg[1][common][rd][4]/C
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[3].memory_lane.lane/execution[2].slots_reg[2][rd][4]_srl2/D
-                            (rising edge-triggered cell SRL16E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Path Group:             cpu_clk
-  Path Type:              Hold (Min at Fast Process Corner)
-  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.196ns  (logic 0.141ns (71.991%)  route 0.055ns (28.009%))
-  Logic Levels:           0  
-  Clock Path Skew:        0.014ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.901ns
-    Source Clock Delay      (SCD):    0.628ns
-    Clock Pessimism Removal (CPR):    0.259ns
-
-    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
-  -------------------------------------------------------------------    -------------------
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.628     0.628    backend/lanes[3].memory_lane.lane/clk
-    SLICE_X71Y32         FDRE                                         r  backend/lanes[3].memory_lane.lane/decoder_payload_reg[1][common][rd][4]/C
-  -------------------------------------------------------------------    -------------------
-    SLICE_X71Y32         FDRE (Prop_fdre_C_Q)         0.141     0.769 r  backend/lanes[3].memory_lane.lane/decoder_payload_reg[1][common][rd][4]/Q
-                         net (fo=1, routed)           0.055     0.824    backend/lanes[3].memory_lane.lane/decoder_payload_reg[1][common][rd][4]
-    SLICE_X70Y32         SRL16E                                       r  backend/lanes[3].memory_lane.lane/execution[2].slots_reg[2][rd][4]_srl2/D
-  -------------------------------------------------------------------    -------------------
-
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.901     0.901    backend/lanes[3].memory_lane.lane/clk
-    SLICE_X70Y32         SRL16E                                       r  backend/lanes[3].memory_lane.lane/execution[2].slots_reg[2][rd][4]_srl2/CLK
-                         clock pessimism             -0.259     0.642    
-    SLICE_X70Y32         SRL16E (Hold_srl16e_CLK_D)
-                                                      0.117     0.759    backend/lanes[3].memory_lane.lane/execution[2].slots_reg[2][rd][4]_srl2
-  -------------------------------------------------------------------
-                         required time                         -0.759    
-                         arrival time                           0.824    
-  -------------------------------------------------------------------
-                         slack                                  0.065    
-
-Slack (MET) :             0.073ns  (arrival time - required time)
+Slack (MET) :             0.069ns  (arrival time - required time)
   Source:                 reset
                             (input port clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            frontend/dispatch/issuer/op_lane_reg[1][1]/D
+  Destination:            backend/memory_bus.lsu/tail_reg[0]/D
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Slow Process Corner)
@@ -148,8 +68,8 @@ Slack (MET) :             0.073ns  (arrival time - required time)
   Data Path Delay:        0.747ns  (logic 0.078ns (10.445%)  route 0.669ns (89.555%))
   Logic Levels:           1  (LUT6=1)
   Input Delay:            1.000ns
-  Clock Path Skew:        1.392ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    1.392ns
+  Clock Path Skew:        1.398ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    1.398ns
     Source Clock Delay      (SCD):    0.000ns
     Clock Pessimism Removal (CPR):    -0.000ns
   Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
@@ -163,110 +83,183 @@ Slack (MET) :             0.073ns  (arrival time - required time)
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                          input delay                  1.000     1.000    
                                                       0.000     1.000 r  reset (IN)
-                         net (fo=69, unset)           0.669     1.669    frontend/dispatch/decode_stage/reset
-    SLICE_X74Y22         LUT6 (Prop_lut6_I2_O)        0.078     1.747 r  frontend/dispatch/decode_stage/op_lane[1][1]_i_1/O
-                         net (fo=1, routed)           0.000     1.747    frontend/dispatch/issuer/op_lane_reg[1][1]_1
-    SLICE_X74Y22         FDRE                                         r  frontend/dispatch/issuer/op_lane_reg[1][1]/D
+                         net (fo=73, unset)           0.669     1.669    backend/memory_bus.lsu/reset
+    SLICE_X74Y174        LUT6 (Prop_lut6_I1_O)        0.078     1.747 r  backend/memory_bus.lsu/tail[0]_i_1/O
+                         net (fo=1, routed)           0.000     1.747    backend/memory_bus.lsu/tail[0]_i_1_n_0
+    SLICE_X74Y174        FDRE                                         r  backend/memory_bus.lsu/tail_reg[0]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         1.392     1.392    frontend/dispatch/issuer/clk
-    SLICE_X74Y22         FDRE                                         r  frontend/dispatch/issuer/op_lane_reg[1][1]/C
-                         clock pessimism              0.000     1.392    
-                         clock uncertainty            0.035     1.427    
-    SLICE_X74Y22         FDRE (Hold_fdre_C_D)         0.246     1.673    frontend/dispatch/issuer/op_lane_reg[1][1]
+                         net (fo=7901, unset)         1.398     1.398    backend/memory_bus.lsu/clk
+    SLICE_X74Y174        FDRE                                         r  backend/memory_bus.lsu/tail_reg[0]/C
+                         clock pessimism              0.000     1.398    
+                         clock uncertainty            0.035     1.433    
+    SLICE_X74Y174        FDRE (Hold_fdre_C_D)         0.244     1.677    backend/memory_bus.lsu/tail_reg[0]
   -------------------------------------------------------------------
-                         required time                         -1.673    
+                         required time                         -1.677    
                          arrival time                           1.747    
   -------------------------------------------------------------------
-                         slack                                  0.073    
+                         slack                                  0.069    
 
-Slack (MET) :             0.075ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][13]/C
+Slack (MET) :             0.088ns  (arrival time - required time)
+  Source:                 frontend/fetch/queue/prediction_pc_reg[14]/C
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][13]/D
+  Destination:            frontend/fetch/queue/btb_table.btb/key_reg_0_63_14_14/SP/I
+                            (rising edge-triggered cell RAMD64E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             cpu_clk
+  Path Type:              Hold (Min at Fast Process Corner)
+  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
+  Data Path Delay:        0.250ns  (logic 0.141ns (56.321%)  route 0.109ns (43.679%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.016ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.828ns
+    Source Clock Delay      (SCD):    0.558ns
+    Clock Pessimism Removal (CPR):    0.254ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.558     0.558    frontend/fetch/queue/clk
+    SLICE_X57Y143        FDRE                                         r  frontend/fetch/queue/prediction_pc_reg[14]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X57Y143        FDRE (Prop_fdre_C_Q)         0.141     0.699 r  frontend/fetch/queue/prediction_pc_reg[14]/Q
+                         net (fo=3, routed)           0.109     0.808    frontend/fetch/queue/btb_table.btb/key_reg_0_63_14_14/D
+    SLICE_X56Y144        RAMD64E                                      r  frontend/fetch/queue/btb_table.btb/key_reg_0_63_14_14/SP/I
+  -------------------------------------------------------------------    -------------------
+
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.828     0.828    frontend/fetch/queue/btb_table.btb/key_reg_0_63_14_14/WCLK
+    SLICE_X56Y144        RAMD64E                                      r  frontend/fetch/queue/btb_table.btb/key_reg_0_63_14_14/SP/CLK
+                         clock pessimism             -0.254     0.574    
+    SLICE_X56Y144        RAMD64E (Hold_ramd64e_CLK_I)
+                                                      0.146     0.720    frontend/fetch/queue/btb_table.btb/key_reg_0_63_14_14/SP
+  -------------------------------------------------------------------
+                         required time                         -0.720    
+                         arrival time                           0.808    
+  -------------------------------------------------------------------
+                         slack                                  0.088    
+
+Slack (MET) :             0.093ns  (arrival time - required time)
+  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.multiple_reg[1][2][8]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[1].registered_stage.multiple_reg[2][2][8]/D
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.348ns  (logic 0.148ns (42.491%)  route 0.200ns (57.509%))
+  Data Path Delay:        0.430ns  (logic 0.164ns (38.130%)  route 0.266ns (61.870%))
   Logic Levels:           0  
   Clock Path Skew:        0.267ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.829ns
-    Source Clock Delay      (SCD):    0.557ns
-    Clock Pessimism Removal (CPR):    0.005ns
+    Destination Clock Delay (DCD):    0.914ns
+    Source Clock Delay      (SCD):    0.638ns
+    Clock Pessimism Removal (CPR):    0.009ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.557     0.557    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X54Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][13]/C
+                         net (fo=7901, unset)         0.638     0.638    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X46Y186        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.multiple_reg[1][2][8]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X54Y103        FDRE (Prop_fdre_C_Q)         0.148     0.705 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][13]/Q
-                         net (fo=2, routed)           0.200     0.905    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3]_109[13]
-    SLICE_X50Y102        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][13]/D
+    SLICE_X46Y186        FDRE (Prop_fdre_C_Q)         0.164     0.802 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.multiple_reg[1][2][8]/Q
+                         net (fo=2, routed)           0.266     1.068    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.multiple_reg[1][2]_142[8]
+    SLICE_X57Y191        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[1].registered_stage.multiple_reg[2][2][8]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.829     0.829    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X50Y102        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][13]/C
-                         clock pessimism             -0.005     0.824    
-    SLICE_X50Y102        FDRE (Hold_fdre_C_D)         0.006     0.830    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][13]
+                         net (fo=7901, unset)         0.914     0.914    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X57Y191        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[1].registered_stage.multiple_reg[2][2][8]/C
+                         clock pessimism             -0.009     0.905    
+    SLICE_X57Y191        FDRE (Hold_fdre_C_D)         0.070     0.975    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[1].registered_stage.multiple_reg[2][2][8]
   -------------------------------------------------------------------
-                         required time                         -0.830    
-                         arrival time                           0.905    
+                         required time                         -0.975    
+                         arrival time                           1.068    
   -------------------------------------------------------------------
-                         slack                                  0.075    
+                         slack                                  0.093    
 
-Slack (MET) :             0.095ns  (arrival time - required time)
-  Source:                 software_pending
-                            (input port clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]/D
+Slack (MET) :             0.101ns  (arrival time - required time)
+  Source:                 backend/lanes[0].serial_lane.lane/operand_reg[1][12]/C
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[0].serial_lane.lane/operand_reg[3][12]_srl2/D
+                            (rising edge-triggered cell SRL16E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
-  Path Type:              Hold (Min at Slow Process Corner)
+  Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        1.278ns  (logic 0.156ns (12.208%)  route 1.122ns (87.792%))
-  Logic Levels:           2  (LUT5=1 LUT6=1)
-  Input Delay:            0.400ns
-  Clock Path Skew:        1.350ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    1.350ns
-    Source Clock Delay      (SCD):    0.000ns
-    Clock Pessimism Removal (CPR):    -0.000ns
-  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
-    Total System Jitter     (TSJ):    0.071ns
-    Total Input Jitter      (TIJ):    0.000ns
-    Discrete Jitter          (DJ):    0.000ns
-    Phase Error              (PE):    0.000ns
+  Data Path Delay:        0.255ns  (logic 0.141ns (55.362%)  route 0.114ns (44.638%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.037ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.913ns
+    Source Clock Delay      (SCD):    0.638ns
+    Clock Pessimism Removal (CPR):    0.238ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
-                         input delay                  0.400     0.400    
-                                                      0.000     0.400 r  software_pending (IN)
-                         net (fo=3, unset)            0.669     1.069    backend/lanes[0].serial_lane.lane/software_pending
-    SLICE_X62Y32         LUT6 (Prop_lut6_I4_O)        0.078     1.147 r  backend/lanes[0].serial_lane.lane/fifo_slots[0].packets_out[0][common][trap_type][3]_i_2/O
-                         net (fo=9, routed)           0.453     1.600    frontend/dispatch/decode_stage/interrupt_request[3]
-    SLICE_X63Y25         LUT5 (Prop_lut5_I2_O)        0.078     1.678 r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out[0][common][trap_type][3]_i_1/O
-                         net (fo=1, routed)           0.000     1.678    frontend/dispatch/decode_stage/fifo_slots[0].selected_packet[packet][common][trap_type][3]
-    SLICE_X63Y25         FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]/D
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.638     0.638    backend/lanes[0].serial_lane.lane/clk
+    SLICE_X53Y161        FDRE                                         r  backend/lanes[0].serial_lane.lane/operand_reg[1][12]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X53Y161        FDRE (Prop_fdre_C_Q)         0.141     0.779 r  backend/lanes[0].serial_lane.lane/operand_reg[1][12]/Q
+                         net (fo=1, routed)           0.114     0.893    backend/lanes[0].serial_lane.lane/operand_reg[1]_81[12]
+    SLICE_X56Y161        SRL16E                                       r  backend/lanes[0].serial_lane.lane/operand_reg[3][12]_srl2/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         1.350     1.350    frontend/dispatch/decode_stage/clk
-    SLICE_X63Y25         FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]/C
-                         clock pessimism              0.000     1.350    
-                         clock uncertainty            0.035     1.385    
-    SLICE_X63Y25         FDRE (Hold_fdre_C_D)         0.198     1.583    frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]
+                         net (fo=7901, unset)         0.913     0.913    backend/lanes[0].serial_lane.lane/clk
+    SLICE_X56Y161        SRL16E                                       r  backend/lanes[0].serial_lane.lane/operand_reg[3][12]_srl2/CLK
+                         clock pessimism             -0.238     0.675    
+    SLICE_X56Y161        SRL16E (Hold_srl16e_CLK_D)
+                                                      0.117     0.792    backend/lanes[0].serial_lane.lane/operand_reg[3][12]_srl2
   -------------------------------------------------------------------
-                         required time                         -1.583    
-                         arrival time                           1.678    
+                         required time                         -0.792    
+                         arrival time                           0.893    
   -------------------------------------------------------------------
-                         slack                                  0.095    
+                         slack                                  0.101    
+
+Slack (MET) :             0.103ns  (arrival time - required time)
+  Source:                 backend/lanes[0].serial_lane.lane/operand_reg[1][13]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[0].serial_lane.lane/operand_reg[3][13]_srl2/D
+                            (rising edge-triggered cell SRL16E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             cpu_clk
+  Path Type:              Hold (Min at Fast Process Corner)
+  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
+  Data Path Delay:        0.255ns  (logic 0.141ns (55.362%)  route 0.114ns (44.638%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.037ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.913ns
+    Source Clock Delay      (SCD):    0.638ns
+    Clock Pessimism Removal (CPR):    0.238ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.638     0.638    backend/lanes[0].serial_lane.lane/clk
+    SLICE_X53Y161        FDRE                                         r  backend/lanes[0].serial_lane.lane/operand_reg[1][13]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X53Y161        FDRE (Prop_fdre_C_Q)         0.141     0.779 r  backend/lanes[0].serial_lane.lane/operand_reg[1][13]/Q
+                         net (fo=1, routed)           0.114     0.893    backend/lanes[0].serial_lane.lane/operand_reg[1]_81[13]
+    SLICE_X56Y161        SRL16E                                       r  backend/lanes[0].serial_lane.lane/operand_reg[3][13]_srl2/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.913     0.913    backend/lanes[0].serial_lane.lane/clk
+    SLICE_X56Y161        SRL16E                                       r  backend/lanes[0].serial_lane.lane/operand_reg[3][13]_srl2/CLK
+                         clock pessimism             -0.238     0.675    
+    SLICE_X56Y161        SRL16E (Hold_srl16e_CLK_D)
+                                                      0.115     0.790    backend/lanes[0].serial_lane.lane/operand_reg[3][13]_srl2
+  -------------------------------------------------------------------
+                         required time                         -0.790    
+                         arrival time                           0.893    
+  -------------------------------------------------------------------
+                         slack                                  0.103    
 
 Slack (MET) :             0.105ns  (arrival time - required time)
   Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][18]/C
@@ -279,86 +272,47 @@ Slack (MET) :             0.105ns  (arrival time - required time)
   Data Path Delay:        0.196ns  (logic 0.141ns (71.991%)  route 0.055ns (28.009%))
   Logic Levels:           0  
   Clock Path Skew:        0.016ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.828ns
-    Source Clock Delay      (SCD):    0.558ns
-    Clock Pessimism Removal (CPR):    0.254ns
+    Destination Clock Delay (DCD):    0.941ns
+    Source Clock Delay      (SCD):    0.665ns
+    Clock Pessimism Removal (CPR):    0.260ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.558     0.558    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X51Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][18]/C
+                         net (fo=7901, unset)         0.665     0.665    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X73Y198        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][18]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X51Y103        FDRE (Prop_fdre_C_Q)         0.141     0.699 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][18]/Q
-                         net (fo=2, routed)           0.055     0.754    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2]_126[18]
-    SLICE_X51Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][18]/D
+    SLICE_X73Y198        FDRE (Prop_fdre_C_Q)         0.141     0.806 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][18]/Q
+                         net (fo=2, routed)           0.055     0.861    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2]_145[18]
+    SLICE_X73Y198        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][18]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.828     0.828    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X51Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][18]/C
-                         clock pessimism             -0.254     0.574    
-    SLICE_X51Y103        FDRE (Hold_fdre_C_D)         0.075     0.649    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][18]
+                         net (fo=7901, unset)         0.941     0.941    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X73Y198        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][18]/C
+                         clock pessimism             -0.260     0.681    
+    SLICE_X73Y198        FDRE (Hold_fdre_C_D)         0.075     0.756    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][18]
   -------------------------------------------------------------------
-                         required time                         -0.649    
-                         arrival time                           0.754    
+                         required time                         -0.756    
+                         arrival time                           0.861    
   -------------------------------------------------------------------
                          slack                                  0.105    
 
 Slack (MET) :             0.105ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][16]/C
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][16]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Path Group:             cpu_clk
-  Path Type:              Hold (Min at Fast Process Corner)
-  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.196ns  (logic 0.141ns (71.991%)  route 0.055ns (28.009%))
-  Logic Levels:           0  
-  Clock Path Skew:        0.016ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.831ns
-    Source Clock Delay      (SCD):    0.561ns
-    Clock Pessimism Removal (CPR):    0.254ns
-
-    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
-  -------------------------------------------------------------------    -------------------
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.561     0.561    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X45Y105        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][16]/C
-  -------------------------------------------------------------------    -------------------
-    SLICE_X45Y105        FDRE (Prop_fdre_C_Q)         0.141     0.702 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][16]/Q
-                         net (fo=2, routed)           0.055     0.757    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3]_110[16]
-    SLICE_X45Y105        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][16]/D
-  -------------------------------------------------------------------    -------------------
-
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.831     0.831    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X45Y105        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][16]/C
-                         clock pessimism             -0.254     0.577    
-    SLICE_X45Y105        FDRE (Hold_fdre_C_D)         0.075     0.652    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][16]
-  -------------------------------------------------------------------
-                         required time                         -0.652    
-                         arrival time                           0.757    
-  -------------------------------------------------------------------
-                         slack                                  0.105    
-
-Slack (MET) :             0.105ns  (arrival time - required time)
-  Source:                 reset
+  Source:                 timer_pending
                             (input port clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            frontend/fetch/queue/prefetch_pc_reg[14]/D
+  Destination:            frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]/D
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Slow Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.747ns  (logic 0.078ns (10.445%)  route 0.669ns (89.555%))
-  Logic Levels:           1  (LUT5=1)
-  Input Delay:            1.000ns
-  Clock Path Skew:        1.360ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    1.360ns
+  Data Path Delay:        1.315ns  (logic 0.156ns (11.860%)  route 1.159ns (88.140%))
+  Logic Levels:           2  (LUT5=1 LUT6=1)
+  Input Delay:            0.400ns
+  Clock Path Skew:        1.378ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    1.378ns
     Source Clock Delay      (SCD):    0.000ns
     Clock Pessimism Removal (CPR):    -0.000ns
   Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
@@ -370,192 +324,105 @@ Slack (MET) :             0.105ns  (arrival time - required time)
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
-                         input delay                  1.000     1.000    
-                                                      0.000     1.000 f  reset (IN)
-                         net (fo=69, unset)           0.669     1.669    frontend/fetch/queue/reset
-    SLICE_X30Y28         LUT5 (Prop_lut5_I3_O)        0.078     1.747 r  frontend/fetch/queue/fetch_address[14]_INST_0/O
-                         net (fo=1, routed)           0.000     1.747    frontend/fetch/queue/fetch_address[14]
-    SLICE_X30Y28         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[14]/D
+                         input delay                  0.400     0.400    
+                                                      0.000     0.400 r  timer_pending (IN)
+                         net (fo=2, unset)            0.669     1.069    backend/lanes[0].serial_lane.lane/timer_pending
+    SLICE_X52Y156        LUT6 (Prop_lut6_I3_O)        0.078     1.147 r  backend/lanes[0].serial_lane.lane/fifo_slots[1].packets_out[1][common][trap_type][3]_i_2/O
+                         net (fo=9, routed)           0.490     1.637    frontend/dispatch/decode_stage/interrupt_request[3]
+    SLICE_X44Y156        LUT5 (Prop_lut5_I2_O)        0.078     1.715 r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out[0][common][trap_type][3]_i_1/O
+                         net (fo=1, routed)           0.000     1.715    frontend/dispatch/decode_stage/fifo_slots[0].selected_packet[packet][common][trap_type][3]
+    SLICE_X44Y156        FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         1.360     1.360    frontend/fetch/queue/clk
-    SLICE_X30Y28         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[14]/C
-                         clock pessimism              0.000     1.360    
-                         clock uncertainty            0.035     1.395    
-    SLICE_X30Y28         FDRE (Hold_fdre_C_D)         0.246     1.641    frontend/fetch/queue/prefetch_pc_reg[14]
+                         net (fo=7901, unset)         1.378     1.378    frontend/dispatch/decode_stage/clk
+    SLICE_X44Y156        FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]/C
+                         clock pessimism              0.000     1.378    
+                         clock uncertainty            0.035     1.413    
+    SLICE_X44Y156        FDRE (Hold_fdre_C_D)         0.197     1.610    frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][common][trap_type][3]
   -------------------------------------------------------------------
-                         required time                         -1.641    
-                         arrival time                           1.747    
+                         required time                         -1.610    
+                         arrival time                           1.715    
   -------------------------------------------------------------------
                          slack                                  0.105    
 
-Slack (MET) :             0.106ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][11]/C
+Slack (MET) :             0.108ns  (arrival time - required time)
+  Source:                 backend/lanes[0].serial_lane.lane/operand_reg[1][31]/C
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][11]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[0].serial_lane.lane/operand_reg[3][31]_srl2/D
+                            (rising edge-triggered cell SRL16E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.443ns  (logic 0.141ns (31.854%)  route 0.302ns (68.146%))
+  Data Path Delay:        0.309ns  (logic 0.141ns (45.664%)  route 0.168ns (54.336%))
   Logic Levels:           0  
-  Clock Path Skew:        0.277ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.837ns
-    Source Clock Delay      (SCD):    0.560ns
-    Clock Pessimism Removal (CPR):    -0.000ns
-
-    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
-  -------------------------------------------------------------------    -------------------
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.560     0.560    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X49Y100        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][11]/C
-  -------------------------------------------------------------------    -------------------
-    SLICE_X49Y100        FDRE (Prop_fdre_C_Q)         0.141     0.701 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][11]/Q
-                         net (fo=2, routed)           0.302     1.003    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3]_110[11]
-    SLICE_X49Y99         FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][11]/D
-  -------------------------------------------------------------------    -------------------
-
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.837     0.837    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X49Y99         FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][11]/C
-                         clock pessimism              0.000     0.837    
-    SLICE_X49Y99         FDRE (Hold_fdre_C_D)         0.060     0.897    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[6].registered_stage.multiple_reg[7][3][11]
-  -------------------------------------------------------------------
-                         required time                         -0.897    
-                         arrival time                           1.003    
-  -------------------------------------------------------------------
-                         slack                                  0.106    
-
-Slack (MET) :             0.107ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/decoder_payload_reg[2][common][capability][3]/C
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/decoder_payload_reg[3][common][capability][3]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Path Group:             cpu_clk
-  Path Type:              Hold (Min at Fast Process Corner)
-  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.196ns  (logic 0.141ns (71.991%)  route 0.055ns (28.009%))
-  Logic Levels:           0  
-  Clock Path Skew:        0.014ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.902ns
-    Source Clock Delay      (SCD):    0.630ns
+  Clock Path Skew:        0.018ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.912ns
+    Source Clock Delay      (SCD):    0.636ns
     Clock Pessimism Removal (CPR):    0.258ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.630     0.630    backend/lanes[1].integer_lane.lane/clk
-    SLICE_X63Y34         FDRE                                         r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[2][common][capability][3]/C
+                         net (fo=7901, unset)         0.636     0.636    backend/lanes[0].serial_lane.lane/clk
+    SLICE_X55Y164        FDRE                                         r  backend/lanes[0].serial_lane.lane/operand_reg[1][31]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X63Y34         FDRE (Prop_fdre_C_Q)         0.141     0.771 r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[2][common][capability][3]/Q
-                         net (fo=1, routed)           0.055     0.826    backend/lanes[1].integer_lane.lane/decoder_payload_reg[2][common][capability][3]
-    SLICE_X63Y34         FDRE                                         r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[3][common][capability][3]/D
-  -------------------------------------------------------------------    -------------------
-
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.902     0.902    backend/lanes[1].integer_lane.lane/clk
-    SLICE_X63Y34         FDRE                                         r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[3][common][capability][3]/C
-                         clock pessimism             -0.258     0.644    
-    SLICE_X63Y34         FDRE (Hold_fdre_C_D)         0.075     0.719    backend/lanes[1].integer_lane.lane/decoder_payload_reg[3][common][capability][3]
-  -------------------------------------------------------------------
-                         required time                         -0.719    
-                         arrival time                           0.826    
-  -------------------------------------------------------------------
-                         slack                                  0.107    
-
-Slack (MET) :             0.107ns  (arrival time - required time)
-  Source:                 reset
-                            (input port clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            frontend/fetch/queue/prefetch_pc_reg[11]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Path Group:             cpu_clk
-  Path Type:              Hold (Min at Slow Process Corner)
-  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.747ns  (logic 0.078ns (10.445%)  route 0.669ns (89.555%))
-  Logic Levels:           1  (LUT5=1)
-  Input Delay:            1.000ns
-  Clock Path Skew:        1.360ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    1.360ns
-    Source Clock Delay      (SCD):    0.000ns
-    Clock Pessimism Removal (CPR):    -0.000ns
-  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
-    Total System Jitter     (TSJ):    0.071ns
-    Total Input Jitter      (TIJ):    0.000ns
-    Discrete Jitter          (DJ):    0.000ns
-    Phase Error              (PE):    0.000ns
-
-    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
-  -------------------------------------------------------------------    -------------------
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                         input delay                  1.000     1.000    
-                                                      0.000     1.000 f  reset (IN)
-                         net (fo=69, unset)           0.669     1.669    frontend/fetch/queue/reset
-    SLICE_X30Y28         LUT5 (Prop_lut5_I3_O)        0.078     1.747 r  frontend/fetch/queue/fetch_address[11]_INST_0/O
-                         net (fo=1, routed)           0.000     1.747    frontend/fetch/queue/fetch_address[11]
-    SLICE_X30Y28         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[11]/D
+    SLICE_X55Y164        FDRE (Prop_fdre_C_Q)         0.141     0.777 r  backend/lanes[0].serial_lane.lane/operand_reg[1][31]/Q
+                         net (fo=1, routed)           0.168     0.945    backend/lanes[0].serial_lane.lane/operand_reg[1]_81[31]
+    SLICE_X54Y161        SRL16E                                       r  backend/lanes[0].serial_lane.lane/operand_reg[3][31]_srl2/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         1.360     1.360    frontend/fetch/queue/clk
-    SLICE_X30Y28         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[11]/C
-                         clock pessimism              0.000     1.360    
-                         clock uncertainty            0.035     1.395    
-    SLICE_X30Y28         FDRE (Hold_fdre_C_D)         0.244     1.639    frontend/fetch/queue/prefetch_pc_reg[11]
+                         net (fo=7901, unset)         0.912     0.912    backend/lanes[0].serial_lane.lane/clk
+    SLICE_X54Y161        SRL16E                                       r  backend/lanes[0].serial_lane.lane/operand_reg[3][31]_srl2/CLK
+                         clock pessimism             -0.258     0.654    
+    SLICE_X54Y161        SRL16E (Hold_srl16e_CLK_D)
+                                                      0.183     0.837    backend/lanes[0].serial_lane.lane/operand_reg[3][31]_srl2
   -------------------------------------------------------------------
-                         required time                         -1.639    
-                         arrival time                           1.747    
+                         required time                         -0.837    
+                         arrival time                           0.945    
   -------------------------------------------------------------------
-                         slack                                  0.107    
+                         slack                                  0.108    
 
 Slack (MET) :             0.108ns  (arrival time - required time)
-  Source:                 reset
-                            (input port clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            frontend/fetch/queue/prefetch_pc_reg[8]/D
+  Source:                 backend/lanes[1].integer_lane.lane/decoder_payload_reg[1][bru][ras_snap][4]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/redirect_ras_q_reg[1][4]/D
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
-  Path Type:              Hold (Min at Slow Process Corner)
+  Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.747ns  (logic 0.078ns (10.445%)  route 0.669ns (89.555%))
-  Logic Levels:           1  (LUT5=1)
-  Input Delay:            1.000ns
-  Clock Path Skew:        1.359ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    1.359ns
-    Source Clock Delay      (SCD):    0.000ns
-    Clock Pessimism Removal (CPR):    -0.000ns
-  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
-    Total System Jitter     (TSJ):    0.071ns
-    Total Input Jitter      (TIJ):    0.000ns
-    Discrete Jitter          (DJ):    0.000ns
-    Phase Error              (PE):    0.000ns
+  Data Path Delay:        0.360ns  (logic 0.141ns (39.126%)  route 0.219ns (60.874%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.182ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.836ns
+    Source Clock Delay      (SCD):    0.649ns
+    Clock Pessimism Removal (CPR):    0.005ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
-                         input delay                  1.000     1.000    
-                                                      0.000     1.000 f  reset (IN)
-                         net (fo=69, unset)           0.669     1.669    frontend/fetch/queue/reset
-    SLICE_X30Y27         LUT5 (Prop_lut5_I3_O)        0.078     1.747 r  frontend/fetch/queue/fetch_address[8]_INST_0/O
-                         net (fo=1, routed)           0.000     1.747    frontend/fetch/queue/fetch_address[8]
-    SLICE_X30Y27         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[8]/D
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.649     0.649    backend/lanes[1].integer_lane.lane/clk
+    SLICE_X31Y151        FDRE                                         r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[1][bru][ras_snap][4]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X31Y151        FDRE (Prop_fdre_C_Q)         0.141     0.790 r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[1][bru][ras_snap][4]/Q
+                         net (fo=1, routed)           0.219     1.009    backend/redirect_ras_lane[1]_58[4]
+    SLICE_X33Y148        FDRE                                         r  backend/redirect_ras_q_reg[1][4]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         1.359     1.359    frontend/fetch/queue/clk
-    SLICE_X30Y27         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[8]/C
-                         clock pessimism              0.000     1.359    
-                         clock uncertainty            0.035     1.394    
-    SLICE_X30Y27         FDRE (Hold_fdre_C_D)         0.244     1.638    frontend/fetch/queue/prefetch_pc_reg[8]
+                         net (fo=7901, unset)         0.836     0.836    backend/clk
+    SLICE_X33Y148        FDRE                                         r  backend/redirect_ras_q_reg[1][4]/C
+                         clock pessimism             -0.005     0.831    
+    SLICE_X33Y148        FDRE (Hold_fdre_C_D)         0.070     0.901    backend/redirect_ras_q_reg[1][4]
   -------------------------------------------------------------------
-                         required time                         -1.638    
-                         arrival time                           1.747    
+                         required time                         -0.901    
+                         arrival time                           1.009    
   -------------------------------------------------------------------
                          slack                                  0.108    
 
@@ -570,35 +437,74 @@ Slack (MET) :             0.109ns  (arrival time - required time)
   Data Path Delay:        0.196ns  (logic 0.141ns (71.991%)  route 0.055ns (28.009%))
   Logic Levels:           0  
   Clock Path Skew:        0.016ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.828ns
-    Source Clock Delay      (SCD):    0.558ns
-    Clock Pessimism Removal (CPR):    0.254ns
+    Destination Clock Delay (DCD):    0.941ns
+    Source Clock Delay      (SCD):    0.665ns
+    Clock Pessimism Removal (CPR):    0.260ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.558     0.558    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X51Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][21]/C
+                         net (fo=7901, unset)         0.665     0.665    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X73Y198        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][21]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X51Y103        FDRE (Prop_fdre_C_Q)         0.141     0.699 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][21]/Q
-                         net (fo=2, routed)           0.055     0.754    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2]_126[21]
-    SLICE_X51Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][21]/D
+    SLICE_X73Y198        FDRE (Prop_fdre_C_Q)         0.141     0.806 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][21]/Q
+                         net (fo=2, routed)           0.055     0.861    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2]_145[21]
+    SLICE_X73Y198        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][21]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.828     0.828    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X51Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][21]/C
-                         clock pessimism             -0.254     0.574    
-    SLICE_X51Y103        FDRE (Hold_fdre_C_D)         0.071     0.645    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][21]
+                         net (fo=7901, unset)         0.941     0.941    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X73Y198        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][21]/C
+                         clock pessimism             -0.260     0.681    
+    SLICE_X73Y198        FDRE (Hold_fdre_C_D)         0.071     0.752    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][21]
   -------------------------------------------------------------------
-                         required time                         -0.645    
-                         arrival time                           0.754    
+                         required time                         -0.752    
+                         arrival time                           0.861    
   -------------------------------------------------------------------
                          slack                                  0.109    
 
-Slack (MET) :             0.109ns  (arrival time - required time)
+Slack (MET) :             0.111ns  (arrival time - required time)
+  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][10]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][10]/D
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             cpu_clk
+  Path Type:              Hold (Min at Fast Process Corner)
+  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
+  Data Path Delay:        0.458ns  (logic 0.141ns (30.801%)  route 0.317ns (69.199%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.264ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.916ns
+    Source Clock Delay      (SCD):    0.643ns
+    Clock Pessimism Removal (CPR):    0.009ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.643     0.643    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X61Y197        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][10]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X61Y197        FDRE (Prop_fdre_C_Q)         0.141     0.784 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][10]/Q
+                         net (fo=2, routed)           0.317     1.101    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3]_128[10]
+    SLICE_X50Y197        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][10]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.916     0.916    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X50Y197        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][10]/C
+                         clock pessimism             -0.009     0.907    
+    SLICE_X50Y197        FDRE (Hold_fdre_C_D)         0.083     0.990    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][10]
+  -------------------------------------------------------------------
+                         required time                         -0.990    
+                         arrival time                           1.101    
+  -------------------------------------------------------------------
+                         slack                                  0.111    
+
+Slack (MET) :             0.113ns  (arrival time - required time)
   Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][27]/C
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][27]/D
@@ -606,239 +512,315 @@ Slack (MET) :             0.109ns  (arrival time - required time)
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.196ns  (logic 0.141ns (71.991%)  route 0.055ns (28.009%))
+  Data Path Delay:        0.204ns  (logic 0.141ns (69.211%)  route 0.063ns (30.789%))
   Logic Levels:           0  
   Clock Path Skew:        0.016ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.830ns
-    Source Clock Delay      (SCD):    0.559ns
-    Clock Pessimism Removal (CPR):    0.255ns
+    Destination Clock Delay (DCD):    0.921ns
+    Source Clock Delay      (SCD):    0.645ns
+    Clock Pessimism Removal (CPR):    0.260ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.559     0.559    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X49Y105        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][27]/C
+                         net (fo=7901, unset)         0.645     0.645    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X64Y197        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][27]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X49Y105        FDRE (Prop_fdre_C_Q)         0.141     0.700 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][27]/Q
-                         net (fo=2, routed)           0.055     0.755    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3]_109[27]
-    SLICE_X49Y105        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][27]/D
+    SLICE_X64Y197        FDRE (Prop_fdre_C_Q)         0.141     0.786 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3][27]/Q
+                         net (fo=2, routed)           0.063     0.849    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][3]_128[27]
+    SLICE_X64Y197        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][27]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.830     0.830    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X49Y105        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][27]/C
-                         clock pessimism             -0.255     0.575    
-    SLICE_X49Y105        FDRE (Hold_fdre_C_D)         0.071     0.646    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][27]
+                         net (fo=7901, unset)         0.921     0.921    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X64Y197        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][27]/C
+                         clock pessimism             -0.260     0.661    
+    SLICE_X64Y197        FDRE (Hold_fdre_C_D)         0.075     0.736    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][3][27]
   -------------------------------------------------------------------
-                         required time                         -0.646    
-                         arrival time                           0.755    
+                         required time                         -0.736    
+                         arrival time                           0.849    
   -------------------------------------------------------------------
-                         slack                                  0.109    
+                         slack                                  0.113    
 
-Slack (MET) :             0.110ns  (arrival time - required time)
-  Source:                 frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][memory][size][0]/C
+Slack (MET) :             0.113ns  (arrival time - required time)
+  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[7]/C
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][memory][size][0]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][7]_srl2/D
+                            (rising edge-triggered cell SRL16E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.497ns  (logic 0.186ns (37.445%)  route 0.311ns (62.555%))
-  Logic Levels:           1  (LUT6=1)
-  Clock Path Skew:        0.266ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.891ns
-    Source Clock Delay      (SCD):    0.617ns
-    Clock Pessimism Removal (CPR):    0.008ns
-
-    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
-  -------------------------------------------------------------------    -------------------
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.617     0.617    frontend/dispatch/decode_stage/clk
-    SLICE_X53Y24         FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][memory][size][0]/C
-  -------------------------------------------------------------------    -------------------
-    SLICE_X53Y24         FDRE (Prop_fdre_C_Q)         0.141     0.758 r  frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][memory][size][0]/Q
-                         net (fo=2, routed)           0.311     1.069    frontend/fetch/queue/fifo_slots[0].packets_out_reg[0][memory][size][1][0]
-    SLICE_X50Y27         LUT6 (Prop_lut6_I0_O)        0.045     1.114 r  frontend/fetch/queue/fifo_slots[0].packets_out[0][memory][size][0]_i_1/O
-                         net (fo=1, routed)           0.000     1.114    frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][memory][size][1]_0[0]
-    SLICE_X50Y27         FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][memory][size][0]/D
-  -------------------------------------------------------------------    -------------------
-
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.891     0.891    frontend/dispatch/decode_stage/clk
-    SLICE_X50Y27         FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][memory][size][0]/C
-                         clock pessimism             -0.008     0.883    
-    SLICE_X50Y27         FDRE (Hold_fdre_C_D)         0.121     1.004    frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][memory][size][0]
-  -------------------------------------------------------------------
-                         required time                         -1.004    
-                         arrival time                           1.114    
-  -------------------------------------------------------------------
-                         slack                                  0.110    
-
-Slack (MET) :             0.110ns  (arrival time - required time)
-  Source:                 reset
-                            (input port clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            frontend/fetch/queue/prefetch_pc_reg[0]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Path Group:             cpu_clk
-  Path Type:              Hold (Min at Slow Process Corner)
-  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.747ns  (logic 0.078ns (10.445%)  route 0.669ns (89.555%))
-  Logic Levels:           1  (LUT5=1)
-  Input Delay:            1.000ns
-  Clock Path Skew:        1.357ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    1.357ns
-    Source Clock Delay      (SCD):    0.000ns
-    Clock Pessimism Removal (CPR):    -0.000ns
-  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
-    Total System Jitter     (TSJ):    0.071ns
-    Total Input Jitter      (TIJ):    0.000ns
-    Discrete Jitter          (DJ):    0.000ns
-    Phase Error              (PE):    0.000ns
-
-    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
-  -------------------------------------------------------------------    -------------------
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                         input delay                  1.000     1.000    
-                                                      0.000     1.000 f  reset (IN)
-                         net (fo=69, unset)           0.669     1.669    frontend/fetch/queue/reset
-    SLICE_X34Y22         LUT5 (Prop_lut5_I3_O)        0.078     1.747 r  frontend/fetch/queue/fetch_address[0]_INST_0/O
-                         net (fo=1, routed)           0.000     1.747    frontend/fetch/queue/fetch_address[0]
-    SLICE_X34Y22         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[0]/D
-  -------------------------------------------------------------------    -------------------
-
-                         (clock cpu_clk rise edge)    0.000     0.000 r  
-                                                      0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         1.357     1.357    frontend/fetch/queue/clk
-    SLICE_X34Y22         FDRE                                         r  frontend/fetch/queue/prefetch_pc_reg[0]/C
-                         clock pessimism              0.000     1.357    
-                         clock uncertainty            0.035     1.392    
-    SLICE_X34Y22         FDRE (Hold_fdre_C_D)         0.244     1.636    frontend/fetch/queue/prefetch_pc_reg[0]
-  -------------------------------------------------------------------
-                         required time                         -1.636    
-                         arrival time                           1.747    
-  -------------------------------------------------------------------
-                         slack                                  0.110    
-
-Slack (MET) :             0.111ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][14]/C
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][14]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Path Group:             cpu_clk
-  Path Type:              Hold (Min at Fast Process Corner)
-  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.466ns  (logic 0.141ns (30.265%)  route 0.325ns (69.735%))
+  Data Path Delay:        0.333ns  (logic 0.164ns (49.178%)  route 0.169ns (50.822%))
   Logic Levels:           0  
-  Clock Path Skew:        0.266ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.828ns
-    Source Clock Delay      (SCD):    0.557ns
+  Clock Path Skew:        0.037ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.906ns
+    Source Clock Delay      (SCD):    0.631ns
+    Clock Pessimism Removal (CPR):    0.238ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.631     0.631    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X38Y174        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[7]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X38Y174        FDRE (Prop_fdre_C_Q)         0.164     0.795 r  backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[7]/Q
+                         net (fo=1, routed)           0.169     0.964    backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg_n_0_[7]
+    SLICE_X34Y173        SRL16E                                       r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][7]_srl2/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.906     0.906    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X34Y173        SRL16E                                       r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][7]_srl2/CLK
+                         clock pessimism             -0.238     0.668    
+    SLICE_X34Y173        SRL16E (Hold_srl16e_CLK_D)
+                                                      0.183     0.851    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][7]_srl2
+  -------------------------------------------------------------------
+                         required time                         -0.851    
+                         arrival time                           0.964    
+  -------------------------------------------------------------------
+                         slack                                  0.113    
+
+Slack (MET) :             0.114ns  (arrival time - required time)
+  Source:                 backend/lanes[1].integer_lane.lane/decoder_payload_reg[1][bru][pht_index][5]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[1].integer_lane.train_register.train_pht_reg[0][5]/D
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             cpu_clk
+  Path Type:              Hold (Min at Fast Process Corner)
+  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
+  Data Path Delay:        0.371ns  (logic 0.141ns (38.014%)  route 0.230ns (61.986%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.182ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.836ns
+    Source Clock Delay      (SCD):    0.649ns
     Clock Pessimism Removal (CPR):    0.005ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.557     0.557    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X52Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][14]/C
+                         net (fo=7901, unset)         0.649     0.649    backend/lanes[1].integer_lane.lane/clk
+    SLICE_X31Y151        FDRE                                         r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[1][bru][pht_index][5]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X52Y103        FDRE (Prop_fdre_C_Q)         0.141     0.698 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2][14]/Q
-                         net (fo=2, routed)           0.325     1.023    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[3].registered_stage.multiple_reg[4][2]_126[14]
-    SLICE_X50Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][14]/D
+    SLICE_X31Y151        FDRE (Prop_fdre_C_Q)         0.141     0.790 r  backend/lanes[1].integer_lane.lane/decoder_payload_reg[1][bru][pht_index][5]/Q
+                         net (fo=1, routed)           0.230     1.020    backend/lanes[1].integer_lane.raw_train_pht[5]
+    SLICE_X29Y148        FDRE                                         r  backend/lanes[1].integer_lane.train_register.train_pht_reg[0][5]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.828     0.828    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X50Y103        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][14]/C
-                         clock pessimism             -0.005     0.823    
-    SLICE_X50Y103        FDRE (Hold_fdre_C_D)         0.089     0.912    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][14]
+                         net (fo=7901, unset)         0.836     0.836    backend/clk
+    SLICE_X29Y148        FDRE                                         r  backend/lanes[1].integer_lane.train_register.train_pht_reg[0][5]/C
+                         clock pessimism             -0.005     0.831    
+    SLICE_X29Y148        FDRE (Hold_fdre_C_D)         0.075     0.906    backend/lanes[1].integer_lane.train_register.train_pht_reg[0][5]
   -------------------------------------------------------------------
-                         required time                         -0.912    
-                         arrival time                           1.023    
+                         required time                         -0.906    
+                         arrival time                           1.020    
   -------------------------------------------------------------------
-                         slack                                  0.111    
+                         slack                                  0.114    
 
-Slack (MET) :             0.111ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/valid_payload_reg[3]/C
+Slack (MET) :             0.115ns  (arrival time - required time)
+  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[15]/C
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/valid_payload_reg[4]/D
-                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][15]_srl2/D
+                            (rising edge-triggered cell SRL16E clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.448ns  (logic 0.141ns (31.465%)  route 0.307ns (68.536%))
+  Data Path Delay:        0.333ns  (logic 0.164ns (49.178%)  route 0.169ns (50.822%))
   Logic Levels:           0  
-  Clock Path Skew:        0.266ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.902ns
-    Source Clock Delay      (SCD):    0.628ns
-    Clock Pessimism Removal (CPR):    0.008ns
+  Clock Path Skew:        0.035ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.905ns
+    Source Clock Delay      (SCD):    0.632ns
+    Clock Pessimism Removal (CPR):    0.238ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.628     0.628    backend/lanes[1].integer_lane.lane/clk
-    SLICE_X49Y35         FDRE                                         r  backend/lanes[1].integer_lane.lane/valid_payload_reg[3]/C
+                         net (fo=7901, unset)         0.632     0.632    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X38Y176        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[15]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X49Y35         FDRE (Prop_fdre_C_Q)         0.141     0.769 r  backend/lanes[1].integer_lane.lane/valid_payload_reg[3]/Q
-                         net (fo=1, routed)           0.307     1.076    backend/lanes[1].integer_lane.lane/valid_payload_reg[3]__0
-    SLICE_X61Y37         FDRE                                         r  backend/lanes[1].integer_lane.lane/valid_payload_reg[4]/D
+    SLICE_X38Y176        FDRE (Prop_fdre_C_Q)         0.164     0.796 r  backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg[15]/Q
+                         net (fo=1, routed)           0.169     0.965    backend/lanes[1].integer_lane.lane/gen_div.divider/a_magnitude_reg_n_0_[15]
+    SLICE_X34Y175        SRL16E                                       r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][15]_srl2/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.902     0.902    backend/lanes[1].integer_lane.lane/clk
-    SLICE_X61Y37         FDRE                                         r  backend/lanes[1].integer_lane.lane/valid_payload_reg[4]/C
-                         clock pessimism             -0.008     0.894    
-    SLICE_X61Y37         FDRE (Hold_fdre_C_D)         0.071     0.965    backend/lanes[1].integer_lane.lane/valid_payload_reg[4]
+                         net (fo=7901, unset)         0.905     0.905    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X34Y175        SRL16E                                       r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][15]_srl2/CLK
+                         clock pessimism             -0.238     0.667    
+    SLICE_X34Y175        SRL16E (Hold_srl16e_CLK_D)
+                                                      0.183     0.850    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[0].registered_stage.dividend_reg[1][15]_srl2
   -------------------------------------------------------------------
-                         required time                         -0.965    
-                         arrival time                           1.076    
+                         required time                         -0.850    
+                         arrival time                           0.965    
   -------------------------------------------------------------------
-                         slack                                  0.111    
+                         slack                                  0.115    
 
-Slack (MET) :             0.112ns  (arrival time - required time)
-  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/b_magnitude_reg[24]/C
+Slack (MET) :             0.116ns  (arrival time - required time)
+  Source:                 backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][5]/C
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
-  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/prepare_multiple[2].multiple_reg[0][2][25]/D
+  Destination:            backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][2][5]/D
                             (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
   Path Group:             cpu_clk
   Path Type:              Hold (Min at Fast Process Corner)
   Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
-  Data Path Delay:        0.425ns  (logic 0.141ns (33.186%)  route 0.284ns (66.814%))
+  Data Path Delay:        0.467ns  (logic 0.141ns (30.183%)  route 0.326ns (69.817%))
   Logic Levels:           0  
   Clock Path Skew:        0.266ns (DCD - SCD - CPR)
-    Destination Clock Delay (DCD):    0.833ns
-    Source Clock Delay      (SCD):    0.567ns
-    Clock Pessimism Removal (CPR):    -0.000ns
+    Destination Clock Delay (DCD):    0.915ns
+    Source Clock Delay      (SCD):    0.640ns
+    Clock Pessimism Removal (CPR):    0.009ns
 
     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
   -------------------------------------------------------------------    -------------------
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.567     0.567    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X63Y94         FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/b_magnitude_reg[24]/C
+                         net (fo=7901, unset)         0.640     0.640    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X52Y196        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][5]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X63Y94         FDRE (Prop_fdre_C_Q)         0.141     0.708 r  backend/lanes[1].integer_lane.lane/gen_div.divider/b_magnitude_reg[24]/Q
-                         net (fo=8, routed)           0.284     0.992    backend/lanes[1].integer_lane.lane/gen_div.divider/b_magnitude[24]
-    SLICE_X63Y100        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/prepare_multiple[2].multiple_reg[0][2][25]/D
+    SLICE_X52Y196        FDRE (Prop_fdre_C_Q)         0.141     0.781 r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2][5]/Q
+                         net (fo=3, routed)           0.326     1.107    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[4].registered_stage.multiple_reg[5][2]_146[5]
+    SLICE_X50Y196        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][2][5]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock cpu_clk rise edge)    0.000     0.000 r  
                                                       0.000     0.000 r  clk (IN)
-                         net (fo=6458, unset)         0.833     0.833    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
-    SLICE_X63Y100        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/prepare_multiple[2].multiple_reg[0][2][25]/C
-                         clock pessimism              0.000     0.833    
-    SLICE_X63Y100        FDRE (Hold_fdre_C_D)         0.047     0.880    backend/lanes[1].integer_lane.lane/gen_div.divider/prepare_multiple[2].multiple_reg[0][2][25]
+                         net (fo=7901, unset)         0.915     0.915    backend/lanes[1].integer_lane.lane/gen_div.divider/clk
+    SLICE_X50Y196        FDRE                                         r  backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][2][5]/C
+                         clock pessimism             -0.009     0.906    
+    SLICE_X50Y196        FDRE (Hold_fdre_C_D)         0.085     0.991    backend/lanes[1].integer_lane.lane/gen_div.divider/stage[5].registered_stage.multiple_reg[6][2][5]
   -------------------------------------------------------------------
-                         required time                         -0.880    
-                         arrival time                           0.992    
+                         required time                         -0.991    
+                         arrival time                           1.107    
   -------------------------------------------------------------------
-                         slack                                  0.112    
+                         slack                                  0.116    
+
+Slack (MET) :             0.119ns  (arrival time - required time)
+  Source:                 frontend/fetch/queue/serve_lanes[0].serve_pht_reg_reg[0][4]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][bru][pht_index][4]/D
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             cpu_clk
+  Path Type:              Hold (Min at Fast Process Corner)
+  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
+  Data Path Delay:        0.566ns  (logic 0.209ns (36.909%)  route 0.357ns (63.091%))
+  Logic Levels:           1  (LUT3=1)
+  Clock Path Skew:        0.355ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.924ns
+    Source Clock Delay      (SCD):    0.564ns
+    Clock Pessimism Removal (CPR):    0.005ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.564     0.564    frontend/fetch/queue/clk
+    SLICE_X34Y147        FDRE                                         r  frontend/fetch/queue/serve_lanes[0].serve_pht_reg_reg[0][4]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X34Y147        FDRE (Prop_fdre_C_Q)         0.164     0.728 r  frontend/fetch/queue/serve_lanes[0].serve_pht_reg_reg[0][4]/Q
+                         net (fo=3, routed)           0.357     1.085    frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][bru][pht_index][7]_0[4]
+    SLICE_X28Y150        LUT3 (Prop_lut3_I2_O)        0.045     1.130 r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out[0][bru][pht_index][4]_i_1/O
+                         net (fo=1, routed)           0.000     1.130    frontend/dispatch/decode_stage/fifo_slots[0].selected_packet[packet][bru][pht_index][4]
+    SLICE_X28Y150        FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][bru][pht_index][4]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.924     0.924    frontend/dispatch/decode_stage/clk
+    SLICE_X28Y150        FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][bru][pht_index][4]/C
+                         clock pessimism             -0.005     0.919    
+    SLICE_X28Y150        FDRE (Hold_fdre_C_D)         0.092     1.011    frontend/dispatch/decode_stage/fifo_slots[0].packets_out_reg[0][bru][pht_index][4]
+  -------------------------------------------------------------------
+                         required time                         -1.011    
+                         arrival time                           1.130    
+  -------------------------------------------------------------------
+                         slack                                  0.119    
+
+Slack (MET) :             0.120ns  (arrival time - required time)
+  Source:                 backend/lanes[3].memory_lane.lane/store_buffer.entries[1].entry_word_reg[1][15]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            backend/lanes[3].memory_lane.lane/store_buffer.entries[2].entry_word_reg[2][15]/D
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             cpu_clk
+  Path Type:              Hold (Min at Fast Process Corner)
+  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
+  Data Path Delay:        0.212ns  (logic 0.141ns (66.568%)  route 0.071ns (33.432%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.016ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.918ns
+    Source Clock Delay      (SCD):    0.642ns
+    Clock Pessimism Removal (CPR):    0.260ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.642     0.642    backend/lanes[3].memory_lane.lane/clk
+    SLICE_X64Y188        FDRE                                         r  backend/lanes[3].memory_lane.lane/store_buffer.entries[1].entry_word_reg[1][15]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X64Y188        FDRE (Prop_fdre_C_Q)         0.141     0.783 r  backend/lanes[3].memory_lane.lane/store_buffer.entries[1].entry_word_reg[1][15]/Q
+                         net (fo=4, routed)           0.071     0.854    backend/lanes[3].memory_lane.lane/store_buffer.entries[1].entry_word_reg[1]_67[15]
+    SLICE_X64Y188        FDRE                                         r  backend/lanes[3].memory_lane.lane/store_buffer.entries[2].entry_word_reg[2][15]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.918     0.918    backend/lanes[3].memory_lane.lane/clk
+    SLICE_X64Y188        FDRE                                         r  backend/lanes[3].memory_lane.lane/store_buffer.entries[2].entry_word_reg[2][15]/C
+                         clock pessimism             -0.260     0.658    
+    SLICE_X64Y188        FDRE (Hold_fdre_C_D)         0.076     0.734    backend/lanes[3].memory_lane.lane/store_buffer.entries[2].entry_word_reg[2][15]
+  -------------------------------------------------------------------
+                         required time                         -0.734    
+                         arrival time                           0.854    
+  -------------------------------------------------------------------
+                         slack                                  0.120    
+
+Slack (MET) :             0.122ns  (arrival time - required time)
+  Source:                 frontend/fetch/queue/serve_lanes[1].serve_snap_reg_reg[1][0]/C
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][bru][ras_snap][0]/D
+                            (rising edge-triggered cell FDRE clocked by cpu_clk  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             cpu_clk
+  Path Type:              Hold (Min at Fast Process Corner)
+  Requirement:            0.000ns  (cpu_clk rise@0.000ns - cpu_clk rise@0.000ns)
+  Data Path Delay:        0.596ns  (logic 0.186ns (31.229%)  route 0.410ns (68.771%))
+  Logic Levels:           1  (LUT3=1)
+  Clock Path Skew:        0.353ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    0.922ns
+    Source Clock Delay      (SCD):    0.564ns
+    Clock Pessimism Removal (CPR):    0.005ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.564     0.564    frontend/fetch/queue/clk
+    SLICE_X37Y147        FDRE                                         r  frontend/fetch/queue/serve_lanes[1].serve_snap_reg_reg[1][0]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X37Y147        FDRE (Prop_fdre_C_Q)         0.141     0.705 r  frontend/fetch/queue/serve_lanes[1].serve_snap_reg_reg[1][0]/Q
+                         net (fo=3, routed)           0.410     1.115    frontend/fetch/queue/serve_snap_reg[1]_255[0]
+    SLICE_X34Y152        LUT3 (Prop_lut3_I0_O)        0.045     1.160 r  frontend/fetch/queue/fifo_slots[1].packets_out[1][bru][ras_snap][0]_i_1/O
+                         net (fo=1, routed)           0.000     1.160    frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][bru][ras_snap][4]_0[0]
+    SLICE_X34Y152        FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][bru][ras_snap][0]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock cpu_clk rise edge)    0.000     0.000 r  
+                                                      0.000     0.000 r  clk (IN)
+                         net (fo=7901, unset)         0.922     0.922    frontend/dispatch/decode_stage/clk
+    SLICE_X34Y152        FDRE                                         r  frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][bru][ras_snap][0]/C
+                         clock pessimism             -0.005     0.917    
+    SLICE_X34Y152        FDRE (Hold_fdre_C_D)         0.121     1.038    frontend/dispatch/decode_stage/fifo_slots[1].packets_out_reg[1][bru][ras_snap][0]
+  -------------------------------------------------------------------
+                         required time                         -1.038    
+                         arrival time                           1.160    
+  -------------------------------------------------------------------
+                         slack                                  0.122    
 
 
 

@@ -149,9 +149,9 @@ int main(void)
 {
     char line[64];
     set_interval(UINT64_C(1000000));
-    puts("This is Anvil-Core, John's Custom CPU\nHow are you Pretty Girl?");
+    puts("Hello Will");
     for (;;) {
-        fputs("stdout stream here: ", stdout);
+        fputs("Anvil-Core> ", stdout);
         fflush(stdout);
         int status = read_line(line, sizeof line);
         if (status == 0)

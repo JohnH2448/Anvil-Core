@@ -1,6 +1,6 @@
 package Parameters;
 
-    parameter unsigned EXECUTION_UNROLL = 3;
+    parameter unsigned EXECUTION_UNROLL = 1;
     parameter unsigned BYPASS_ENABLED = 1;
     // 3+ not yet supported
     parameter unsigned ISSUE_WIDTH = 2;
@@ -24,11 +24,31 @@ package Parameters;
     // Return address stack: predicts JALR/C.JR returns at fetch. USE_RAS = 0
     // removes all of its hardware. RAS_DEPTH is an entry count (power of two >= 2).
     parameter unsigned USE_RAS = 1;
-    parameter unsigned RAS_DEPTH = 8;
+    parameter unsigned RAS_DEPTH = 4;
+    // RAS mispredict repair: each window carries the RAS pointer/count from
+    // before its update; a backend redirect restores it (with the rest of the
+    // frontend flush). Needs USE_RAS. 0 removes the repair hardware.
+    parameter unsigned RAS_REPAIR = 1;
 
-    // 1: a store waits for every older bus response, so bus errors are
-    // precise. 0: stores may overtake an older load's error (imprecise).
-    parameter bit PRECISE_BUS_FAULTS = 0;
+    // Branch target buffer: steers fetch to a taken branch's target from the
+    // window address, before the instruction bytes arrive; the prediction stage
+    // verifies it. USE_BTB = 0 removes all of its hardware. BTB_ENTRIES is an
+    // entry count (power of two >= 2).
+    parameter unsigned USE_BTB = 1;
+    parameter unsigned BTB_ENTRIES = 64;
+
+
+    // Store buffer: the last STORE_BUFFER_DEPTH aligned word stores to RAM, as a
+    // shift register (newest first, oldest dropped). A load whose word hits is
+    // completed from it in the AGU stage and skips the LSU. Stores still go to
+    // memory through the LSU; the buffer only forwards. USE_STORE_BUFFER = 0
+    // removes it. Requires MEMORY_LANE_COUNT = 1.
+    parameter unsigned USE_STORE_BUFFER = 1;
+    parameter unsigned STORE_BUFFER_DEPTH = 5; // 10 works, 5 doesnt, 20 doesnt imrove it much. Try 6-12 range
+    // LSU direct send: an idle LSU sends a RAM load straight from the AGU in its
+    // execute cycle (the BRAM input register samples it), instead of from the
+    // queue a cycle later. 0 keeps every request on the queue path.
+    parameter unsigned LSU_DIRECT_SEND = 1; // Single memory lane only (off automatically on 2+)
     // Address map: devices (CLINT) in [0, RAM_BASE), RAM in
     // [RAM_BASE, MAX_MEMORY_ADDRESS]. Execution starts at the RAM base.
     parameter logic [31:0] RAM_BASE = 32'h0000_0200;

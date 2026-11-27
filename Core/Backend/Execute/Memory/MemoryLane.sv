@@ -63,10 +63,9 @@ module MemoryLane
     output logic result_pending,
     output logic result_valid, // Valid final-slot instruction (for retire counting).
     output logic result_trap,
-    // Bus error response, classified here from the slot's own size and
-    // offset: misaligned load/store if the access was misaligned (the bus
-    // rejects those), otherwise load/store access fault. The trap is still
-    // discovered only by the bus.
+    // AGU fault, delivered through the LSU and classified here from the
+    // slot's own size and offset: misaligned load/store if the access was
+    // misaligned, otherwise load/store access fault (out of range).
     output TrapType_ result_trap_type,
     output logic [31:0] result_pc,
 
@@ -79,17 +78,29 @@ module MemoryLane
     // LSU enqueues this AGU result on pipeline advance.
     output logic request_valid,
     output logic request_candidate, // request_valid before redirect squash.
+    // A valid load in the AGU stage, from flops only (LSU direct-send decision).
+    output logic request_early,
+    // A valid memory op in the AGU stage, from flops only (LSU entry write
+    // enable; the counted push still uses request_candidate).
+    output logic request_present,
     output logic [AGE_WIDTH-1:0] request_age,
     output logic [31:0] request_address, request_data,
     output logic [3:0] request_mask,
     output logic request_write,
     output logic [1:0] request_size, // MemorySize_
+    // AGU-detected fault (misaligned or out of range): the request is still
+    // enqueued and completes through the LSU with an error, never on the bus.
+    output logic request_fault,
 
-    // Completion from the LSU (real or phantom). Phantom completions carry no
-    // error and garbage data.
+    // Completion from the LSU: a load response, or (response_error) the
+    // completion of an AGU-faulting request, with garbage data. Posted stores
+    // get no completion.
     input logic wb_trap, cancel_checkin,
     input logic response_valid, response_error,
-    input logic [31:0] response_data
+    input logic [31:0] response_data,
+    // A load response for this lane is on the bus this cycle (returned
+    // without the trap kill, from flops): drives the early word forward.
+    input logic response_early
 );
     // Reset Register
     logic reset_reg;
@@ -243,10 +254,14 @@ module MemoryLane
     // Operand Selection Stage
     logic [31:0] source_1;
     logic [31:0] source_2;
+    logic base_clear_q; // direct-send device check on the next source_1
     always_ff @(posedge clk) begin
         if (!stall) begin
             source_1 <= temp_source_1;
             source_2 <= temp_source_2;
+            base_clear_q <= !temp_source_1[31] &&
+                (temp_source_1 >= Parameters::RAM_BASE + 32'd2048 ||
+                 (!decoder_payload[0].common.immediate[31] && temp_source_1 >= Parameters::RAM_BASE));
         end
     end
 
@@ -264,6 +279,14 @@ module MemoryLane
         logic [31:0] pc; // For trap entry (mepc).
     } Slot;
     logic [31:0] effective_address;
+    // Store buffer hit for the load in the AGU stage (0 without the buffer).
+    // Raw: before the same-cycle redirect squash, like request_candidate.
+    logic sb_hit;
+    logic [31:0] sb_load_data;
+    // AGU fault check, mirroring the bus: misaligned for its size (reserved
+    // size encoding included) or a word above MAX_MEMORY_ADDRESS. Every
+    // architectural memory trap is known here, so stores can be posted.
+    logic agu_fault;
     Slot agu;
     Slot slots [EXECUTION_UNROLL:1];
     Slot updated [EXECUTION_UNROLL:1];
@@ -271,19 +294,23 @@ module MemoryLane
         effective_address = source_1 + decoder_payload[1].common.immediate;
         agu.size = decoder_payload[1].memory.size;
         agu.store = decoder_payload[1].memory.operation == MEM_STORE;
-        // Every memory trap is discovered by the bus (error response):
-        // misalignment, range and bus faults alike. Decode never routes a
+        // Memory traps are detected here (agu_fault) but delivered through the
+        // LSU as an error completion once every older request is out, so
+        // the LSU locks before any younger request reaches the bus. Decode never routes a
         // frontend-trapped instruction to a memory lane.
         agu.trap = 1'b0;
         agu.valid = valid_payload[1] && !stage_2_flush;
         agu.offset = effective_address[1:0];
         // Defensive: a request presented during the LSU check-in lock is
         // canceled (a trap flush clears every older slot on the same edge).
-        agu.done = cancel_checkin;
+        // A store-buffer hit completes here. A store is posted: it completes
+        // once it enters the LSU, without waiting for its bus response (the bus
+        // has no errors). A faulting store waits for its error completion.
+        agu.done = cancel_checkin || sb_hit || (agu.store && !agu_fault);
         agu.canceled = cancel_checkin;
         agu.ready = 1'b0;
         agu.pending = 1'b0;
-        agu.data = 'x;
+        agu.data = sb_hit ? sb_load_data : 'x;
         agu.age = issuer_payload[1].input_age;
         agu.pc = decoder_payload[1].common.pc;
         agu.rd = decoder_payload[1].common.rd;
@@ -291,10 +318,166 @@ module MemoryLane
         agu.sign_extend = decoder_payload[1].memory.sign_extend;
     end
 
-    assign request_valid = agu.valid && !reset_active;
+    always_comb begin
+        logic misaligned;
+        misaligned = 1'b1;
+        unique case (agu.size)
+            MEM_BYTE: misaligned = 1'b0;
+            MEM_HALF: misaligned = effective_address[0];
+            MEM_WORD: misaligned = effective_address[1:0] != 2'b00;
+        endcase
+        agu_fault = misaligned || (!DerivedParameters::FULL_ADDRESS_SPACE &&
+            effective_address[31:2] > Parameters::MAX_MEMORY_ADDRESS[31:2]);
+    end
+    assign request_fault = agu_fault;
+
+    // ------------------------------------------------------------ store buffer
+    // Shift register of the last STORE_BUFFER_DEPTH aligned word stores to RAM
+    // (entry 0 newest). It is a forwarding copy only: every store still goes to
+    // memory through the LSU.
+    //   insert      aligned word store to RAM, on the advancing edge
+    //   invalidate  any other store to a buffered word (sub-word, so the
+    //               buffered word would be stale)
+    //   clear       writeback trap (a buffered store may have been dropped)
+    //   hit         aligned load whose word is buffered (newest match wins):
+    //               completed in the AGU stage, never sent to the LSU, ready
+    //               for forwarding from slot 1 on the next cycle.
+    // Restricting both sides to aligned in-range RAM keeps device reads
+    // (side effects, volatile values) and faulting accesses on the bus.
+    // Stores in the AGU stage are past every older branch (branches resolve
+    // in this stage; same-group squash is in agu.valid), so no branch
+    // speculation reaches the buffer.
+    if (Parameters::USE_STORE_BUFFER && IS_MEMORY) begin : store_buffer
+        localparam int unsigned DEPTH = Parameters::STORE_BUFFER_DEPTH;
+        initial begin
+            if (Parameters::MEMORY_LANE_COUNT != 1)
+                $fatal(1, "MemoryLane: the store buffer requires MEMORY_LANE_COUNT = 1");
+            if (DEPTH < 1)
+                $fatal(1, "MemoryLane: STORE_BUFFER_DEPTH must be at least 1");
+        end
+        logic entry_valid [DEPTH];
+        logic [29:0] entry_word [DEPTH];
+        logic [31:0] entry_data [DEPTH];
+
+        wire [29:0] word = effective_address[31:2];
+        wire aligned = agu.size == MEM_BYTE ||
+            (agu.size == MEM_HALF && !agu.offset[0]) ||
+            (agu.size == MEM_WORD && agu.offset == 2'b00);
+        // The whole word lies in RAM (the bus would reject anything else).
+        wire in_ram = effective_address[31:2] >= Parameters::RAM_BASE[31:2] &&
+            (DerivedParameters::FULL_ADDRESS_SPACE || effective_address[31:2] <= Parameters::MAX_MEMORY_ADDRESS[31:2]);
+        wire usable = aligned && in_ram && !cancel_checkin;
+
+        logic match;
+        logic [31:0] match_data;
+        // At most one valid entry holds a given word (an insert drops older
+        // copies), so the hit data is a parallel AND-OR, not a priority chain.
+        // Pending update (timing): a store registers its insert/invalidate on
+        // the advancing edge together with the same-cycle branch squash
+        // (stage_2_flush), and is applied on the next edge unless squashed. The
+        // squash thus only reaches a flop D, not the entry enables. A load in
+        // the cycle after the store checks the pending entry too, with priority
+        // over the entries (it is newer than any copy there).
+        logic pending_insert, pending_invalidate, pending_squashed;
+        logic [29:0] pending_word;
+        logic [31:0] pending_data;
+        wire pending_live = !pending_squashed;
+        wire pending_match = (pending_insert || pending_invalidate) && pending_live && pending_word == word;
+        logic entry_match;
+        logic [31:0] entry_data_or;
+        always_comb begin
+            entry_match = 1'b0;
+            entry_data_or = '0;
+            for (int i = 0; i < DEPTH; i++) begin
+                logic hit_i;
+                hit_i = entry_valid[i] && entry_word[i] == word;
+                entry_match |= hit_i;
+                entry_data_or |= {32{hit_i}} & entry_data[i];
+            end
+            // A pending insert wins; a pending invalidate hides the old copy.
+            match = pending_match ? pending_insert : entry_match;
+            match_data = (pending_match && pending_insert) ? pending_data : entry_data_or;
+        end
+        // Aligned word loads only (timing): the data is the buffered word as
+        // is, with no byte shift or sign extension on the hit path. Sub-word
+        // loads take the normal path ("usable" already requires alignment).
+        assign sb_hit = valid_payload[1] && !agu.store && usable && agu.size == MEM_WORD && match;
+        assign sb_load_data = match_data;
+
+        // Raw (pre-squash) intent, captured on the advancing edge.
+        wire insert_raw = valid_payload[1] && agu.store && usable && agu.size == MEM_WORD;
+        wire invalidate_raw = valid_payload[1] && agu.store && !insert_raw;
+        always_ff @(posedge clk) begin
+            if (reset_active || wb_trap) begin
+                pending_insert <= 1'b0;
+                pending_invalidate <= 1'b0;
+            end else if (!stall) begin
+                pending_insert <= insert_raw;
+                pending_invalidate <= invalidate_raw;
+            end else begin
+                // Applied on the first edge after capture, stalled or not.
+                pending_insert <= 1'b0;
+                pending_invalidate <= 1'b0;
+            end
+            if (!stall) begin
+                pending_squashed <= stage_2_flush;
+                pending_word <= word;
+                pending_data <= source_2; // aligned word: no lane shift
+            end
+        end
+        wire apply_insert = pending_insert && pending_live;
+        wire apply_invalidate = pending_invalidate && pending_live;
+        // One register set per entry (an insert shifts every entry by one).
+        for (genvar i = 0; i < DEPTH; i++) begin : entries
+            logic in_valid;
+            logic [29:0] in_word;
+            logic [31:0] in_data;
+            if (i == 0) begin : newest
+                assign in_valid = 1'b1;
+                assign in_word = pending_word;
+                assign in_data = pending_data;
+            end else begin : older
+                assign in_valid = entry_valid[i-1];
+                assign in_word = entry_word[i-1];
+                assign in_data = entry_data[i-1];
+            end
+            always_ff @(posedge clk) begin
+                if (reset_active || wb_trap) begin
+                    entry_valid[i] <= 1'b0;
+                end else if (apply_insert) begin
+                    // An insert drops the older copy of the same word (one-hot).
+                    entry_valid[i] <= in_valid && (i == 0 || in_word != pending_word);
+                    entry_word[i] <= in_word;
+                    entry_data[i] <= in_data;
+                end else if (apply_invalidate && entry_word[i] == pending_word) begin
+                    entry_valid[i] <= 1'b0;
+                end
+            end
+        end
+    end else begin : no_store_buffer
+        assign sb_hit = 1'b0;
+        assign sb_load_data = 'x;
+    end
+
+    assign request_valid = agu.valid && !reset_active && !sb_hit;
     // Independent of the same-cycle redirect. Redirect kills only the youngest
     // part of a group, so surviving candidates keep their candidate rank.
+    // Pre-squash and pre-hit (flops only). A store-buffer hit is retracted like a
+    // same-cycle squash: request_valid (pending) excludes it, so the LSU counts
+    // it in squashed and removes it next cycle; it is never sendable meanwhile.
     assign request_candidate = valid_payload[1] && !reset_active;
+    // Direct send must never read a device (side effects on a dropped send).
+    // Decided from flops only (base register and immediate, no adder): the
+    // access cannot fall below RAM_BASE if the base is at least 2 KiB above it
+    // (any 12-bit offset) or the offset is non-negative and the base is in
+    // RAM. Bit 31 clear rules out wrap-around. Anything else uses the queue;
+    // a faulting (misaligned, out-of-range) direct load is discarded and the
+    // bus performs no access for it.
+    // Computed in the operand stage and registered with source_1 (timing).
+    wire base_clear_of_devices = base_clear_q;
+    assign request_present = valid_payload[1] && !reset_active;
+    assign request_early = valid_payload[1] && !reset_active &&
+        decoder_payload[1].memory.operation != MEM_STORE && base_clear_of_devices;
     assign request_age = agu.age;
     // Full byte address plus size, so the bus can check alignment and range.
     assign request_address = effective_address;
@@ -325,7 +508,7 @@ module MemoryLane
             updated[i] = slots[i];
             if (response_valid && pending && !older_pending[i]) begin
                 updated[i].done = 1'b1;
-                if (response_error) updated[i].trap = 1'b1; // Load/store access fault
+                if (response_error) updated[i].trap = 1'b1; // AGU fault
                 case (slots[i].size)
                     MEM_BYTE: updated[i].data = {{24{slots[i].sign_extend && shifted[7]}}, shifted[7:0]};
                     MEM_HALF: updated[i].data = {{16{slots[i].sign_extend && shifted[15]}}, shifted[15:0]};
@@ -343,7 +526,7 @@ module MemoryLane
             Slot held, shifted_in;
             held = updated[i];
             shifted_in = incoming;
-            // A faulted or phantom-completed load still reads ready (garbage
+            // A faulted load still reads ready (garbage
             // data) so speculative consumers never deadlock before the trap
             // reaches writeback. Only the RF write excludes traps.
             held.ready = held.valid && held.done && !held.store && held.rd_valid;
@@ -360,8 +543,17 @@ module MemoryLane
                 slots[i].pending <= 1'b0;
             end else slots[i] <= next_slot;
         end
-        assign forward_data_out[i] = slots[i].data;
-        assign forward_ready_out[i] = slots[i].ready;
+        // Early forward (load-to-use): in the cycle an aligned word load's
+        // response arrives, consumers take the raw bus word, one cycle before
+        // the slot registers it. Word only, so there is no shift or sign
+        // extension on this path; sub-word loads forward from the slot. The
+        // ready term is flops through a few gates (no trap kill: a trap cycle
+        // flushes everything anyway).
+        wire early_word = response_early && pending && !older_pending[i] &&
+            !slots[i].store && slots[i].rd_valid &&
+            slots[i].size == MEM_WORD && slots[i].offset == 2'b00;
+        assign forward_data_out[i] = early_word ? response_data : slots[i].data;
+        assign forward_ready_out[i] = slots[i].ready || early_word;
     end
 
     Slot last;
