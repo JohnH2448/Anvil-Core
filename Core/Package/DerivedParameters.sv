@@ -96,17 +96,19 @@ package DerivedParameters;
     localparam int unsigned CAP_FP_CONVERT_LANE_W = lane_counter_width(
         count_floating_lanes(1));
 
-    localparam int unsigned AGE_WIDTH = (Parameters::ISSUE_WIDTH > 1) ? $clog2(Parameters::ISSUE_WIDTH) : 1;
+    // Halfword instruction slots in one fetch window.
+    localparam int unsigned FETCH_SLOTS = Parameters::FETCH_WORDS * 2;
+    localparam int unsigned AGE_WIDTH =(Parameters::ISSUE_WIDTH > 1) ? $clog2(Parameters::ISSUE_WIDTH) : 1;
     // GShare PHT index carried with every instruction for training. One
     // constant-zero bit when GShare is off (synthesis removes it).
-    localparam int unsigned PHT_INDEX_W = Parameters::USE_GSHARE ? $clog2(Parameters::GSHARE_PHT_DEPTH) : 1;
+    localparam int unsigned PHT_INDEX_W = Parameters::ENABLE_GSHARE ? $clog2(Parameters::GSHARE_PHT_DEPTH) : 1;
     // RAS: predicted return target carried from fetch to Decode, and the rs1
     // value Decode derives from it for the BRU check. One constant bit when off.
-    localparam int unsigned RAS_TARGET_W = Parameters::USE_RAS ? FETCH_PC_WIDTH : 1;
-    localparam int unsigned RAS_CHECK_W = Parameters::USE_RAS ? 32 : 1;
+    localparam int unsigned RAS_TARGET_W = Parameters::ENABLE_RAS ? FETCH_PC_WIDTH : 1;
+    localparam int unsigned RAS_CHECK_W = Parameters::ENABLE_RAS ? 32 : 1;
     // RAS repair: snapshot = {pointer, count} before a window's RAS update;
     // restore = {enable, pop, snapshot}, sent back with a branch redirect.
-    localparam bit RAS_REPAIR_ON = Parameters::USE_RAS && Parameters::RAS_REPAIR;
+    localparam bit RAS_REPAIR_ON = Parameters::ENABLE_RAS && Parameters::ENABLE_RAS_REPAIR;
     localparam int unsigned RAS_PTR_W = $clog2(Parameters::RAS_DEPTH > 1 ? Parameters::RAS_DEPTH : 2);
     localparam int unsigned RAS_SNAP_W = RAS_REPAIR_ON ? 2 * RAS_PTR_W + 1 : 1;
     localparam int unsigned RAS_RESTORE_W = RAS_SNAP_W + 2;

@@ -1,5 +1,8 @@
-// Static BTFNT predictor for one fetch slot (used when USE_GSHARE = 0).
-module Predictor (
+// Static BTFNT predictor for one fetch slot (used when ENABLE_GSHARE = 0).
+module Predictor
+    import Parameters::*;
+    import DerivedParameters::*;
+(
     // Interface Clock and Reset Are Unused; Queue Registers Prediction Results
     input logic clk,
     input logic reset,

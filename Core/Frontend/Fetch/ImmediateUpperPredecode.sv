@@ -1,6 +1,7 @@
-module ImmediateUpperPredecode #(
-    parameter unsigned SUPPORT_FLOAT = 1
-)(
+module ImmediateUpperPredecode
+    import Parameters::*;
+    import DerivedParameters::*;
+(
     input logic [31:0] instruction,
     input logic is_compressed,
     output logic [6:0] upper_select

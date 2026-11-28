@@ -548,7 +548,7 @@ Operand lookahead starts from aged/refreshed retained or fresh producer snapshot
 It applies prospective accepted integer writers at index zero using precomputed
 source matches and youngest-writer priority, without live acceptance qualification
 before the comparisons. Actual consumption selects the final eligibility bit into
-its packet-aligned register. Stalls hold it; flush clears it. BYPASS_ENABLED and
+its packet-aligned register. Stalls hold it; flush clears it. ENABLE_BYPASS and
 execution/divider thresholds are applied in Decode. Snapshot/forwarding payload
 protocols and the registered write buffer remain unchanged; no added issue stage.
 

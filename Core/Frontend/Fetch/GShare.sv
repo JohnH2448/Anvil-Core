@@ -1,13 +1,9 @@
-module GShare 
+module GShare
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter unsigned FETCH_WORDS,
-    parameter unsigned GSHARE_GHR_DEPTH = Parameters::GSHARE_GHR_DEPTH,
-    parameter unsigned GSHARE_PHT_DEPTH = Parameters::GSHARE_PHT_DEPTH,
-    parameter unsigned TRAIN_SQUASHED_BRANCHES = Parameters::TRAIN_SQUASHED_BRANCHES
-)(
+(
     // Standard Inputs
     input logic clk,
     input logic reset,
@@ -18,7 +14,7 @@ module GShare
     output logic [$clog2(GSHARE_PHT_DEPTH)-1:0] branch_pht_index [FETCH_WORDS*2-1:0],
 
     // Early PHT read (see below), from the Queue.
-    input DerivedParameters::fetch_pc_t lookup_pc [FETCH_WORDS*2-1:0],
+    input fetch_pc_t lookup_pc [FETCH_WORDS*2-1:0],
     input logic lookup_capture,  // the arriving window enters staging
     input logic partial_capture, // the staging window transfers leaving a partial
     input logic use_partial,     // slot 0 of the staging window is that partial
@@ -55,7 +51,7 @@ module GShare
     endfunction
 
     // Target decode only (shared with the static predictor, no direction logic).
-    DerivedParameters::fetch_pc_t target_pc [FETCH_WORDS*2-1:0];
+    fetch_pc_t target_pc [FETCH_WORDS*2-1:0];
     logic target_wrapped [FETCH_WORDS*2-1:0];
     for (genvar i = 0; i < FETCH_WORDS*2; i++) begin : targets
         BranchTarget target (
@@ -159,7 +155,7 @@ module GShare
                 if (a_valid[j] && a_index[j] == train_pht[i]) old = b_new[j];
         end
         always_ff @(posedge clk) begin
-            a_valid[i] <= !reset_reg && train_valid[i] && (TRAIN_SQUASHED_BRANCHES || i == oldest_index);
+            a_valid[i] <= !reset_reg && train_valid[i] && (ENABLE_SQUASHED_TRAINING || i == oldest_index);
             a_taken[i] <= train_taken[i];
             a_index[i] <= train_pht[i];
             a_old[i] <= old;
@@ -226,7 +222,7 @@ module GShare
         if (write_valid) pht[write_index] <= write_value;
 
     // GHT Writes
-    if (TRAIN_SQUASHED_BRANCHES) begin : ghr_all
+    if (ENABLE_SQUASHED_TRAINING) begin : ghr_all
         // Every trained branch shifts in, oldest first, so the history follows
         // program order regardless of how branches paired at resolution.
         // Ages are distinct within a cycle; one pass per age keeps it a small

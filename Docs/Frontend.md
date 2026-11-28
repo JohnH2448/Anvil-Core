@@ -2,7 +2,7 @@
 
 Snapshot: 2026-11-17. A communication draft for drawing the final frontend schematic, based on the current RTL rather than every historical experiment. Read the views together: no single diagram below implies an extra pipeline register unless the box explicitly says **REG** or **FIFO**.
 
-Notation: solid arrows carry payload or state; dotted arrows carry control. W = ISSUE_WIDTH (implemented allocator supports 1 or 2), F = CACHE_LINE_WORDS, U = EXECUTION_UNROLL. Rectangular REG boxes are clock boundaries; other boxes are combinational. “Speculative” below means preparing queue-consumption outcomes, not issuing an instruction speculatively.
+Notation: solid arrows carry payload or state; dotted arrows carry control. W = ISSUE_WIDTH (implemented allocator supports 1 or 2), F = FETCH_WORDS, U = EXECUTION_UNROLL. Rectangular REG boxes are clock boundaries; other boxes are combinational. “Speculative” below means preparing queue-consumption outcomes, not issuing an instruction speculatively.
 
 ## 1. Whole frontend and its clock boundaries
 

@@ -1,8 +1,8 @@
 module BranchUnit
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
-#(
-    parameter bit CHECK_RETURN = 1'b0 // USE_RAS: a predicted-taken JALR must also hit its target
-)(
+(
     input BranchOperation_ operation,
     input logic [31:0] source_1,
     input logic [31:0] source_2,
@@ -15,6 +15,8 @@ module BranchUnit
     output logic misaligned,
     output logic taken // Resolved direction (for predictor training)
 );
+    // A predicted-taken JALR must also hit its target (RAS returns).
+    localparam bit CHECK_RETURN = ENABLE_RAS;
 
     logic actual_taken;
     logic [31:0] taken_target;

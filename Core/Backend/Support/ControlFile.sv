@@ -1,4 +1,6 @@
 module ControlFile
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
 #(
     parameter unsigned READ_PORTS = 1,

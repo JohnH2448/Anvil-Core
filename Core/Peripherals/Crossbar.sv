@@ -2,8 +2,8 @@
 // the shared instruction/data RAM.
 //   [0, UART_BASE)           CLINT (data only; fetches there read zero)
 //   [UART_BASE, RAM_BASE)    UART  (data only; fetches there read zero)
-//   [RAM_BASE, LIMIT]        RAM (data and fetch)
-//   above LIMIT              data: error; fetch: reads zero
+//   [RAM_BASE, MAX_MEMORY_ADDRESS]        RAM (data and fetch)
+//   above MAX_MEMORY_ADDRESS              data: error; fetch: reads zero
 //
 // Arbitration for the RAM: data first, then fetch. The RAM is banked, so the
 // fetch loses only when a data request claims a bank the fetch window needs.
@@ -28,12 +28,11 @@
 //     response is the target's output in its single response cycle, with no
 //     hold register. A simulation check guards the assumption.
 module Crossbar
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
 #(
-    parameter logic [31:0] UART_BASE = 32'h0000_0100,
-    parameter logic [31:0] RAM_BASE = Parameters::RAM_BASE,
-    parameter logic [31:0] LIMIT = Parameters::MAX_MEMORY_ADDRESS,
-    parameter unsigned FETCH_WORDS = Parameters::CACHE_LINE_WORDS
+    parameter logic [31:0] UART_BASE = 32'h0000_0100
 )(
     input logic clk, reset,
 
@@ -84,7 +83,7 @@ module Crossbar
 
     // ------------------------------------------------------------ data decode
     // Only aligned accesses proceed, so the word address bounds the access:
-    // an aligned access never crosses its word, and LIMIT ends a word.
+    // an aligned access never crosses its word, and MAX_MEMORY_ADDRESS ends a word.
     logic misaligned, out_of_range, to_ram, to_clint, to_uart;
     always_comb begin
         misaligned = 1'b1; // Reserved size encoding faults.
@@ -93,7 +92,7 @@ module Crossbar
             MEM_HALF: misaligned = request_address[0];
             MEM_WORD: misaligned = request_address[1:0] != 2'b00;
         endcase
-        out_of_range = !DerivedParameters::FULL_ADDRESS_SPACE && request_address[31:2] > LIMIT[31:2];
+        out_of_range = !FULL_ADDRESS_SPACE && request_address[31:2] > MAX_MEMORY_ADDRESS[31:2];
         to_clint = request_address[31:2] < UART_BASE[31:2];
         to_uart = !to_clint && request_address[31:2] < RAM_BASE[31:2];
         to_ram = !to_clint && !to_uart && !out_of_range;

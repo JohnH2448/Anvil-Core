@@ -1,9 +1,9 @@
 module Multiplier
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter unsigned EXECUTION_UNROLL = 4
-)(
+(
 
     // Standard Inputs
     input logic clk,

@@ -1,4 +1,5 @@
 module CoreTop
+    import Parameters::*;
     import DerivedParameters::*;
     import Definitions::*;
 (
@@ -8,7 +9,7 @@ module CoreTop
     // One request per cycle, response next cycle; fetch_valid low = not served.
     output logic fetch_request,
     output logic [31:0] fetch_address,
-    input logic [Parameters::CACHE_LINE_WORDS*32-1:0] fetch_data,
+    input logic [FETCH_WORDS*32-1:0] fetch_data,
     input logic fetch_valid,
 
     // Interrupt sources from outside the core. timer_pending/software_pending
@@ -34,7 +35,7 @@ module CoreTop
     DecoderPacket_ decoder_packet [TOTAL_LANE_COUNT-1:0];
     IssuerPacket_ issuer_packet [TOTAL_LANE_COUNT-1:0];
     logic accept_vector [TOTAL_LANE_COUNT-1:0];
-    logic watch [TOTAL_LANE_COUNT-1:0][Parameters::EXECUTION_UNROLL:0];
+    logic watch [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0];
     logic stall, redirect_fetch, redirect_taken;
     logic [AGE_WIDTH-1:0] redirect_slot;
     logic redirect_advanced, redirect_trap;

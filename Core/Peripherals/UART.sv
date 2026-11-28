@@ -12,7 +12,10 @@
 //
 // The RX_DATA read is a side effect, so it happens only on an enabled read,
 // i.e. a load the LSU actually sends to the bus.
-module UART (
+module UART
+    import Parameters::*;
+    import DerivedParameters::*;
+(
     input logic clk, reset,
 
     input logic enable, write,

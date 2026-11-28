@@ -3339,3 +3339,61 @@ Measured (BTB_ENTRIES 64):
 | Return steering | 1.659 (+4.7%) | 2.852 (+0.4%) |
 
 Both pass. Not synthesized.
+
+## 2026-11-27 - Parameterized shift and compare bypass (ENABLE_SHIFT_BYPASS, ENABLE_COMPARE_BYPASS)
+
+Why: a dependency-gap probe (scratch, unroll 3) charged 5.4% of CoreMark cycles and 0.6% of Dhrystone cycles to consumers of shifts waiting one issue cycle, because the 2026-11-22 change took shifts and compares out of index-zero bypass. Compare producers cost 0.6% (Dhrystone) and about 0% (CoreMark).
+
+Change:
+- `Parameters`: `ENABLE_SHIFT_BYPASS` (default 1) and `ENABLE_COMPARE_BYPASS` (default 0), both requiring BYPASS_ENABLED.
+- `Definitions::alu_bypassable` adds SLL/SRL/SRA and/or SLT/SLTU under the flags. Decode's `candidate_bypass_ready` is still the only place index-zero eligibility is granted.
+- `ArithmaticUnit`: `bypass_result` ORs in the shift and/or compare terms under the same flags. `result` is unchanged (fast | shift | compare).
+
+Invariant: the eligibility set (alu_bypassable) and the bypass output set (bypass_result) both follow the same two parameters.
+
+Timing risk: shift bypass puts the barrel shifter into the ALU bypass loop (`source_1/2` -> shifter -> bypass OR -> consumer operand mux). Compare bypass would put back the 2026-11-22 worst path (SLT/SLTU carry chain into result bit 0, WNS -0.525 at 5 ns), so it defaults off. Not synthesized.
+
+Measured (benchmark harness, both pass):
+
+| Config | Dhrystone DMIPS/MHz | CoreMark /MHz |
+|---|---|---|
+| Unroll 3, no shift/compare bypass | 1.659 | 2.852 |
+| Unroll 3, shift bypass | 1.668 (+0.5%) | 2.980 (+4.5%) |
+| Unroll 3, shift + compare bypass | 1.664 | 2.981 |
+| Unroll 1, no shift/compare bypass | 1.384 | 2.680 |
+| Unroll 1, shift bypass | 1.391 | 2.795 (+4.3%) |
+
+With shift bypass the probe shows no remaining shift-producer waits.
+
+## 2026-11-28 - Parameter cleanup: package-direct configuration and ENABLE_* naming
+
+Why: configuration reached modules two ways at once. Many modules took #() copies of package settings (EXECUTION_UNROLL, ISSUE_WIDTH, SUPPORT_*, FETCH_WORDS, ...) that every parent passed down unchanged, often with defaults that differed from the package (Multiplier/Divider defaulted to unroll 4, IntegerLane to divider pipe 3). Many also read `Parameters::X` directly in their bodies. Flag names mixed USE_*, *_ENABLED and ENABLE_*.
+
+Change (no intended behavior change):
+- `Parameters.sv` reorganized into sections (pipeline, ISA support, execution lanes, fetch, branch prediction, memory system, address map), with a one-line description above every setting. All flags are `bit`. RESET_VECTOR is `logic [31:0]` like the other addresses. The user's inline notes are kept verbatim.
+- Renames (old entries above keep the old names):
+
+| Old | New |
+|---|---|
+| CACHE_LINE_WORDS | FETCH_WORDS |
+| BYPASS_ENABLED | ENABLE_BYPASS |
+| USE_GSHARE | ENABLE_GSHARE |
+| TRAIN_SQUASHED_BRANCHES | ENABLE_SQUASHED_TRAINING |
+| USE_RAS | ENABLE_RAS |
+| RAS_REPAIR | ENABLE_RAS_REPAIR |
+| USE_BTB | ENABLE_BTB |
+| USE_STORE_BUFFER | ENABLE_STORE_BUFFER |
+| LSU_DIRECT_SEND | ENABLE_LSU_DIRECT_SEND |
+
+- Every module now does `import Parameters::*; import DerivedParameters::*;` and uses bare names. No module body uses `Parameters::` or `DerivedParameters::` qualifiers (the packages themselves still do).
+- Pass-through #() parameters were removed from: FloatingLane, BranchUnit, Divider, Multiplier, IntegerLane, MemoryLane, SerialLane, LoadStoreUnit, DecodeStage, DecoderSlice, RegisterSlice, InstructionLegality, the Immediate*/SystemTrap predecoders, Issuer, IssueContract, ProducerTable, DispatchTop, BTB, GShare, Queue, RAS, FetchTop, FrontendTop, Crossbar and RAM. Their instance overrides were removed too.
+- Local names that differed from the package now use the package name: Divider AUTO_PIPE -> DIVIDER_AUTO_PIPE; Queue/FetchTop/FrontendTop FIFO_WORDS -> FETCH_FIFO_WORDS; Queue SERVE_WORDS -> ISSUE_WIDTH; RAM BASE/LIMIT -> RAM_BASE/MAX_MEMORY_ADDRESS; Crossbar LIMIT -> MAX_MEMORY_ADDRESS; LoadStoreUnit LANES/STAGES -> MEMORY_LANE_COUNT/EXECUTION_UNROLL.
+- Meaningful local names stay, declared from the package as localparams: BranchUnit CHECK_RETURN = ENABLE_RAS; RAS FORWARD_PUSH = ENABLE_BTB; LoadStoreUnit DIRECT_SEND = ENABLE_LSU_DIRECT_SEND && MEMORY_LANE_COUNT == 1; SerialLane RETIRE_WIDTH = $clog2(ISSUE_WIDTH + 1).
+- `DerivedParameters::FETCH_SLOTS` (= 2 * FETCH_WORDS) replaces the RAS parameter and Queue's local of the same value.
+- Kept as #() parameters (genuinely per instance): lane kind (IS_*), LANE_ID, REGISTERED_INPUT, the FloatingLane forward matrices, register-file port counts, Crossbar UART_BASE and HEX_FILE.
+
+Invariant: Parameters.sv is the only place to reconfigure the core. A standalone unit (for example a Divider timing study) is now configured by editing Parameters.sv, not by #() overrides.
+
+Known breakage: the standalone harnesses under Tests/ that override removed parameters (DecodeQueueTest, DecoderTest, FetchTiming, FrontendTiming, IssuerSim, ...) no longer elaborate as written.
+
+Validation: Verilator lint-only of SystemTop with the full core is clean (no errors). Not simulated or synthesized.

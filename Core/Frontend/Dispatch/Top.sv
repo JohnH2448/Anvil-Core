@@ -1,12 +1,9 @@
 module DispatchTop
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter unsigned ISSUE_WIDTH = Parameters::ISSUE_WIDTH,
-    parameter unsigned EXECUTION_UNROLL = Parameters::EXECUTION_UNROLL,
-    parameter unsigned BYPASS_ENABLED = Parameters::BYPASS_ENABLED
-)(
+(
     input logic clk,
     input logic reset,
     input logic redirect_taken,
@@ -34,7 +31,7 @@ module DispatchTop
     input logic [6:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
     input logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     input TrapType_ serve_trap [ISSUE_WIDTH-1:0],
-    input DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
+    input fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
@@ -90,16 +87,7 @@ module DispatchTop
     logic [AGE_WIDTH-1:0] op_age [ISSUE_WIDTH-1:0];
     DecodeCapability_ op_type [ISSUE_WIDTH-1:0];
 
-    DecodeStage #(
-        .ISSUE_WIDTH(ISSUE_WIDTH),
-        .EXECUTION_UNROLL(EXECUTION_UNROLL),
-        .BYPASS_ENABLED(BYPASS_ENABLED),
-        .DIVIDER_AUTO_PIPE(Parameters::DIVIDER_AUTO_PIPE),
-        .SUPPORT_MUL(Parameters::SUPPORT_MUL),
-        .SUPPORT_DIV(Parameters::SUPPORT_DIV),
-        .SUPPORT_FLOAT(Parameters::SUPPORT_FLOAT),
-        .SUPPORT_ATOMIC(Parameters::SUPPORT_ATOMIC)
-    ) decode_stage (
+    DecodeStage decode_stage (
         .clk(clk),
         .stall(stall),
         .reset(reset),
@@ -161,11 +149,7 @@ module DispatchTop
         .rs2_capability_out(rs2_capability_out)
     );
 
-    Issuer #(
-        .ISSUE_WIDTH(ISSUE_WIDTH),
-        .EXECUTION_UNROLL(EXECUTION_UNROLL),
-        .BYPASS_ENABLED(BYPASS_ENABLED)
-    ) issuer (
+    Issuer issuer (
         .clk(clk),
         .reset(reset),
         .redirect_taken(redirect_taken),
@@ -201,11 +185,7 @@ module DispatchTop
         .op_type(op_type)
     );
 
-    ProducerTable #(
-        .ISSUE_WIDTH(ISSUE_WIDTH),
-        .EXECUTION_UNROLL(EXECUTION_UNROLL),
-        .DIVIDER_AUTO_PIPE(Parameters::DIVIDER_AUTO_PIPE)
-    ) producer_table (
+    ProducerTable producer_table (
         .clk(clk),
         .reset(reset),
         .redirect_taken(redirect_taken),

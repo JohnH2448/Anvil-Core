@@ -1,10 +1,9 @@
 module IssueContract
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter unsigned ISSUE_WIDTH = 2
-)(
+(
     // Input Metadata
     input LaneType_ lane_types [ISSUE_WIDTH-1:0],
     input logic packets_valid [ISSUE_WIDTH-1:0],

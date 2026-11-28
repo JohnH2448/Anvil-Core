@@ -1,4 +1,4 @@
-// Branch target buffer (instantiated by Queue when USE_BTB = 1).
+// Branch target buffer (instantiated by Queue when ENABLE_BTB = 1).
 //
 // Keyed by fetch-window start address (windows start at any halfword after a
 // redirect). A hit means "the window at this address ends in a taken branch;
@@ -16,10 +16,9 @@
 // A return-kind hit steers fetch to the RAS top: the BTB marks where a
 // return is, the RAS supplies its target. Other JALRs are never written.
 module BTB
+    import Parameters::*;
     import DerivedParameters::*;
-#(
-    parameter unsigned BTB_ENTRIES = Parameters::BTB_ENTRIES
-)(
+(
     input logic clk,
     input logic reset,
 

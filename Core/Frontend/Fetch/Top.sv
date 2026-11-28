@@ -1,17 +1,8 @@
 module FetchTop
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
-#(
-    parameter unsigned FETCH_WORDS = 2,
-    parameter unsigned SUPPORT_MUL = Parameters::SUPPORT_MUL,
-    parameter unsigned SUPPORT_DIV = Parameters::SUPPORT_DIV,
-    parameter unsigned SUPPORT_FLOAT = Parameters::SUPPORT_FLOAT,
-    parameter unsigned SUPPORT_ATOMIC = Parameters::SUPPORT_ATOMIC,
-    parameter unsigned FIFO_WORDS = 8,
-    parameter unsigned ISSUE_WIDTH = 2,
-    parameter unsigned RESET_VECTOR = 32'h0000_0000,
-    parameter unsigned USE_GSHARE = Parameters::USE_GSHARE,
-    parameter unsigned USE_RAS = Parameters::USE_RAS
-)(
+(
 
     // Standard Inputs
     input logic clk,
@@ -48,23 +39,23 @@ module FetchTop
     output logic [6:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
     output logic serve_fp_consumer [ISSUE_WIDTH-1:0],
     output TrapType_ serve_trap [ISSUE_WIDTH-1:0],
-    output DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
+    output fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     output logic serve_valid_reg [ISSUE_WIDTH-1:0],
     output logic serve_c_reg [ISSUE_WIDTH-1:0],
     output logic serve_taken_reg [ISSUE_WIDTH-1:0],
     output logic serve_branch_reg [ISSUE_WIDTH-1:0],
-    output logic [DerivedParameters::PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
-    output logic [DerivedParameters::RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0],
-    output logic [DerivedParameters::RAS_SNAP_W-1:0] serve_snap_reg [ISSUE_WIDTH-1:0],
+    output logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
+    output logic [RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0],
+    output logic [RAS_SNAP_W-1:0] serve_snap_reg [ISSUE_WIDTH-1:0],
     // RAS repair: {enable, pop, snapshot} with the registered branch redirect.
-    input logic [DerivedParameters::RAS_RESTORE_W-1:0] redirect_ras,
+    input logic [RAS_RESTORE_W-1:0] redirect_ras,
 
     // GShare training (registered, fires once per resolved conditional branch).
-    // Unused when USE_GSHARE = 0.
-    input logic train_valid [DerivedParameters::BRU_LANE_COUNT-1:0],
-    input logic train_taken [DerivedParameters::BRU_LANE_COUNT-1:0],
-    input logic [DerivedParameters::AGE_WIDTH-1:0] train_age [DerivedParameters::BRU_LANE_COUNT-1:0],
-    input logic [DerivedParameters::PHT_INDEX_W-1:0] train_pht [DerivedParameters::BRU_LANE_COUNT-1:0],
+    // Unused when ENABLE_GSHARE = 0.
+    input logic train_valid [BRU_LANE_COUNT-1:0],
+    input logic train_taken [BRU_LANE_COUNT-1:0],
+    input logic [AGE_WIDTH-1:0] train_age [BRU_LANE_COUNT-1:0],
+    input logic [PHT_INDEX_W-1:0] train_pht [BRU_LANE_COUNT-1:0],
 
     // Consumption from Decode Stage
     input logic stall,
@@ -75,31 +66,22 @@ module FetchTop
     Definitions::BranchOutput_ branch_output [FETCH_WORDS*2-1:0]; // to the Queue (after the RAS override)
     Definitions::BranchOutput_ raw_output [FETCH_WORDS*2-1:0];    // direction predictor
     logic ras_commit;
-    DerivedParameters::fetch_pc_t early_lookup_pc [FETCH_WORDS*2-1:0];
+    fetch_pc_t early_lookup_pc [FETCH_WORDS*2-1:0];
     logic early_lookup_capture, early_partial_capture, early_use_partial;
     logic ras_stage_transfer, ras_prediction_valid;
     logic ras_stage_keep [FETCH_WORDS*2-1:0];
-    logic [DerivedParameters::RAS_SNAP_W-1:0] ras_snapshot;
-    DerivedParameters::fetch_pc_t ras_top; // RAS top for return-kind BTB steers
+    logic [RAS_SNAP_W-1:0] ras_snapshot;
+    fetch_pc_t ras_top; // RAS top for return-kind BTB steers
     Definitions::BranchInput_ ras_commit_payload [FETCH_WORDS*2-1:0];
     logic ras_commit_keep [FETCH_WORDS*2-1:0], ras_commit_taken [FETCH_WORDS*2-1:0];
-    logic [DerivedParameters::PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0];
+    logic [PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0];
     logic [31:0] req_address;
     logic req_valid;
     logic req_ready;
     assign fetch_request = req_valid;
     assign fetch_address = req_address;
 
-    Queue #(
-        .FETCH_WORDS(FETCH_WORDS),
-        .SUPPORT_MUL(SUPPORT_MUL),
-        .SUPPORT_DIV(SUPPORT_DIV),
-        .SUPPORT_FLOAT(SUPPORT_FLOAT),
-        .SUPPORT_ATOMIC(SUPPORT_ATOMIC),
-        .FIFO_WORDS(FIFO_WORDS),
-        .SERVE_WORDS(ISSUE_WIDTH),
-        .RESET_VECTOR(RESET_VECTOR)
-    ) queue (
+    Queue queue (
         .clk(clk),
         .flush(1'b0), // Reserved queue interface; redirects perform the active flush.
         .reset(reset),
@@ -155,8 +137,8 @@ module FetchTop
 
     // Direction predictor: GShare, or the static BTFNT per slot. The PHT index
     // is a constant zero without GShare, so its carried bit is removed.
-    if (USE_GSHARE) begin : gshare_predictor
-        GShare #(.FETCH_WORDS(FETCH_WORDS)) gshare (
+    if (ENABLE_GSHARE) begin : gshare_predictor
+        GShare gshare (
             .clk(clk),
             .reset(reset),
             .branch_input(branch_input),
@@ -187,11 +169,11 @@ module FetchTop
     // slots. A return predicts taken to the top of stack (a flop) when the
     // stack is not empty; any other JALR predicts not taken. One 2:1 select
     // after the predictor, in parallel decode from the staging data.
-    if (USE_RAS) begin : return_stack
+    if (ENABLE_RAS) begin : return_stack
         logic slot_jalr [FETCH_WORDS*2-1:0], slot_return [FETCH_WORDS*2-1:0];
         logic top_valid;
-        DerivedParameters::fetch_pc_t top;
-        RAS #(.FETCH_SLOTS(FETCH_WORDS*2), .FORWARD_PUSH(Parameters::USE_BTB != 0)) ras (
+        fetch_pc_t top;
+        RAS ras (
             .clk(clk),
             .reset(reset),
             .redirect_taken(redirect_taken),

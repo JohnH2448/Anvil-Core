@@ -1,8 +1,10 @@
 // Parallel to branch prediction: system encoding/CSR policy only.
 // Opcode and compressed qualification remain in InstructionLegality.
 module SystemTrapPredecode
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
-#(parameter unsigned SUPPORT_FLOAT = 1)(
+(
     input logic [31:0] instruction,
     output TrapType_ trap
 );

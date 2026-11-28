@@ -11,6 +11,8 @@
 // writing mtimecmp or msip). A rising edge of external_interrupt becomes one
 // INT_EXTERNAL pulse, which sets the sticky mip.MEIP; trap entry clears it.
 module SystemTop
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
 #(
     parameter HEX_FILE = "Core/Frontend/Fetch/program.hex" // Word 0 = RAM_BASE.
@@ -29,7 +31,6 @@ module SystemTop
     InterruptType_ interrupt_type;
     logic [63:0] mtime;
 
-    localparam int unsigned FETCH_WORDS = Parameters::CACHE_LINE_WORDS;
     logic fetch_request, fetch_valid, ram_fetch_enable;
     logic [31:0] fetch_address, ram_fetch_address;
     logic [FETCH_WORDS*32-1:0] fetch_data, ram_fetch_data;

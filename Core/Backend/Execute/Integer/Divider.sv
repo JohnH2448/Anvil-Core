@@ -1,10 +1,9 @@
 module Divider
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter logic [31:0] EXECUTION_UNROLL = 4,
-    parameter logic [31:0] AUTO_PIPE = 3
-)(
+(
     input logic clk, 
     input logic reset, 
     input logic stall,
@@ -18,14 +17,14 @@ module Divider
     output logic valid_out,
     output logic iteration_stall
 );
-    localparam integer unsigned STAGES=(32+AUTO_PIPE-1)/AUTO_PIPE;
+    localparam integer unsigned STAGES=(32+DIVIDER_AUTO_PIPE-1)/DIVIDER_AUTO_PIPE;
     // Register 0 is the magnitude latch at lane index 2. The lane's last
     // execution slot is index EXECUTION_UNROLL+1, hence this internal boundary.
     localparam integer unsigned ITERATION_INDEX=EXECUTION_UNROLL-1;
-    localparam integer unsigned CHOICES=1<<AUTO_PIPE;
-    localparam integer unsigned MW=32+AUTO_PIPE;
-    if (AUTO_PIPE<1 || AUTO_PIPE>4) begin : invalid_configuration
-        initial $fatal(1,"DividerParallel AUTO_PIPE must be in 1..4");
+    localparam integer unsigned CHOICES=1<<DIVIDER_AUTO_PIPE;
+    localparam integer unsigned MW=32+DIVIDER_AUTO_PIPE;
+    if (DIVIDER_AUTO_PIPE<1 || DIVIDER_AUTO_PIPE>4) begin : invalid_configuration
+        initial $fatal(1,"DividerParallel DIVIDER_AUTO_PIPE must be in 1..4");
     end
 
     logic signed_op, neg_a, neg_b;
@@ -114,8 +113,8 @@ module Divider
     end
 
     for (genvar s=0;s<STAGES;s++) begin : stage
-        localparam integer unsigned BITS=(32-s*AUTO_PIPE<AUTO_PIPE) ? 32-s*AUTO_PIPE : AUTO_PIPE;
-        localparam integer unsigned N=s*AUTO_PIPE+BITS;
+        localparam integer unsigned BITS=(32-s*DIVIDER_AUTO_PIPE<DIVIDER_AUTO_PIPE) ? 32-s*DIVIDER_AUTO_PIPE : DIVIDER_AUTO_PIPE;
+        localparam integer unsigned N=s*DIVIDER_AUTO_PIPE+BITS;
         localparam integer unsigned DIGITS=1<<BITS;
         logic [N-1:0] shifted;
         logic [N:0] trial [0:DIGITS-1];
@@ -124,7 +123,7 @@ module Divider
         logic [N-1:0] rem_next;
         logic [BITS-1:0] digit_next;
         assign shifted=(N'(remainder_value[s])<<BITS) |
-                       N'(dividend[s][31-s*AUTO_PIPE -: BITS]);
+                       N'(dividend[s][31-s*DIVIDER_AUTO_PIPE -: BITS]);
         assign trial[0]={1'b0,shifted};
         assign ge[0]=1'b1;
         assign ge[DIGITS]=1'b0;

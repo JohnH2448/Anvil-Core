@@ -1,4 +1,4 @@
-// Return address stack (instantiated by FetchTop when USE_RAS = 1).
+// Return address stack (instantiated by FetchTop when ENABLE_RAS = 1).
 //
 // Read (prediction stage, combinational): per fetch slot, flags whether the
 // slot is a JALR-class instruction and whether it is a return, and offers the
@@ -22,15 +22,9 @@
 // mispredicted branch can corrupt the stack. That costs only predictions,
 // since the BRU checks every predicted return.
 module RAS
+    import Parameters::*;
     import DerivedParameters::*;
-#(
-    parameter unsigned FETCH_SLOTS = 4,
-    parameter unsigned RAS_DEPTH = Parameters::RAS_DEPTH,
-    // With the BTB, a correctly steered call keeps its target window behind it,
-    // so that window is predicted before the call commits its push. Forward
-    // the pending push from the prediction register to the read.
-    parameter bit FORWARD_PUSH = 1'b0
-)(
+(
     input logic clk,
     input logic reset,
     input logic redirect_taken,
@@ -61,6 +55,10 @@ module RAS
     output logic [RAS_SNAP_W-1:0] snapshot,
     input logic [RAS_RESTORE_W-1:0] restore
 );
+    // With the BTB, a correctly steered call keeps its target window behind it,
+    // so that window is predicted before the call commits its push. Forward
+    // the pending push from the prediction register to the read.
+    localparam bit FORWARD_PUSH = ENABLE_BTB;
     if (RAS_DEPTH < 2 || (RAS_DEPTH & (RAS_DEPTH - 1)) != 0) begin : bad_ras_depth
         $fatal(1, "RAS: RAS_DEPTH (%0d) must be a power of two >= 2", RAS_DEPTH);
     end

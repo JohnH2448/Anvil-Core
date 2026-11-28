@@ -1,12 +1,9 @@
-module Issuer 
+module Issuer
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter unsigned EXECUTION_UNROLL = 1,
-    parameter unsigned BYPASS_ENABLED = 1, 
-    parameter unsigned ISSUE_WIDTH = 2
-)(
+(
 
     // Standard Inputs
     input logic clk,
@@ -171,9 +168,7 @@ module Issuer
 
     // Registered lookahead drives readiness; corrected producer metadata now feeds
     // forwarding payload only, independently of acceptance.
-    IssueContract #(
-        .ISSUE_WIDTH(ISSUE_WIDTH)
-    ) issue_contract (
+    IssueContract issue_contract (
         .lane_types(lane_types_out),
         .packets_valid(packets_valid),
         .group_raw(group_raw),
@@ -216,13 +211,13 @@ module Issuer
     // Preselect lanes from packet capabilities/validity, independently of readiness.
     logic [AGE_WIDTH-1:0] index_array [TOTAL_LANE_COUNT-1:0];
     logic [TOTAL_LANE_COUNT-1:0] assigned_lanes [ISSUE_WIDTH-1:0];
-    localparam int unsigned INT_LANE_MAX = 1 + Parameters::INTEGER_LANE_COUNT;
-    localparam int unsigned MEM_LANE_MAX = INT_LANE_MAX + Parameters::MEMORY_LANE_COUNT;
+    localparam int unsigned INT_LANE_MAX = 1 + INTEGER_LANE_COUNT;
+    localparam int unsigned MEM_LANE_MAX = INT_LANE_MAX + MEMORY_LANE_COUNT;
     localparam logic [TOTAL_LANE_COUNT-1:0] SINGLE_LANES =
         TOTAL_LANE_COUNT'(1) |
-        (TOTAL_LANE_COUNT'(Parameters::INTEGER_LANE_COUNT == 1) << 1) |
-        (TOTAL_LANE_COUNT'(Parameters::MEMORY_LANE_COUNT == 1) << INT_LANE_MAX) |
-        (TOTAL_LANE_COUNT'(Parameters::FLOATING_LANE_COUNT == 1) << MEM_LANE_MAX);
+        (TOTAL_LANE_COUNT'(INTEGER_LANE_COUNT == 1) << 1) |
+        (TOTAL_LANE_COUNT'(MEMORY_LANE_COUNT == 1) << INT_LANE_MAX) |
+        (TOTAL_LANE_COUNT'(FLOATING_LANE_COUNT == 1) << MEM_LANE_MAX);
 
     always_comb begin
         logic [TOTAL_LANE_COUNT-1:0] compatible [ISSUE_WIDTH-1:0];
@@ -237,25 +232,25 @@ module Issuer
             case (packets_out[slot].common.capability)
                 CAP_SYSTEM, CAP_CSR: compatible[slot][0] = 1'b1;
                 CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV: begin
-                    for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
+                    for (int unsigned lane = 0; lane < INTEGER_LANE_COUNT; lane++) begin
                         case (packets_out[slot].common.capability)
-                            CAP_ALU: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][0];
-                            CAP_BRU: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][1];
-                            CAP_MUL: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][2];
-                            CAP_DIV: compatible[slot][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][3];
+                            CAP_ALU: compatible[slot][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][0];
+                            CAP_BRU: compatible[slot][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][1];
+                            CAP_MUL: compatible[slot][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][2];
+                            CAP_DIV: compatible[slot][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][3];
                             default: ;
                         endcase
                     end
                 end
                 CAP_MEMORY, CAP_ATOMIC: begin
-                    for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
-                        compatible[slot][INT_LANE_MAX+lane] = DerivedParameters::EFFECTIVE_MEMORY_CAPS[lane]
+                    for (int unsigned lane = 0; lane < MEMORY_LANE_COUNT; lane++) begin
+                        compatible[slot][INT_LANE_MAX+lane] = EFFECTIVE_MEMORY_CAPS[lane]
                             [2'(packets_out[slot].common.capability == CAP_ATOMIC)];
                     end
                 end
                 CAP_FP_F, CAP_FP_CONVERT: begin
-                    for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
-                        compatible[slot][MEM_LANE_MAX+lane] = DerivedParameters::EFFECTIVE_FLOATING_CAPS[lane]
+                    for (int unsigned lane = 0; lane < FLOATING_LANE_COUNT; lane++) begin
+                        compatible[slot][MEM_LANE_MAX+lane] = EFFECTIVE_FLOATING_CAPS[lane]
                             [packets_out[slot].common.capability == CAP_FP_CONVERT];
                     end
                 end
@@ -318,12 +313,12 @@ module Issuer
         for (int lane = 0; lane < TOTAL_LANE_COUNT; lane++)
             for (int index = 0; index <= EXECUTION_UNROLL; index++)
                 watch[lane][index] = 1'b0;
-        for (int lane = 1; lane <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT; lane++) begin
+        for (int lane = 1; lane <= INTEGER_LANE_COUNT + MEMORY_LANE_COUNT; lane++) begin
             need_1 = accept_raw[lane] && decoder_packet[lane].common.rs1_valid &&
-                !issuer_packet[lane].read_reg_file_1 && !(BYPASS_ENABLED && issuer_packet[lane].use_bypass_1);
+                !issuer_packet[lane].read_reg_file_1 && !(ENABLE_BYPASS && issuer_packet[lane].use_bypass_1);
             need_2 = accept_raw[lane] && decoder_packet[lane].common.rs2_valid &&
-                !issuer_packet[lane].read_reg_file_2 && !(BYPASS_ENABLED && issuer_packet[lane].use_bypass_2);
-            for (int producer = 1; producer <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT; producer++) begin
+                !issuer_packet[lane].read_reg_file_2 && !(ENABLE_BYPASS && issuer_packet[lane].use_bypass_2);
+            for (int producer = 1; producer <= INTEGER_LANE_COUNT + MEMORY_LANE_COUNT; producer++) begin
                 for (int index = 1; index <= EXECUTION_UNROLL; index++) begin
                     if (forward_slot_dynamic(producer, index)) begin
                         if (need_1 && issuer_packet[lane].forward_lane_1 == LANE_WIDTH'(producer) &&

@@ -1,17 +1,9 @@
 module DecodeStage
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-    import DerivedParameters::*;
-#(
-    parameter unsigned ISSUE_WIDTH = 2,
-    parameter unsigned EXECUTION_UNROLL = Parameters::EXECUTION_UNROLL,
-    parameter unsigned BYPASS_ENABLED = Parameters::BYPASS_ENABLED,
-    parameter unsigned DIVIDER_AUTO_PIPE = Parameters::DIVIDER_AUTO_PIPE,
-    parameter unsigned SUPPORT_MUL = 1,
-    parameter unsigned SUPPORT_DIV = 1,
-    parameter unsigned SUPPORT_FLOAT = 1,
-    parameter unsigned SUPPORT_ATOMIC = 1
-)(
+(
 
     // Standard Inputs
     input logic clk,
@@ -39,7 +31,7 @@ module DecodeStage
     // Pending enabled interrupt (NONE if none) from the serial lane's flops.
     input TrapType_ interrupt_request,
     input logic serve_valid_reg [ISSUE_WIDTH-1:0],
-    input DerivedParameters::fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
+    input fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
     input logic serve_c_reg [ISSUE_WIDTH-1:0],
     input logic serve_taken_reg [ISSUE_WIDTH-1:0],
     input logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
@@ -129,12 +121,7 @@ module DecodeStage
     DecoderPacket_ packets [ISSUE_WIDTH-1:0];
     LaneType_ lane_types [ISSUE_WIDTH-1:0];
     for (genvar i = 0; i < ISSUE_WIDTH; i++) begin : decoders
-        DecoderSlice #(
-            .SUPPORT_MUL(SUPPORT_MUL),
-            .SUPPORT_DIV(SUPPORT_DIV),
-            .SUPPORT_FLOAT(SUPPORT_FLOAT),
-            .SUPPORT_ATOMIC(SUPPORT_ATOMIC)
-        ) decoder (
+        DecoderSlice decoder (
             .instruction(serve_data_reg[i]),
             .rs1_in(serve_rs1[i]),
             .rs2_in(serve_rs2[i]),
@@ -317,38 +304,38 @@ module DecodeStage
         assign structural_sources[ISSUE_WIDTH + source_slot] = packets[source_slot];
     end
     // Static lane feasibility for fixed retained/refill sources.
-    localparam int unsigned MEMORY_LANE_BASE = 1 + Parameters::INTEGER_LANE_COUNT;
-    localparam int unsigned FLOATING_LANE_BASE = MEMORY_LANE_BASE + Parameters::MEMORY_LANE_COUNT;
+    localparam int unsigned MEMORY_LANE_BASE = 1 + INTEGER_LANE_COUNT;
+    localparam int unsigned FLOATING_LANE_BASE = MEMORY_LANE_BASE + MEMORY_LANE_COUNT;
     logic [TOTAL_LANE_COUNT-1:0] compatible_lanes [SOURCE_COUNT];
     always_comb begin
         for (int unsigned i = 0; i < SOURCE_COUNT; i++) begin
             compatible_lanes[i] = '0;
             unique case (structural_sources[i].common.capability)
                 CAP_ALU, CAP_BRU, CAP_MUL, CAP_DIV: begin
-                    for (int unsigned lane = 0; lane < Parameters::INTEGER_LANE_COUNT; lane++) begin
-                        if (lane < Parameters::INTEGER_LANE_COUNT) begin
+                    for (int unsigned lane = 0; lane < INTEGER_LANE_COUNT; lane++) begin
+                        if (lane < INTEGER_LANE_COUNT) begin
                             unique case (structural_sources[i].common.capability)
-                                CAP_ALU: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][0];
-                                CAP_BRU: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][1];
-                                CAP_MUL: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][2];
-                                CAP_DIV: compatible_lanes[i][lane+1] = DerivedParameters::EFFECTIVE_INTEGER_CAPS[lane][3];
+                                CAP_ALU: compatible_lanes[i][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][0];
+                                CAP_BRU: compatible_lanes[i][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][1];
+                                CAP_MUL: compatible_lanes[i][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][2];
+                                CAP_DIV: compatible_lanes[i][lane+1] = EFFECTIVE_INTEGER_CAPS[lane][3];
                             endcase
                         end
                     end
                 end
                 CAP_MEMORY, CAP_ATOMIC: begin
-                    for (int unsigned lane = 0; lane < Parameters::MEMORY_LANE_COUNT; lane++) begin
-                        if (lane < Parameters::MEMORY_LANE_COUNT) begin
+                    for (int unsigned lane = 0; lane < MEMORY_LANE_COUNT; lane++) begin
+                        if (lane < MEMORY_LANE_COUNT) begin
                             compatible_lanes[i][MEMORY_LANE_BASE + lane] =
-                                DerivedParameters::EFFECTIVE_MEMORY_CAPS[lane][2'(structural_sources[i].common.capability == CAP_ATOMIC)];
+                                EFFECTIVE_MEMORY_CAPS[lane][2'(structural_sources[i].common.capability == CAP_ATOMIC)];
                         end
                     end
                 end
                 CAP_FP_F, CAP_FP_CONVERT: begin
-                    for (int unsigned lane = 0; lane < Parameters::FLOATING_LANE_COUNT; lane++) begin
-                        if (lane < Parameters::FLOATING_LANE_COUNT) begin
+                    for (int unsigned lane = 0; lane < FLOATING_LANE_COUNT; lane++) begin
+                        if (lane < FLOATING_LANE_COUNT) begin
                             compatible_lanes[i][FLOATING_LANE_BASE + lane] =
-                                DerivedParameters::EFFECTIVE_FLOATING_CAPS[lane][structural_sources[i].common.capability == CAP_FP_CONVERT];
+                                EFFECTIVE_FLOATING_CAPS[lane][structural_sources[i].common.capability == CAP_FP_CONVERT];
                         end
                     end
                 end
@@ -457,9 +444,10 @@ module DecodeStage
         // Mirrors issue_write except acceptance/stall/flush, which are implicit
         // in the chosen outcome and the capture enable/validity.
         assign candidate_writes[writer] = writes_integer_producer(packets_out[writer]);
-        // Sole source of index-zero (bypass) eligibility. Compares and shifts
-        // are excluded and wait for the index-one registered forward.
-        assign candidate_bypass_ready[writer] = BYPASS_ENABLED &&
+        // Sole source of index-zero (bypass) eligibility. Shifts and compares
+        // are included only with ENABLE_SHIFT_BYPASS / ENABLE_COMPARE_BYPASS;
+        // otherwise they wait for the index-one registered forward.
+        assign candidate_bypass_ready[writer] = ENABLE_BYPASS &&
             packets_out[writer].common.capability == CAP_ALU &&
             alu_bypassable(packets_out[writer].alu.operation);
     end

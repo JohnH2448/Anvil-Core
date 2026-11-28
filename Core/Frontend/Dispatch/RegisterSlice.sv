@@ -1,11 +1,8 @@
 module RegisterSlice
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
-#(
-    parameter unsigned SUPPORT_MUL = 1,
-    parameter unsigned SUPPORT_DIV = 1,
-    parameter unsigned SUPPORT_FLOAT = 1,
-    parameter unsigned SUPPORT_ATOMIC = 1
-)(
+(
     input logic [31:0] instruction,
     input logic is_compressed,
     output logic [4:0] rs1,

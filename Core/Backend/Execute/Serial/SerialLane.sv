@@ -27,14 +27,12 @@
 // writes mepc/mcause/mstatus/mip and drives trap_target, the frontend
 // redirect PC, from flops only.
 module SerialLane
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
 #(
-    parameter bit REGISTERED_INPUT = 1'b0,
-    parameter unsigned EXECUTION_UNROLL = 1, // execution stages
-    parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
-    parameter unsigned RETIRE_WIDTH = 2 // width of the per-cycle retire counts
+    parameter bit REGISTERED_INPUT = 1'b0
 )(
     input logic clk,
     input logic reset,
@@ -112,6 +110,8 @@ module SerialLane
     output TrapType_ result_trap_type,
     output logic [31:0] result_pc
 );
+    // Width of the per-cycle retire counts.
+    localparam int unsigned RETIRE_WIDTH = $clog2(ISSUE_WIDTH + 1);
     logic reset_reg;
     always_ff @(posedge clk) reset_reg <= reset;
     logic reset_active;
@@ -200,11 +200,11 @@ module SerialLane
     // mscratch is writable. FS is fixed Off, so FP CSRs have no storage.
     // Whitelisted read-only-zero CSRs map to ROZ_R: zero, writes discarded.
     localparam logic [31:0] MISA_VALUE = 32'h4000_0000 | // MXL = 1 (RV32)
-        (32'(Parameters::SUPPORT_ATOMIC != 0) << 0) | // A
+        (32'(SUPPORT_ATOMIC != 0) << 0) | // A
         (32'(1) << 2) | // C
-        (32'(Parameters::SUPPORT_FLOAT != 0) << 5) | // F
+        (32'(SUPPORT_FLOAT != 0) << 5) | // F
         (32'(1) << 8) | // I
-        (32'(Parameters::SUPPORT_MUL != 0 && Parameters::SUPPORT_DIV != 0) << 12); // M
+        (32'(SUPPORT_MUL != 0 && SUPPORT_DIV != 0) << 12); // M
     localparam int unsigned MSI = 3, MTI = 7, MEI = 11;
 
     logic mstatus_mie, mstatus_mpie;

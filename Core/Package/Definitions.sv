@@ -181,14 +181,19 @@ package Definitions;
         return 1'b0;
     endfunction
 
-    // Index-zero bypass eligibility for an ALU producer. Only operations whose
-    // result is a short AND-OR over the adder and bitwise logic are bypassed;
-    // compares and shifts reach consumers through the registered forward at
-    // index one. Decode's candidate_bypass_ready and the lane's bypass output
-    // (ArithmaticUnit bypass_result) must agree on this set.
+    // Index-zero bypass eligibility for an ALU producer. Always: add, sub, xor,
+    // or, and (a short AND-OR over the adder and bitwise logic). Shifts with
+    // ENABLE_SHIFT_BYPASS, compares with ENABLE_COMPARE_BYPASS; otherwise they
+    // reach consumers through the registered forward at index one. Decode's
+    // candidate_bypass_ready and the lane's bypass output (ArithmaticUnit
+    // bypass_result) must agree on this set.
     function automatic logic alu_bypassable(input Enumerations::AluOperation_ operation);
         return operation inside {Enumerations::ALU_ADD, Enumerations::ALU_SUB,
-            Enumerations::ALU_XOR, Enumerations::ALU_OR, Enumerations::ALU_AND};
+                Enumerations::ALU_XOR, Enumerations::ALU_OR, Enumerations::ALU_AND} ||
+            (Parameters::ENABLE_SHIFT_BYPASS &&
+                operation inside {Enumerations::ALU_SLL, Enumerations::ALU_SRL, Enumerations::ALU_SRA}) ||
+            (Parameters::ENABLE_COMPARE_BYPASS &&
+                operation inside {Enumerations::ALU_SLT, Enumerations::ALU_SLTU});
     endfunction
 
     // Eligibility after one advancing edge. Thresholds are shifted back by one

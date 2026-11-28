@@ -1,4 +1,5 @@
 module MemoryLane
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
@@ -7,9 +8,6 @@ module MemoryLane
     parameter unsigned IS_FLOAT = 1,
     parameter unsigned IS_ATOMIC = 1,
     parameter bit REGISTERED_INPUT = 1'b0,
-    parameter unsigned EXECUTION_UNROLL = 1, // execution stages
-    parameter unsigned BYPASS_ENABLED = 1, // worth considering for only alu, no bru
-    parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
     parameter unsigned LANE_ID = 0, // 0 is first
     parameter logic FLOAT_FORWARD_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0] = '{default: '0},
     parameter logic INT_FORWARD_POINT_MATRIX [TOTAL_LANE_COUNT-1:0][EXECUTION_UNROLL:0] = '{default: '0}
@@ -175,7 +173,7 @@ module MemoryLane
         forward_data_2 = 'x;
         forward_ready_1 = 1'bx; // Unmatched is structurally impossible.
         forward_ready_2 = 1'bx;
-        for (int lane = 1; lane <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT; lane++) begin
+        for (int lane = 1; lane <= INTEGER_LANE_COUNT + MEMORY_LANE_COUNT; lane++) begin
             for (int index = 1; index <= EXECUTION_UNROLL; index++) begin
                 if (issuer_payload[0].forward_lane_1 == LANE_WIDTH'(lane) &&
                     (EXECUTION_UNROLL == 1 || issuer_payload[0].forward_index_1 == UNROLL_WIDTH'(index))) begin
@@ -194,18 +192,18 @@ module MemoryLane
         operand_stall =
             (decoder_payload[0].common.rs1_valid &&
              !issuer_payload[0].read_reg_file_1 &&
-             !(BYPASS_ENABLED && issuer_payload[0].use_bypass_1) &&
+             !(ENABLE_BYPASS && issuer_payload[0].use_bypass_1) &&
              !forward_ready_1) ||
             (decoder_payload[0].common.rs2_valid &&
              !issuer_payload[0].read_reg_file_2 &&
-             !(BYPASS_ENABLED && issuer_payload[0].use_bypass_2) &&
+             !(ENABLE_BYPASS && issuer_payload[0].use_bypass_2) &&
              !forward_ready_2);
     end
 
     // Bypass Data Selection
     logic [31:0] bypass_data_1;
     logic [31:0] bypass_data_2;
-    if (BYPASS_ENABLED) begin : gen_bypass_selection
+    if (ENABLE_BYPASS) begin : gen_bypass_selection
         always_comb begin
             bypass_data_1 = bypass_data[issuer_payload[0].forward_lane_1];
             bypass_data_2 = bypass_data[issuer_payload[0].forward_lane_2];
@@ -237,7 +235,7 @@ module MemoryLane
         if (issuer_payload[0].read_reg_file_2) begin
             temp_source_2 = file_data_2;
         end
-        if (BYPASS_ENABLED) begin
+        if (ENABLE_BYPASS) begin
             if (issuer_payload[0].use_bypass_1 != '0) begin
                 temp_source_1 = bypass_data_1;
             end
@@ -260,8 +258,8 @@ module MemoryLane
             source_1 <= temp_source_1;
             source_2 <= temp_source_2;
             base_clear_q <= !temp_source_1[31] &&
-                (temp_source_1 >= Parameters::RAM_BASE + 32'd2048 ||
-                 (!decoder_payload[0].common.immediate[31] && temp_source_1 >= Parameters::RAM_BASE));
+                (temp_source_1 >= RAM_BASE + 32'd2048 ||
+                 (!decoder_payload[0].common.immediate[31] && temp_source_1 >= RAM_BASE));
         end
     end
 
@@ -326,8 +324,8 @@ module MemoryLane
             MEM_HALF: misaligned = effective_address[0];
             MEM_WORD: misaligned = effective_address[1:0] != 2'b00;
         endcase
-        agu_fault = misaligned || (!DerivedParameters::FULL_ADDRESS_SPACE &&
-            effective_address[31:2] > Parameters::MAX_MEMORY_ADDRESS[31:2]);
+        agu_fault = misaligned || (!FULL_ADDRESS_SPACE &&
+            effective_address[31:2] > MAX_MEMORY_ADDRESS[31:2]);
     end
     assign request_fault = agu_fault;
 
@@ -347,10 +345,10 @@ module MemoryLane
     // Stores in the AGU stage are past every older branch (branches resolve
     // in this stage; same-group squash is in agu.valid), so no branch
     // speculation reaches the buffer.
-    if (Parameters::USE_STORE_BUFFER && IS_MEMORY) begin : store_buffer
-        localparam int unsigned DEPTH = Parameters::STORE_BUFFER_DEPTH;
+    if (ENABLE_STORE_BUFFER && IS_MEMORY) begin : store_buffer
+        localparam int unsigned DEPTH = STORE_BUFFER_DEPTH;
         initial begin
-            if (Parameters::MEMORY_LANE_COUNT != 1)
+            if (MEMORY_LANE_COUNT != 1)
                 $fatal(1, "MemoryLane: the store buffer requires MEMORY_LANE_COUNT = 1");
             if (DEPTH < 1)
                 $fatal(1, "MemoryLane: STORE_BUFFER_DEPTH must be at least 1");
@@ -364,8 +362,8 @@ module MemoryLane
             (agu.size == MEM_HALF && !agu.offset[0]) ||
             (agu.size == MEM_WORD && agu.offset == 2'b00);
         // The whole word lies in RAM (the bus would reject anything else).
-        wire in_ram = effective_address[31:2] >= Parameters::RAM_BASE[31:2] &&
-            (DerivedParameters::FULL_ADDRESS_SPACE || effective_address[31:2] <= Parameters::MAX_MEMORY_ADDRESS[31:2]);
+        wire in_ram = effective_address[31:2] >= RAM_BASE[31:2] &&
+            (FULL_ADDRESS_SPACE || effective_address[31:2] <= MAX_MEMORY_ADDRESS[31:2]);
         wire usable = aligned && in_ram && !cancel_checkin;
 
         logic match;

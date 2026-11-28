@@ -15,7 +15,10 @@
 //
 // One-cycle synchronous access: the read data is registered on enable and
 // holds until the next enabled access.
-module CLINT (
+module CLINT
+    import Parameters::*;
+    import DerivedParameters::*;
+(
     input logic clk, reset,
 
     input logic enable, write,

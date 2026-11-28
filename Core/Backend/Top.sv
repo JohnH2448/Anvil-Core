@@ -34,7 +34,7 @@ module BackendTop
     // GShare training, one per BRU lane in lane order. Registered; valid fires
     // once per resolved conditional branch even while a stall holds it in the
     // resolution stage (same fire-once rule as the branch redirect). Tied low
-    // when USE_GSHARE = 0.
+    // when ENABLE_GSHARE = 0.
     output logic train_valid [BRU_LANE_COUNT-1:0],
     output logic train_taken [BRU_LANE_COUNT-1:0],
     output logic [AGE_WIDTH-1:0] train_age [BRU_LANE_COUNT-1:0],
@@ -211,7 +211,7 @@ module BackendTop
             write_en[k] &= (!stall || trap) && !reset;
         end
     end
-    if (!USE_GSHARE) begin : no_training
+    if (!ENABLE_GSHARE) begin : no_training
         for (genvar b = 0; b < BRU_LANE_COUNT; b++) begin : tie
             assign train_valid[b] = 1'b0;
             assign train_taken[b] = 1'b0;
@@ -235,8 +235,7 @@ module BackendTop
             assign target[i] = 'x;
             assign writer_trap[SERIAL_WRITER] = result_trap[i];
             SerialLane #(
-                .REGISTERED_INPUT(1), .EXECUTION_UNROLL(EXECUTION_UNROLL), .ISSUE_WIDTH(ISSUE_WIDTH),
-                .RETIRE_WIDTH(RETIRE_WIDTH)
+                .REGISTERED_INPUT(1)
             ) lane (
                 .clk, .reset, .stall, .iteration_stall_out(iteration_stall[i]),
                 .decoder_packet(decoder_packet[i]), .issuer_packet(issuer_packet[i]), .accept(accept_vector[i]), .recovery_flush(redirect_taken),
@@ -261,10 +260,12 @@ module BackendTop
             for (genvar k = 0; k <= EXECUTION_UNROLL; k++)
                 assign forward_ready[i][k] = k == EXECUTION_UNROLL ? final_ready : 1'b1;
             IntegerLane #(
-                .IS_ALU(EFFECTIVE_INTEGER_CAPS[i-1][0]), .IS_BRU(EFFECTIVE_INTEGER_CAPS[i-1][1]),
-                .IS_MUL(EFFECTIVE_INTEGER_CAPS[i-1][2]), .IS_DIV(EFFECTIVE_INTEGER_CAPS[i-1][3]),
-                .EXECUTION_UNROLL(EXECUTION_UNROLL), .DIVIDER_AUTO_PIPE(DIVIDER_AUTO_PIPE),
-                .ISSUE_WIDTH(ISSUE_WIDTH), .BYPASS_ENABLED(BYPASS_ENABLED), .LANE_ID(i), .REGISTERED_INPUT(1)
+                .IS_ALU(EFFECTIVE_INTEGER_CAPS[i-1][0]),
+                .IS_BRU(EFFECTIVE_INTEGER_CAPS[i-1][1]),
+                .IS_MUL(EFFECTIVE_INTEGER_CAPS[i-1][2]),
+                .IS_DIV(EFFECTIVE_INTEGER_CAPS[i-1][3]),
+                .LANE_ID(i),
+                .REGISTERED_INPUT(1)
             ) lane (
                 .clk, .reset, .stall, .iteration_stall_out(iteration_stall[i]),
                 .decoder_packet(decoder_packet[i]), .issuer_packet(issuer_packet[i]), .accept(accept_vector[i]), .recovery_flush(redirect_taken), .trap_flush(trap),
@@ -288,7 +289,7 @@ module BackendTop
             // high; fired suppresses re-capture until it advances. A trap edge
             // drops it. Everything here is a flop, so the frontend sees no
             // backend logic.
-            if (USE_GSHARE && EFFECTIVE_INTEGER_CAPS[i-1][1]) begin : train_register
+            if (ENABLE_GSHARE && EFFECTIVE_INTEGER_CAPS[i-1][1]) begin : train_register
                 localparam int BRU = brus_before(i);
                 logic fired;
                 always_ff @(posedge clk) begin
@@ -302,9 +303,11 @@ module BackendTop
         end else if (ACTIVE) begin : memory_lane
             assign redirect_ras_lane[i] = '0; // no BRU
             MemoryLane #(
-                .IS_MEMORY(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][0]), .IS_ATOMIC(0), .IS_FLOAT(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][2]),
-                .EXECUTION_UNROLL(EXECUTION_UNROLL), .ISSUE_WIDTH(ISSUE_WIDTH),
-                .BYPASS_ENABLED(BYPASS_ENABLED), .LANE_ID(i), .REGISTERED_INPUT(1)
+                .IS_MEMORY(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][0]),
+                .IS_ATOMIC(0),
+                .IS_FLOAT(EFFECTIVE_MEMORY_CAPS[i-MEMORY_BASE][2]),
+                .LANE_ID(i),
+                .REGISTERED_INPUT(1)
             ) lane (
                 .clk, .reset, .stall, .iteration_stall_out(iteration_stall[i]),
                 .decoder_packet(decoder_packet[i]), .issuer_packet(issuer_packet[i]), .accept(accept_vector[i]), .recovery_flush(redirect_taken),
@@ -442,10 +445,7 @@ module BackendTop
     assign redirect_fetch = redirect_taken;
 
     if (MEMORY_LANE_COUNT > 0) begin : memory_bus
-        LoadStoreUnit #(
-            .LANES(MEMORY_LANE_COUNT), .STAGES(EXECUTION_UNROLL),
-            .DIRECT_SEND(LSU_DIRECT_SEND != 0)
-        ) lsu (
+        LoadStoreUnit lsu (
             .clk, .reset, .advance(!stall), .trap, .cancel_checkin, .pending, .candidate, .early_load, .present, .fault, .age, .address, .data, .mask, .size, .store,
             .returned, .load_response, .return_error, .return_data, .request_valid, .request_ready, .request_address, .request_data,
             .request_mask, .request_size, .request_write, .response_valid, .response_data, .response_ready,

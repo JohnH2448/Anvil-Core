@@ -1,4 +1,4 @@
-// Shared instruction/data RAM: byte addresses [BASE, LIMIT].
+// Shared instruction/data RAM: byte addresses [RAM_BASE, MAX_MEMORY_ADDRESS].
 //
 // Word-interleaved into BANKS single-port banks (bank = word index mod
 // BANKS, BANKS = next power of two >= FETCH_WORDS+1). A fetch reads
@@ -7,9 +7,9 @@
 // bank is one the fetch needs. The Crossbar arbitrates that conflict (data
 // first).
 //
-// Rows are indexed by the absolute word address (no BASE subtraction on the
-// address paths). Rows below BASE exist but are never written, so they read
-// zero; that costs BASE bytes of storage.
+// Rows are indexed by the absolute word address (no RAM_BASE subtraction on the
+// address paths). Rows below RAM_BASE exist but are never written, so they read
+// zero; that costs RAM_BASE bytes of storage.
 //
 // Data port, split for timing:
 //   data_claim   early: a data request is present (address mux, fetch
@@ -22,12 +22,12 @@
 // Both clients have one-cycle synchronous access. Each bank's read register
 // holds until that bank's next access.
 // Fetch port: returns FETCH_WORDS words starting at the requested halfword.
-// Words above LIMIT read as zero, which decodes as an illegal instruction.
-module RAM #(
-    parameter logic [31:0] BASE = Parameters::RAM_BASE,
-    parameter logic [31:0] LIMIT = Parameters::MAX_MEMORY_ADDRESS,
-    parameter unsigned FETCH_WORDS = Parameters::CACHE_LINE_WORDS,
-    parameter HEX_FILE = "" // Optional $readmemh image, word 0 = BASE.
+// Words above MAX_MEMORY_ADDRESS read as zero, which decodes as an illegal instruction.
+module RAM
+    import Parameters::*;
+    import DerivedParameters::*;
+#(
+    parameter HEX_FILE = "" // Optional $readmemh image, word 0 = RAM_BASE.
 )(
     input logic clk,
 
@@ -42,7 +42,7 @@ module RAM #(
     input logic [31:0] fetch_address,
     output logic [FETCH_WORDS*32-1:0] fetch_data
 );
-    localparam int unsigned TOTAL_WORDS = (LIMIT + 1) / 4; // from address 0
+    localparam int unsigned TOTAL_WORDS = (MAX_MEMORY_ADDRESS + 1) / 4; // from address 0
     localparam int unsigned BANKS = 2 ** $clog2(FETCH_WORDS + 1);
     localparam int unsigned BANK_W = $clog2(BANKS);
     localparam int unsigned ROWS = (TOTAL_WORDS + BANKS - 1) / BANKS;
@@ -50,8 +50,8 @@ module RAM #(
     localparam int unsigned WINDOW = FETCH_WORDS + 1;
 
     initial begin
-        if (BASE[1:0] != 2'b00 || LIMIT[1:0] != 2'b11 || LIMIT < BASE)
-            $error("RAM: BASE must be word aligned and LIMIT must end a word above it");
+        if (RAM_BASE[1:0] != 2'b00 || MAX_MEMORY_ADDRESS[1:0] != 2'b11 || MAX_MEMORY_ADDRESS < RAM_BASE)
+            $error("RAM: RAM_BASE must be word aligned and MAX_MEMORY_ADDRESS must end a word above it");
     end
 
     logic [29:0] data_word, fetch_word;
@@ -72,7 +72,7 @@ module RAM #(
         initial begin
             logic [31:0] image [ROWS*BANKS];
             for (int unsigned i = 0; i < ROWS*BANKS; i++) image[i] = '0;
-            if (HEX_FILE != "") $readmemh(HEX_FILE, image, BASE / 4, LIMIT / 4);
+            if (HEX_FILE != "") $readmemh(HEX_FILE, image, RAM_BASE / 4, MAX_MEMORY_ADDRESS / 4);
             for (int unsigned r = 0; r < ROWS; r++) memory[r] = image[r*BANKS + b];
         end
         assign offset = BANK_W'(b) - fetch_word[BANK_W-1:0];
@@ -99,7 +99,7 @@ module RAM #(
         if (fetch_enable) begin
             fetch_bank_q <= fetch_word[BANK_W-1:0];
             fetch_halfword_q <= fetch_address[1];
-            // Only the upper bound matters: rows below BASE read zero.
+            // Only the upper bound matters: rows below RAM_BASE read zero.
             for (int k = 0; k < WINDOW; k++)
                 fetch_in_range_q[k] <= 32'(fetch_word) + 32'(k) < TOTAL_WORDS;
         end

@@ -16,39 +16,35 @@
 //           admitted and older loads hold the trap back (result_pending), so
 //           the queue holds only retired stores. It keeps draining.
 module LoadStoreUnit
+    import Parameters::*;
     import DerivedParameters::*;
-#(
-    parameter int unsigned LANES = 1,
-    parameter int unsigned STAGES = 1,
-    // Idle-LSU direct send of RAM loads from the AGU (see below).
-    parameter bit DIRECT_SEND = 1'b0
-)(
+(
     input logic clk, reset, advance,
     // Writeback-time trap from BackendTop.
     input logic trap,
     output logic cancel_checkin,
-    input logic pending [LANES], store [LANES],
+    input logic pending [MEMORY_LANE_COUNT], store [MEMORY_LANE_COUNT],
     // AGU-detected fault (misaligned, out of range): enqueued as a marker.
-    input logic fault [LANES],
+    input logic fault [MEMORY_LANE_COUNT],
     // pending before the same-cycle redirect squash. Enqueue uses candidates
     // only; the redirect reaches the LSU solely through the squashed_q flop.
-    input logic candidate [LANES],
+    input logic candidate [MEMORY_LANE_COUNT],
     // DIRECT_SEND: a valid load sits in the AGU stage, from flops only
     // (pre-allocated before execute; no store-buffer hit, stall or squash).
-    input logic early_load [LANES],
+    input logic early_load [MEMORY_LANE_COUNT],
     // Entry write enable from flops only: writing the slot at the tail is
     // harmless when the request is not counted (store-buffer hit, squash).
-    input logic present [LANES],
-    input logic [AGE_WIDTH-1:0] age [LANES],
-    input logic [31:0] address [LANES], data [LANES],
-    input logic [3:0] mask [LANES],
-    input logic [1:0] size [LANES], // MemorySize_
+    input logic present [MEMORY_LANE_COUNT],
+    input logic [AGE_WIDTH-1:0] age [MEMORY_LANE_COUNT],
+    input logic [31:0] address [MEMORY_LANE_COUNT], data [MEMORY_LANE_COUNT],
+    input logic [3:0] mask [MEMORY_LANE_COUNT],
+    input logic [1:0] size [MEMORY_LANE_COUNT], // MemorySize_
     // Completion to the owning lane: a load response, or a fault marker
     // (return_error set, garbage data).
-    output logic returned [LANES],
+    output logic returned [MEMORY_LANE_COUNT],
     // A load response for this lane is arriving (returned without the trap
     // kill or fault markers; flops only): the lane's early word forward.
-    output logic load_response [LANES],
+    output logic load_response [MEMORY_LANE_COUNT],
     output logic return_error,
     output logic [31:0] return_data,
     output logic request_valid, request_write,
@@ -64,14 +60,16 @@ module LoadStoreUnit
     // memory yet). FENCE/FENCE.I wait for it to clear.
     output logic busy
 );
+    // Direct send needs a single memory lane.
+    localparam bit DIRECT_SEND = ENABLE_LSU_DIRECT_SEND && MEMORY_LANE_COUNT == 1;
     // Posted stores free their lane slot at enqueue, so entries outlive the
     // slots; the extra room covers a store in flight plus the full threshold.
-    localparam int DEPTH = LANES * (STAGES + 3);
+    localparam int DEPTH = MEMORY_LANE_COUNT * (EXECUTION_UNROLL + 3);
     // Check-ins are cancelled for this many cycles after a trap edge.
     localparam int LOCK_CYCLES = 3;
     typedef logic [(DEPTH > 1 ? $clog2(DEPTH) : 1)-1:0] Pointer;
     typedef logic [$clog2(DEPTH+1)-1:0] Count;
-    typedef logic [(LANES > 1 ? $clog2(LANES) : 1)-1:0] Owner;
+    typedef logic [(MEMORY_LANE_COUNT > 1 ? $clog2(MEMORY_LANE_COUNT) : 1)-1:0] Owner;
     typedef struct packed {
         Owner owner;
         logic store;
@@ -130,8 +128,8 @@ module LoadStoreUnit
     assign live_tail = retreat_pointer(tail, squashed_q);
     assign sendable = unsent - squashed_q;
 
-    Count rank [LANES];
-    for (genvar i = 0; i < LANES; i++) begin : enqueue_order
+    Count rank [MEMORY_LANE_COUNT];
+    for (genvar i = 0; i < MEMORY_LANE_COUNT; i++) begin : enqueue_order
         always_comb begin
             rank[i] = '0;
             foreach (candidate[j])
@@ -181,7 +179,7 @@ module LoadStoreUnit
     // advances send_head as if sent from the queue.
     logic direct_valid;
     logic direct_select; // address/size select: flops only (idle && early_load)
-    if (DIRECT_SEND && LANES == 1) begin : direct
+    if (DIRECT_SEND && MEMORY_LANE_COUNT == 1) begin : direct
         wire idle = !reset && lock_timer == 0 && unsent - Count'(direct_keep) == squashed_q && discard == 0 && !locked &&
             // With one owed, response_ready is already 1, so response_valid is
             // the completion (avoids a loop through response_ready -> sent).
@@ -226,10 +224,10 @@ module LoadStoreUnit
 
     wire real_return = completed && discard == 0 && !kill && !direct_absorb;
     // Posted stores pop silently; loads and fault markers complete their slot.
-    for (genvar i = 0; i < LANES; i++)
+    for (genvar i = 0; i < MEMORY_LANE_COUNT; i++)
         assign returned[i] = ((real_return && !queue[return_head].store) || fault_return) &&
             queue[return_head].owner == Owner'(i);
-    for (genvar i = 0; i < LANES; i++)
+    for (genvar i = 0; i < MEMORY_LANE_COUNT; i++)
         assign load_response[i] = completed && discard == 0 && !direct_absorb &&
             !queue[return_head].store && queue[return_head].owner == Owner'(i);
     assign return_error = fault_return;
@@ -237,7 +235,7 @@ module LoadStoreUnit
     wire pop = real_return || fault_return;
 
     // Occupancy (enqueue to return-head pop) for the registered full flag:
-    // set when the queue could not take another LANES pushes next cycle.
+    // set when the queue could not take another MEMORY_LANE_COUNT pushes next cycle.
     Count used, used_next;
     assign used_next = used + pushes - squashed_q - Count'(pop);
 
@@ -285,7 +283,7 @@ module LoadStoreUnit
                 squashed_q <= squashed;
                 if (fault_return) locked <= 1'b1;
                 used <= used_next;
-                full <= int'(used_next) > DEPTH - int'(LANES);
+                full <= int'(used_next) > DEPTH - int'(MEMORY_LANE_COUNT);
                 busy <= used_next != '0;
             end
         end

@@ -1,6 +1,7 @@
-module ImmediateLowPredecode #(
-    parameter unsigned SUPPORT_FLOAT = 1
-)(
+module ImmediateLowPredecode
+    import Parameters::*;
+    import DerivedParameters::*;
+(
     input logic [31:0] instruction,
     input logic is_compressed,
     output logic [4:0] immediate_low

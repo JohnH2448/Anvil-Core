@@ -12,7 +12,10 @@
 // combinational, x0 is never written and reads zero, and two ports writing
 // the same register on one edge leave the higher port's value (as before,
 // the later loop iteration won).
-module IntegerFile #(
+module IntegerFile
+    import Parameters::*;
+    import DerivedParameters::*;
+#(
     parameter unsigned READ_PORTS = 2,
     parameter unsigned WRITE_PORTS = 1
 )(

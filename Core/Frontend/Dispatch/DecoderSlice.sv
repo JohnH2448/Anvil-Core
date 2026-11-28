@@ -1,12 +1,9 @@
 module DecoderSlice
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter unsigned SUPPORT_MUL = 1,
-    parameter unsigned SUPPORT_DIV = 1,
-    parameter unsigned SUPPORT_FLOAT = 1,
-    parameter unsigned SUPPORT_ATOMIC = 1
-)(
+(
 
     // Working Input Data
     input logic [31:0] instruction,
@@ -25,13 +22,13 @@ module DecoderSlice
     input logic rs1_used_in,
     input logic rs2_used_in,
     input logic rd_written_in,
-    input DerivedParameters::fetch_pc_t pc,
+    input fetch_pc_t pc,
     input logic is_branch,
     input logic is_compressed,
     input logic predicted_taken,
-    input logic [DerivedParameters::PHT_INDEX_W-1:0] pht_index, // GShare index (0 when off)
-    input logic [DerivedParameters::RAS_TARGET_W-1:0] ras_target, // RAS predicted return target (0 when off)
-    input logic [DerivedParameters::RAS_SNAP_W-1:0] ras_snap, // RAS repair snapshot (0 when off)
+    input logic [PHT_INDEX_W-1:0] pht_index, // GShare index (0 when off)
+    input logic [RAS_TARGET_W-1:0] ras_target, // RAS predicted return target (0 when off)
+    input logic [RAS_SNAP_W-1:0] ras_snap, // RAS repair snapshot (0 when off)
 
     // Output Packet
     output DecoderPacket_ packet,
@@ -127,7 +124,7 @@ module DecoderSlice
 
     assign packet.common.pc = 32'(pc); // Upper bits are constant through Decode, Issue and lane capture.
     assign packet.common.trap_type = trap;
-    ImmediateLowPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) low_decode (
+    ImmediateLowPredecode low_decode (
         .instruction(instruction),
         .is_compressed(is_compressed),
         .immediate_low(packet.common.immediate[4:0])
@@ -219,7 +216,7 @@ module DecoderSlice
     assign packet.bru.ras_snap = ras_snap;
     // A predicted return is correct when rs1 + imm == target, i.e. rs1 == target - imm.
     // Precomputing that here leaves the BRU a plain equality on its operand.
-    if (Parameters::USE_RAS) begin : ras_check
+    if (ENABLE_RAS) begin : ras_check
         assign packet.bru.ras_rs1 = 32'(ras_target) - packet.common.immediate;
     end else begin : no_ras_check
         assign packet.bru.ras_rs1 = '0;

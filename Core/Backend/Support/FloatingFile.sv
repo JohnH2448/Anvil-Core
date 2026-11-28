@@ -1,4 +1,7 @@
-module FloatingFile #(
+module FloatingFile
+    import Parameters::*;
+    import DerivedParameters::*;
+#(
     parameter unsigned READ_PORTS = 3,
     parameter unsigned WRITE_PORTS = 1
 )(

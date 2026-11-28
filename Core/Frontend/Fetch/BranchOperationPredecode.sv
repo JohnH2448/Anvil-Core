@@ -1,4 +1,6 @@
 module BranchOperationPredecode
+    import Parameters::*;
+    import DerivedParameters::*;
     import Enumerations::*;
 (
     input logic [31:0] instruction,

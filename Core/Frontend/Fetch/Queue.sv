@@ -1,18 +1,9 @@
 module Queue
+    import Parameters::*;
+    import DerivedParameters::*;
     import Definitions::*;
     import Enumerations::*;
-#(
-    parameter unsigned FETCH_WORDS = 2,
-    parameter unsigned SUPPORT_MUL = Parameters::SUPPORT_MUL,
-    parameter unsigned SUPPORT_DIV = Parameters::SUPPORT_DIV,
-    parameter unsigned SUPPORT_FLOAT = Parameters::SUPPORT_FLOAT,
-    parameter unsigned SUPPORT_ATOMIC = Parameters::SUPPORT_ATOMIC,
-    parameter unsigned FIFO_WORDS = 8,
-    parameter unsigned SERVE_WORDS = 2,
-    parameter unsigned RESET_VECTOR = 32'h0000_0000,
-    parameter unsigned USE_RAS = Parameters::USE_RAS,
-    parameter unsigned USE_BTB = Parameters::USE_BTB
-)(
+(
 
     // Standard Inputs
     input logic clk,
@@ -23,7 +14,7 @@ module Queue
     input logic [31:0] redirect_pc,
     // RAS top (registered top or forwarded pending push), for return-kind
     // BTB steers. Unused without the RAS.
-    input DerivedParameters::fetch_pc_t ras_top,
+    input fetch_pc_t ras_top,
     input logic redirect_fetch, // Registered recovery launch; pulses with redirect_taken.
     input logic redirect_taken, // Registered recovery pulse.
 
@@ -37,41 +28,41 @@ module Queue
     input logic fetch_valid,
 
     // Linear Instruction Outputs
-    output logic [31:0] serve_data_reg [SERVE_WORDS-1:0],
-    output logic [4:0] serve_rs1 [SERVE_WORDS-1:0],
-    output logic [4:0] serve_rs2 [SERVE_WORDS-1:0],
-    output logic [4:0] serve_rd [SERVE_WORDS-1:0],
-    output logic [4:0] serve_rs3 [SERVE_WORDS-1:0],
-    output logic serve_rs1_float [SERVE_WORDS-1:0],
-    output logic serve_rs2_float [SERVE_WORDS-1:0],
-    output logic serve_rs3_float [SERVE_WORDS-1:0],
-    output logic serve_rd_float [SERVE_WORDS-1:0],
-    output logic serve_rs1_used [SERVE_WORDS-1:0],
-    output logic serve_rs2_used [SERVE_WORDS-1:0],
-    output logic serve_rd_written [SERVE_WORDS-1:0],
-    output logic [$bits(DecodeCapability_)-1:0] serve_capability [SERVE_WORDS-1:0],
-    output logic [6:0] serve_immediate_upper_select [SERVE_WORDS-1:0],
-    output logic serve_fp_consumer [SERVE_WORDS-1:0],
-    output TrapType_ serve_trap [SERVE_WORDS-1:0],
-    output DerivedParameters::fetch_pc_t serve_pc_reg [SERVE_WORDS-1:0],
-    output logic serve_valid_reg [SERVE_WORDS-1:0],
-    output logic serve_c_reg [SERVE_WORDS-1:0],
-    output logic serve_taken_reg [SERVE_WORDS-1:0],
-    output logic serve_branch_reg [SERVE_WORDS-1:0],
-    output logic [DerivedParameters::PHT_INDEX_W-1:0] serve_pht_reg [SERVE_WORDS-1:0],
-    output logic [DerivedParameters::RAS_TARGET_W-1:0] serve_ras_reg [SERVE_WORDS-1:0], // predicted return target (0 when off)
-    output logic [DerivedParameters::RAS_SNAP_W-1:0] serve_snap_reg [SERVE_WORDS-1:0], // RAS repair snapshot (0 when off)
+    output logic [31:0] serve_data_reg [ISSUE_WIDTH-1:0],
+    output logic [4:0] serve_rs1 [ISSUE_WIDTH-1:0],
+    output logic [4:0] serve_rs2 [ISSUE_WIDTH-1:0],
+    output logic [4:0] serve_rd [ISSUE_WIDTH-1:0],
+    output logic [4:0] serve_rs3 [ISSUE_WIDTH-1:0],
+    output logic serve_rs1_float [ISSUE_WIDTH-1:0],
+    output logic serve_rs2_float [ISSUE_WIDTH-1:0],
+    output logic serve_rs3_float [ISSUE_WIDTH-1:0],
+    output logic serve_rd_float [ISSUE_WIDTH-1:0],
+    output logic serve_rs1_used [ISSUE_WIDTH-1:0],
+    output logic serve_rs2_used [ISSUE_WIDTH-1:0],
+    output logic serve_rd_written [ISSUE_WIDTH-1:0],
+    output logic [$bits(DecodeCapability_)-1:0] serve_capability [ISSUE_WIDTH-1:0],
+    output logic [6:0] serve_immediate_upper_select [ISSUE_WIDTH-1:0],
+    output logic serve_fp_consumer [ISSUE_WIDTH-1:0],
+    output TrapType_ serve_trap [ISSUE_WIDTH-1:0],
+    output fetch_pc_t serve_pc_reg [ISSUE_WIDTH-1:0],
+    output logic serve_valid_reg [ISSUE_WIDTH-1:0],
+    output logic serve_c_reg [ISSUE_WIDTH-1:0],
+    output logic serve_taken_reg [ISSUE_WIDTH-1:0],
+    output logic serve_branch_reg [ISSUE_WIDTH-1:0],
+    output logic [PHT_INDEX_W-1:0] serve_pht_reg [ISSUE_WIDTH-1:0],
+    output logic [RAS_TARGET_W-1:0] serve_ras_reg [ISSUE_WIDTH-1:0], // predicted return target (0 when off)
+    output logic [RAS_SNAP_W-1:0] serve_snap_reg [ISSUE_WIDTH-1:0], // RAS repair snapshot (0 when off)
 
     // Branch Preditor Communication
     output BranchInput_ branch_input [FETCH_WORDS*2-1:0],
     input BranchOutput_ branch_output [FETCH_WORDS*2-1:0],
-    input logic [DerivedParameters::PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0], // GShare index, captured with the result
+    input logic [PHT_INDEX_W-1:0] branch_pht_index [FETCH_WORDS*2-1:0], // GShare index, captured with the result
 
     // RAS update: the prediction window committing to the FIFO this edge.
-    input logic [DerivedParameters::RAS_SNAP_W-1:0] ras_snapshot, // RAS state before the committing window (repair)
+    input logic [RAS_SNAP_W-1:0] ras_snapshot, // RAS state before the committing window (repair)
     // GShare early PHT read: the arriving window's slot PCs, its capture into
     // staging, and partial-instruction capture/use for slot 0.
-    output DerivedParameters::fetch_pc_t early_lookup_pc [FETCH_WORDS*2-1:0],
+    output fetch_pc_t early_lookup_pc [FETCH_WORDS*2-1:0],
     output logic early_lookup_capture, early_partial_capture, early_use_partial,
     // RAS pending-push capture: the staging window as it transfers.
     output logic ras_stage_transfer, ras_prediction_valid,
@@ -85,25 +76,24 @@ module Queue
     // pointer and real_pc next state, never inside their arithmetic.
     input logic stall,
     // Stall-free count of consecutive serve lanes Decode consumes from lane zero.
-    input logic [$clog2(SERVE_WORDS+1)-1:0] serve_normal_count
+    input logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_normal_count
 );
 
     // Normal-case PC consumption. Reset and flush are early (registered or
     // external) and stay inside; stall selects between this and holding real_pc.
     // Do not rely on redirect propagating through upstream consumption logic.
     logic reset_reg; // Registered below (Registers External Reset Signal).
-    logic [$clog2(SERVE_WORDS+1)-1:0] serve_consumed_active;
+    logic [$clog2(ISSUE_WIDTH+1)-1:0] serve_consumed_active;
     assign serve_consumed_active = (reset || reset_reg || redirect_taken) ? '0 : serve_normal_count;
 
     // Derived Constants
-    localparam unsigned FETCH_SLOTS = FETCH_WORDS * 2;
-    localparam unsigned FIFO_INDEX_W = $clog2(FIFO_WORDS);
+    localparam unsigned FIFO_INDEX_W = $clog2(FETCH_FIFO_WORDS);
     localparam unsigned PUSH_COUNT_W = $clog2(FETCH_SLOTS + 1);
-    localparam unsigned SERVE_COUNT_W = $clog2(SERVE_WORDS + 1);
+    localparam unsigned SERVE_COUNT_W = $clog2(ISSUE_WIDTH + 1);
 
     // FIFO Power of Two Check
-    if (!(FIFO_WORDS > 0 && (FIFO_WORDS & (FIFO_WORDS - 1)) == 0)) begin : invalid_fifo_words
-        initial $error("FIFO_WORDS must be a power of 2");
+    if (!(FETCH_FIFO_WORDS > 0 && (FETCH_FIFO_WORDS & (FETCH_FIFO_WORDS - 1)) == 0)) begin : invalid_fifo_words
+        initial $error("FETCH_FIFO_WORDS must be a power of 2");
     end
 
     // Identifies 32-Bit Word Branches
@@ -153,14 +143,14 @@ module Queue
     endfunction
 
     // Fetch Address and Response Tracking
-    DerivedParameters::fetch_pc_t prefetch_pc;
-    DerivedParameters::fetch_pc_t prefetch_pc_next;
-    DerivedParameters::fetch_pc_t response_pc_reg;
+    fetch_pc_t prefetch_pc;
+    fetch_pc_t prefetch_pc_next;
+    fetch_pc_t response_pc_reg;
 
     // Registered Fetch Staging and Predecode
     logic [FETCH_WORDS*32-1:0] fetch_staging_reg;
-    DerivedParameters::fetch_pc_t fetch_staging_pc;
-    DerivedParameters::fetch_pc_t fetch_lane_pc [FETCH_SLOTS-1:0];
+    fetch_pc_t fetch_staging_pc;
+    fetch_pc_t fetch_lane_pc [FETCH_SLOTS-1:0];
     logic staging_occupied;
     wire fetch_staging_reg_valid = staging_occupied && !redirect_fetch;
     logic [FETCH_SLOTS-1:0] fetch_branch_reg;
@@ -169,20 +159,20 @@ module Queue
     // Registered Partial-Instruction Recovery
     logic tail_partial;
     logic [15:0] partial_half_reg;
-    DerivedParameters::fetch_pc_t partial_pc_reg;
+    fetch_pc_t partial_pc_reg;
     logic partial_branch_reg;
 
     // Combinational Instruction Reconstruction
     logic [(FETCH_SLOTS+1)*16-1:0] packet_half_window;
     logic packet_start [FETCH_SLOTS-1:0];
     logic [31:0] packet_data [FETCH_SLOTS-1:0];
-    DerivedParameters::fetch_pc_t packet_pc [FETCH_SLOTS-1:0];
+    fetch_pc_t packet_pc [FETCH_SLOTS-1:0];
     logic packet_valid [FETCH_SLOTS-1:0];
     logic packet_c [FETCH_SLOTS-1:0];
     logic packet_branch [FETCH_SLOTS-1:0];
     logic packet_new_partial;
     logic [15:0] packet_partial_half;
-    DerivedParameters::fetch_pc_t packet_partial_pc;
+    fetch_pc_t packet_partial_pc;
     logic [PUSH_COUNT_W-1:0] stage_push_count;
     // Valid instructions in the staging window, ignoring predictions: an upper
     // bound on stage_push_count with no direction-predictor dependency.
@@ -212,36 +202,31 @@ module Queue
     logic prediction_reads_rs2 [FETCH_SLOTS-1:0];
     logic prediction_rd_written [FETCH_SLOTS-1:0];
     logic [$bits(DecodeCapability_)-1:0] prediction_capability [FETCH_SLOTS-1:0];
-    logic [4:0] fifo_rs1 [FIFO_WORDS-1:0];
-    logic [4:0] fifo_rs2 [FIFO_WORDS-1:0];
-    logic [4:0] fifo_rd [FIFO_WORDS-1:0];
-    logic [4:0] fifo_rs3 [FIFO_WORDS-1:0];
-    logic fifo_rs1_float [FIFO_WORDS-1:0];
-    logic fifo_rs2_float [FIFO_WORDS-1:0];
-    logic fifo_rs3_float [FIFO_WORDS-1:0];
-    logic fifo_rd_float [FIFO_WORDS-1:0];
-    logic fifo_rs1_used [FIFO_WORDS-1:0];
-    logic fifo_rs2_used [FIFO_WORDS-1:0];
-    logic fifo_rd_written [FIFO_WORDS-1:0];
-    logic fifo_fp_consumer [FIFO_WORDS-1:0];
+    logic [4:0] fifo_rs1 [FETCH_FIFO_WORDS-1:0];
+    logic [4:0] fifo_rs2 [FETCH_FIFO_WORDS-1:0];
+    logic [4:0] fifo_rd [FETCH_FIFO_WORDS-1:0];
+    logic [4:0] fifo_rs3 [FETCH_FIFO_WORDS-1:0];
+    logic fifo_rs1_float [FETCH_FIFO_WORDS-1:0];
+    logic fifo_rs2_float [FETCH_FIFO_WORDS-1:0];
+    logic fifo_rs3_float [FETCH_FIFO_WORDS-1:0];
+    logic fifo_rd_float [FETCH_FIFO_WORDS-1:0];
+    logic fifo_rs1_used [FETCH_FIFO_WORDS-1:0];
+    logic fifo_rs2_used [FETCH_FIFO_WORDS-1:0];
+    logic fifo_rd_written [FETCH_FIFO_WORDS-1:0];
+    logic fifo_fp_consumer [FETCH_FIFO_WORDS-1:0];
     logic [6:0] prediction_immediate_upper_select [FETCH_SLOTS-1:0];
-    logic [6:0] fifo_immediate_upper_select [FIFO_WORDS-1:0];
+    logic [6:0] fifo_immediate_upper_select [FETCH_FIFO_WORDS-1:0];
     BranchInput_ prediction_payload [FETCH_SLOTS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : immediate_predecode
-        ImmediateUpperPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) format_decode (
+        ImmediateUpperPredecode format_decode (
             .instruction(prediction_payload[lane].bp_instruction),
             .is_compressed(prediction_payload[lane].bp_compressed),
             .upper_select(prediction_immediate_upper_select[lane])
         );
     end
-    logic [$bits(DecodeCapability_)-1:0] fifo_capability [FIFO_WORDS-1:0];
+    logic [$bits(DecodeCapability_)-1:0] fifo_capability [FETCH_FIFO_WORDS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : predecode_sources
-        RegisterSlice #(
-            .SUPPORT_MUL(SUPPORT_MUL),
-            .SUPPORT_DIV(SUPPORT_DIV),
-            .SUPPORT_FLOAT(SUPPORT_FLOAT),
-            .SUPPORT_ATOMIC(SUPPORT_ATOMIC)
-        ) register_slice (
+        RegisterSlice register_slice (
             .instruction(packet_data[lane]),
             .is_compressed(packet_c[lane]),
             .rs1(packet_rs1[lane]),
@@ -264,17 +249,17 @@ module Queue
     logic stage_keep [FETCH_SLOTS];
     logic [PUSH_COUNT_W-1:0] stage_offset [FETCH_SLOTS];
     logic [FIFO_INDEX_W-1:0] prediction_write_slot [FETCH_SLOTS];
-    DerivedParameters::fetch_pc_t prediction_pc;
+    fetch_pc_t prediction_pc;
     TrapType_ packet_system_trap [FETCH_SLOTS-1:0];
     TrapType_ prediction_system_trap [FETCH_SLOTS-1:0];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : system_trap_predecode
-        SystemTrapPredecode #(.SUPPORT_FLOAT(SUPPORT_FLOAT)) system_decode (
+        SystemTrapPredecode system_decode (
             .instruction(branch_input[lane].bp_instruction),
             .trap(packet_system_trap[lane])
         );
     end
     BranchOutput_ prediction_result [FETCH_SLOTS-1:0];
-    logic [DerivedParameters::PHT_INDEX_W-1:0] prediction_pht [FETCH_SLOTS-1:0];
+    logic [PHT_INDEX_W-1:0] prediction_pht [FETCH_SLOTS-1:0];
     logic [PUSH_COUNT_W-1:0] packet_push_count;
 
     // Combinational Predicted-Path Selection
@@ -283,16 +268,16 @@ module Queue
     logic packet_taken;
     logic packet_fix;      // commit-time fetch correction (== packet_taken without the BTB)
     logic stage_any_taken; // the staging window has a taken prediction
-    DerivedParameters::fetch_pc_t stage_taken_pc; // its target (first taken kept slot)
+    fetch_pc_t stage_taken_pc; // its target (first taken kept slot)
 
     // BTB steering state, carried with the window from fetch to prediction.
     logic btb_hit, btb_steer, btb_return;
-    DerivedParameters::fetch_pc_t btb_target, steer_target;
+    fetch_pc_t btb_target, steer_target;
     // A return-kind hit steers to the RAS top. The prediction stage verifies
     // it against the real RAS prediction like any other steer.
-    assign steer_target = (USE_RAS && btb_return) ? ras_top : btb_target;
+    assign steer_target = (ENABLE_RAS && btb_return) ? ras_top : btb_target;
     logic staging_btb_hit, prediction_btb_hit;
-    DerivedParameters::fetch_pc_t staging_btb_target, prediction_btb_target;
+    fetch_pc_t staging_btb_target, prediction_btb_target;
     logic [31:0] packet_redirect_pc;
 
     // Pipeline Transfer Controls
@@ -301,16 +286,16 @@ module Queue
     logic packet_commit;
 
     // Registered FIFO Contents
-    logic [31:0] fifo_data [FIFO_WORDS-1:0];
-    DerivedParameters::fetch_pc_t fifo_pc [FIFO_WORDS-1:0];
-    logic fifo_c [FIFO_WORDS-1:0];
-    logic fifo_branch [FIFO_WORDS-1:0];
-    logic fifo_evaluated [FIFO_WORDS-1:0];
-    logic fifo_pc_wrapped [FIFO_WORDS-1:0];
-    logic fifo_taken [FIFO_WORDS-1:0];
-    logic [DerivedParameters::PHT_INDEX_W-1:0] fifo_pht [FIFO_WORDS-1:0];
-    logic [DerivedParameters::RAS_TARGET_W-1:0] fifo_ras [FIFO_WORDS-1:0];
-    logic [DerivedParameters::RAS_SNAP_W-1:0] fifo_snap [FIFO_WORDS-1:0];
+    logic [31:0] fifo_data [FETCH_FIFO_WORDS-1:0];
+    fetch_pc_t fifo_pc [FETCH_FIFO_WORDS-1:0];
+    logic fifo_c [FETCH_FIFO_WORDS-1:0];
+    logic fifo_branch [FETCH_FIFO_WORDS-1:0];
+    logic fifo_evaluated [FETCH_FIFO_WORDS-1:0];
+    logic fifo_pc_wrapped [FETCH_FIFO_WORDS-1:0];
+    logic fifo_taken [FETCH_FIFO_WORDS-1:0];
+    logic [PHT_INDEX_W-1:0] fifo_pht [FETCH_FIFO_WORDS-1:0];
+    logic [RAS_TARGET_W-1:0] fifo_ras [FETCH_FIFO_WORDS-1:0];
+    logic [RAS_SNAP_W-1:0] fifo_snap [FETCH_FIFO_WORDS-1:0];
 
     // Selected FIFO State and Registered Tail/Admission
     logic [FIFO_INDEX_W:0] fifo_occipied_slots;
@@ -321,14 +306,14 @@ module Queue
     logic fifo_packet_room;
 
     localparam int unsigned TRAP_W = $bits(TrapType_);
-    localparam int unsigned SERVE_ENTRY_W = DerivedParameters::FETCH_PC_WIDTH + 48 + 3 + 20 + $bits(DecodeCapability_) + TRAP_W
-        + DerivedParameters::PHT_INDEX_W + DerivedParameters::RAS_TARGET_W + DerivedParameters::RAS_SNAP_W;
+    localparam int unsigned SERVE_ENTRY_W = FETCH_PC_WIDTH + 48 + 3 + 20 + $bits(DecodeCapability_) + TRAP_W
+        + PHT_INDEX_W + RAS_TARGET_W + RAS_SNAP_W;
     // Combinational outcomes feed a single set of serve and FIFO state registers.
-    logic [SERVE_ENTRY_W-1:0] serve_next [SERVE_WORDS][SERVE_WORDS+1];
-    logic [FIFO_INDEX_W:0] head_next [SERVE_WORDS+1];
-    logic [FIFO_INDEX_W:0] occupied_next [SERVE_WORDS+1];
+    logic [SERVE_ENTRY_W-1:0] serve_next [ISSUE_WIDTH][ISSUE_WIDTH+1];
+    logic [FIFO_INDEX_W:0] head_next [ISSUE_WIDTH+1];
+    logic [FIFO_INDEX_W:0] occupied_next [ISSUE_WIDTH+1];
     // Outcome chosen by the precomputed normal count, or consumed-zero on stall.
-    logic [SERVE_ENTRY_W-1:0] serve_selected [SERVE_WORDS];
+    logic [SERVE_ENTRY_W-1:0] serve_selected [ISSUE_WIDTH];
     logic [FIFO_INDEX_W:0] head_selected, occupied_selected;
 
     // Decode-Consumption PC Tracking
@@ -343,7 +328,7 @@ module Queue
     // Calculates True PC Delta from Serve Consumption
     always_comb begin
         consumed_pc_step = '0;
-        for (int unsigned i = 0; i < SERVE_WORDS; i++) begin
+        for (int unsigned i = 0; i < ISSUE_WIDTH; i++) begin
             if (serve_valid_reg[i] && (i < $unsigned(int'(serve_consumed_active))))
                 consumed_pc_step = consumed_pc_step +
                     pc_step(serve_data_reg[i], serve_c_reg[i], serve_taken_reg[i]);
@@ -429,16 +414,16 @@ module Queue
     // window's predictions) and registered with the window as prediction_fix /
     // prediction_fix_pc, so the commit-time prefetch select reads flops only.
     logic stage_fix, prediction_fix;
-    DerivedParameters::fetch_pc_t stage_fix_pc, prediction_fix_pc;
+    fetch_pc_t stage_fix_pc, prediction_fix_pc;
     // The equalities are formed from targets that do not depend on the
     // direction predictor (instruction decode or the RAS top flop), in parallel
     // with the PHT read; the late taken bits only select among them.
-    DerivedParameters::fetch_pc_t stage_sequential, stage_steered;
+    fetch_pc_t stage_sequential, stage_steered;
     logic stage_steered_sequential;      // steered == sequential
     logic stage_steered_slot [FETCH_SLOTS]; // steered == slot target
     logic stage_taken_match;             // steered == first taken target
     always_comb begin
-        stage_sequential = DerivedParameters::fetch_pc_t'(32'(fetch_staging_pc) + FETCH_WORDS * 4);
+        stage_sequential = fetch_pc_t'(32'(fetch_staging_pc) + FETCH_WORDS * 4);
         stage_steered = staging_btb_hit ? staging_btb_target : stage_sequential;
         stage_steered_sequential = !staging_btb_hit || staging_btb_target == stage_sequential;
         for (int unsigned i = 0; i < FETCH_SLOTS; i++)
@@ -446,7 +431,7 @@ module Queue
     end
     always_comb begin
         stage_fix_pc = stage_any_taken ? stage_taken_pc : stage_sequential;
-        if (USE_BTB)
+        if (ENABLE_BTB)
             stage_fix = stage_any_taken ? !stage_taken_match : !stage_steered_sequential;
         else
             stage_fix = stage_any_taken;
@@ -455,7 +440,7 @@ module Queue
 
     // BTB: looked up from the registered prefetch_pc (the arriving window),
     // written at commit from the prediction register once the target is known.
-    if (USE_BTB) begin : btb_table
+    if (ENABLE_BTB) begin : btb_table
         logic taken_jalr, write, invalidate;
         always_comb begin
             taken_jalr = 1'b0;
@@ -464,7 +449,7 @@ module Queue
             // The only JALR predicted taken is a RAS return, so a taken JALR
             // writes a return-kind entry (no target: fetch steers to the RAS
             // top). Indirect JALRs are never taken here and never write.
-            write = packet_commit && packet_taken && (!taken_jalr || USE_RAS);
+            write = packet_commit && packet_taken && (!taken_jalr || ENABLE_RAS);
             invalidate = packet_commit && prediction_btb_hit && !packet_taken;
         end
         // Timing: look up the address being requested now (prefetch_pc_next) and
@@ -472,7 +457,7 @@ module Queue
         // prefetch_pc) reads flops instead of the table and key compare. A write
         // in the same cycle is seen one lookup later (costs only a prediction).
         logic lookup_hit;
-        DerivedParameters::fetch_pc_t lookup_target;
+        fetch_pc_t lookup_target;
         logic lookup_return;
         always_ff @(posedge clk) begin
             if (reset || reset_reg) btb_hit <= 1'b0;
@@ -490,7 +475,7 @@ module Queue
             .write(write),
             .invalidate(invalidate),
             .update_pc(prediction_pc),
-            .update_target(DerivedParameters::fetch_pc_t'(packet_redirect_pc)),
+            .update_target(fetch_pc_t'(packet_redirect_pc)),
             .update_return(taken_jalr)
         );
     end else begin : no_btb_table
@@ -530,14 +515,14 @@ module Queue
 
     assign early_lookup_capture = fetch_accept;
     assign early_partial_capture = stage_transfer && packet_new_partial &&
-        !(reset || reset_reg || redirect_taken || (!USE_BTB && packet_commit && packet_taken));
+        !(reset || reset_reg || redirect_taken || (!ENABLE_BTB && packet_commit && packet_taken));
     assign early_use_partial = tail_partial;
     assign ras_stage_transfer = stage_transfer;
     assign ras_prediction_valid = prediction_stage_valid;
     always_comb foreach (ras_stage_keep[i]) ras_stage_keep[i] = stage_keep[i];
     always_comb
         for (int unsigned i = 0; i < FETCH_SLOTS; i++)
-            early_lookup_pc[i] = DerivedParameters::fetch_pc_t'(32'(response_pc_reg) + i*2);
+            early_lookup_pc[i] = fetch_pc_t'(32'(response_pc_reg) + i*2);
 
     // RAS update interface: the committing window, straight from registers.
     assign ras_commit = packet_commit;
@@ -566,9 +551,9 @@ module Queue
             (!fetch_staging_reg_valid || !prediction_stage_valid || packet_commit);
         prefetch_pc_next = prefetch_pc;
         if (reset || reset_reg) begin
-            prefetch_pc_next = DerivedParameters::fetch_pc_t'(RESET_VECTOR);
+            prefetch_pc_next = fetch_pc_t'(RESET_VECTOR);
         end else if (redirect_fetch) begin
-            prefetch_pc_next = DerivedParameters::fetch_pc_t'(redirect_pc);
+            prefetch_pc_next = fetch_pc_t'(redirect_pc);
         end else if (packet_commit && packet_fix) begin
             // Registered in the staging cycle: the taken target, or (BTB steered
             // away wrongly) the sequential window.
@@ -576,7 +561,7 @@ module Queue
         end else if (advance) begin
             // BTB: the arriving window (prefetch_pc) ends in a taken branch.
             prefetch_pc_next = btb_hit ? steer_target :
-                DerivedParameters::fetch_pc_t'(32'(prefetch_pc) + FETCH_WORDS * 4);
+                fetch_pc_t'(32'(prefetch_pc) + FETCH_WORDS * 4);
         end
     end
     // The BTB steered this cycle's request (captured with the window's data).
@@ -594,14 +579,14 @@ module Queue
     always_ff @(posedge clk) begin
         if (reset || reset_reg) begin
             real_pc <= RESET_VECTOR;
-            prefetch_pc <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
-            response_pc_reg <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
+            prefetch_pc <= fetch_pc_t'(RESET_VECTOR);
+            response_pc_reg <= fetch_pc_t'(RESET_VECTOR);
             fetch_staging_reg <= '0;
-            fetch_staging_pc <= DerivedParameters::fetch_pc_t'(RESET_VECTOR);
+            fetch_staging_pc <= fetch_pc_t'(RESET_VECTOR);
             staging_occupied <= 1'b0;
             fetch_branch_reg <= '0;
             fetch_c_reg <= '0;
-            for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= DerivedParameters::fetch_pc_t'(RESET_VECTOR + i*2);
+            for (int unsigned i = 0; i < FETCH_SLOTS; i++) fetch_lane_pc[i] <= fetch_pc_t'(RESET_VECTOR + i*2);
         end else begin
             // Tracks Memory Response Address and Consumed Instruction PC
             response_pc_reg <= req_address;
@@ -615,9 +600,9 @@ module Queue
                 fetch_staging_reg <= fetch_data;
                 // Predecodes Each Halfword Before Instruction Boundary Resolution
                 for (int unsigned i = 0; i < FETCH_SLOTS; i++) begin
-                    fetch_lane_pc[i] <= DerivedParameters::fetch_pc_t'(32'(response_pc_reg) + i*2);
+                    fetch_lane_pc[i] <= fetch_pc_t'(32'(response_pc_reg) + i*2);
                     fetch_c_reg[i] <= fetch_data[i*16 +: 2] != 2'b11;
-                    fetch_branch_reg[i] <= is_branch16(fetch_data[i*16 +: 16]) || (USE_RAS && is_jalr(fetch_data[i*16 +: 16])) ||
+                    fetch_branch_reg[i] <= is_branch16(fetch_data[i*16 +: 16]) || (ENABLE_RAS && is_jalr(fetch_data[i*16 +: 16])) ||
                         is_branch32(fetch_data[i*16 +: 16]);
                 end
                 fetch_staging_pc <= response_pc_reg;
@@ -636,7 +621,7 @@ module Queue
         // Without the BTB a taken commit flushes the prediction register and
         // partial. With it, a fix commits normally (stage_transfer is blocked)
         // and keeps the partial: a sequential fix resumes into its second half.
-        if (reset || reset_reg || redirect_taken || (!USE_BTB && packet_commit && packet_taken)) begin
+        if (reset || reset_reg || redirect_taken || (!ENABLE_BTB && packet_commit && packet_taken)) begin
             prediction_stage_valid <= 1'b0;
             prediction_pc <= '0;
             packet_push_count <= '0;
@@ -700,7 +685,7 @@ module Queue
                 // BTB: a correct steer keeps the target window behind this one,
                 // so a partial after a taken branch must be dropped here, not
                 // at commit (it is past the branch, never executed).
-                tail_partial <= packet_new_partial && !(USE_BTB && stage_any_taken);
+                tail_partial <= packet_new_partial && !(ENABLE_BTB && stage_any_taken);
                 if (packet_new_partial) begin
                     partial_half_reg <= packet_partial_half;
                     partial_pc_reg <= packet_partial_pc;
@@ -717,19 +702,14 @@ module Queue
     // The same commit/keep/index as the instruction captures its result.
     logic prediction_pc_wrapped [FETCH_SLOTS];
     TrapType_ prediction_trap [FETCH_SLOTS];
-    TrapType_ fifo_trap [FIFO_WORDS];
+    TrapType_ fifo_trap [FETCH_FIFO_WORDS];
     for (genvar lane = 0; lane < FETCH_SLOTS; lane++) begin : prediction_legality
         // Wraps are legal when memory is the full address space.
-        assign prediction_pc_wrapped[lane] = !DerivedParameters::FULL_ADDRESS_SPACE &&
+        assign prediction_pc_wrapped[lane] = !FULL_ADDRESS_SPACE &&
             (packet_lane_taken[lane] ? prediction_result[lane].bp_target_wrapped :
-            (DerivedParameters::fetch_pc_t'(~prediction_payload[lane].bp_pc) <
+            (fetch_pc_t'(~prediction_payload[lane].bp_pc) <
              (prediction_payload[lane].bp_compressed ? 32'd2 : 32'd4)));
-        InstructionLegality #(
-            .SUPPORT_MUL(SUPPORT_MUL),
-            .SUPPORT_DIV(SUPPORT_DIV),
-            .SUPPORT_FLOAT(SUPPORT_FLOAT),
-            .SUPPORT_ATOMIC(SUPPORT_ATOMIC)
-        ) legality (
+        InstructionLegality legality (
             .instruction(prediction_payload[lane].bp_instruction),
             .is_compressed(prediction_payload[lane].bp_compressed),
             .system_trap_in(prediction_system_trap[lane]),
@@ -768,7 +748,7 @@ module Queue
                     fifo_evaluated[index] <= 1'b1;
                     fifo_taken[index] <= packet_lane_taken[i];
                     fifo_pht[index] <= prediction_pht[i];
-                    fifo_ras[index] <= USE_RAS ? DerivedParameters::RAS_TARGET_W'(prediction_result[i].bp_redirect_pc) : '0;
+                    fifo_ras[index] <= ENABLE_RAS ? RAS_TARGET_W'(prediction_result[i].bp_redirect_pc) : '0;
                     fifo_snap[index] <= ras_snapshot; // the same for every instruction of the window
                     fifo_pc_wrapped[index] <= prediction_pc_wrapped[i];
                 end
@@ -777,18 +757,18 @@ module Queue
     end
 
     // Read registered FIFO head offsets once for all combinational outcomes.
-    logic [SERVE_ENTRY_W-1:0] fifo_candidate [SERVE_WORDS];
-    logic [SERVE_ENTRY_W-1:0] retained_candidate [SERVE_WORDS];
+    logic [SERVE_ENTRY_W-1:0] fifo_candidate [ISSUE_WIDTH];
+    logic [SERVE_ENTRY_W-1:0] retained_candidate [ISSUE_WIDTH];
     logic [FIFO_INDEX_W:0] push_count;
     logic [FIFO_INDEX_W:0] occupied_after_push;
     assign push_count = packet_commit ? (FIFO_INDEX_W+1)'(packet_push_count) : '0;
     assign fifo_tail_next = fifo_tail + push_count;
     assign occupied_after_push = fifo_occipied_slots + push_count;
 
-    assign fifo_full = fifo_occipied_slots == (FIFO_INDEX_W+1)'(FIFO_WORDS);
+    assign fifo_full = fifo_occipied_slots == (FIFO_INDEX_W+1)'(FETCH_FIFO_WORDS);
     assign fifo_empty = fifo_occipied_slots == '0;
 
-    for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : serve_lanes
+    for (genvar lane = 0; lane < ISSUE_WIDTH; lane++) begin : serve_lanes
         logic [FIFO_INDEX_W-1:0] read_index;
         assign read_index = fifo_head[FIFO_INDEX_W-1:0] + FIFO_INDEX_W'(lane);
         wire TrapType_ pop_trap = fifo_pc_wrapped[read_index] ? INST_ACCESS_FAULT : fifo_trap[read_index];
@@ -814,28 +794,28 @@ module Queue
         end
     end
 
-    for (genvar consumed = 0; consumed <= SERVE_WORDS; consumed++) begin : serve_outcomes
+    for (genvar consumed = 0; consumed <= ISSUE_WIDTH; consumed++) begin : serve_outcomes
         logic [SERVE_COUNT_W-1:0] keep_count;
         logic [SERVE_COUNT_W-1:0] pull_count;
-        logic [SERVE_ENTRY_W-1:0] next_window [SERVE_WORDS];
+        logic [SERVE_ENTRY_W-1:0] next_window [ISSUE_WIDTH];
 
         always_comb begin
             keep_count = '0;
-            for (int unsigned lane = consumed; lane < SERVE_WORDS; lane++)
+            for (int unsigned lane = consumed; lane < ISSUE_WIDTH; lane++)
                 keep_count += SERVE_COUNT_W'(serve_valid_reg[lane]);
         end
         // Only entries already in the FIFO can be pulled. Same-edge pushes
         // become available next cycle, just as with the original serve register.
         assign pull_count =
-            ($unsigned(int'(fifo_occipied_slots)) < (SERVE_WORDS - $unsigned(int'(keep_count))))
+            ($unsigned(int'(fifo_occipied_slots)) < (ISSUE_WIDTH - $unsigned(int'(keep_count))))
             ? SERVE_COUNT_W'(fifo_occipied_slots)
-            : SERVE_COUNT_W'(SERVE_WORDS - $unsigned(int'(keep_count)));
+            : SERVE_COUNT_W'(ISSUE_WIDTH - $unsigned(int'(keep_count)));
 
-        for (genvar lane = 0; lane < SERVE_WORDS; lane++) begin : window_lanes
+        for (genvar lane = 0; lane < ISSUE_WIDTH; lane++) begin : window_lanes
             logic [SERVE_ENTRY_W-1:0] retained;
             assign serve_next[lane][consumed] = next_window[lane];
             // Generate-time bounds keep every elaborated source index valid.
-            if (lane + consumed < SERVE_WORDS) begin : retained_source
+            if (lane + consumed < ISSUE_WIDTH) begin : retained_source
                 assign retained = retained_candidate[lane + consumed];
             end else begin : no_retained_source
                 assign retained = {1'b0, {(SERVE_ENTRY_W-1){1'bx}}};
@@ -864,7 +844,7 @@ module Queue
     // takes the consumed-zero outcome, which can still refill empty serve slots,
     // so this is a 2:1 between outcomes rather than a hold.
     always_comb begin
-        for (int unsigned lane = 0; lane < SERVE_WORDS; lane++)
+        for (int unsigned lane = 0; lane < ISSUE_WIDTH; lane++)
             serve_selected[lane] = stall ? serve_next[lane][0] : serve_next[lane][serve_normal_count];
         head_selected = stall ? head_next[0] : head_next[serve_normal_count];
         occupied_selected = stall ? occupied_next[0] : occupied_next[serve_normal_count];
@@ -892,7 +872,7 @@ module Queue
             if (packet_commit && packet_fix) begin
                 fifo_packet_room <= 1'b1;
             end else begin
-                fifo_packet_room <= ((FIFO_INDEX_W+1)'(FIFO_WORDS) - occupied_after_push) >= (stage_transfer ?
+                fifo_packet_room <= ((FIFO_INDEX_W+1)'(FETCH_FIFO_WORDS) - occupied_after_push) >= (stage_transfer ?
                     // Conservative bound (timing): no predictor on the room path.
                     (FIFO_INDEX_W+1)'(stage_valid_count) :
                     (FIFO_INDEX_W+1)'(packet_push_count));

@@ -1,4 +1,5 @@
 module IntegerLane
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
@@ -8,11 +9,7 @@ module IntegerLane
     parameter unsigned IS_MUL = 1,
     parameter unsigned IS_DIV = 1,
     parameter bit REGISTERED_INPUT = 1'b0,
-    parameter unsigned EXECUTION_UNROLL = 1, // execution stages (min 1)
-    parameter unsigned BYPASS_ENABLED = 1, // worth considering for only alu, no bru
-    parameter unsigned ISSUE_WIDTH = 2, // for inter slice age bits
-    parameter unsigned LANE_ID = 0, // 0 is first
-    parameter unsigned DIVIDER_AUTO_PIPE = 3
+    parameter unsigned LANE_ID = 0 // 0 is first
 )(
     // Standard Inputs
     input logic clk,
@@ -52,7 +49,7 @@ module IntegerLane
 
     // GShare training (raw, unregistered): a valid conditional branch at the
     // resolution stage. BackendTop registers it and fires it once. Age is
-    // redirect_age_out. Tied low when USE_GSHARE = 0 or the lane has no BRU.
+    // redirect_age_out. Tied low when ENABLE_GSHARE = 0 or the lane has no BRU.
     output logic train_valid_out,
     output logic train_taken_out,
     output logic [PHT_INDEX_W-1:0] train_pht_out,
@@ -184,7 +181,7 @@ module IntegerLane
         forward_data_2 = 'x;
         forward_ready_1 = 1'bx; // Unmatched is structurally impossible.
         forward_ready_2 = 1'bx;
-        for (int lane = 1; lane <= Parameters::INTEGER_LANE_COUNT + Parameters::MEMORY_LANE_COUNT; lane++) begin
+        for (int lane = 1; lane <= INTEGER_LANE_COUNT + MEMORY_LANE_COUNT; lane++) begin
             for (int index = 1; index <= EXECUTION_UNROLL; index++) begin
                 if (issuer_payload[0].forward_lane_1 == LANE_WIDTH'(lane) &&
                     (EXECUTION_UNROLL == 1 || issuer_payload[0].forward_index_1 == UNROLL_WIDTH'(index))) begin
@@ -203,25 +200,25 @@ module IntegerLane
         operand_stall =
             (decoder_payload[0].common.rs1_valid &&
              !issuer_payload[0].read_reg_file_1 &&
-             !(BYPASS_ENABLED && issuer_payload[0].use_bypass_1) &&
+             !(ENABLE_BYPASS && issuer_payload[0].use_bypass_1) &&
              !forward_ready_1) ||
             (decoder_payload[0].common.rs2_valid &&
              !issuer_payload[0].read_reg_file_2 &&
-             !(BYPASS_ENABLED && issuer_payload[0].use_bypass_2) &&
+             !(ENABLE_BYPASS && issuer_payload[0].use_bypass_2) &&
              !forward_ready_2);
     end
 
     // Bypass Data Selection
     logic [31:0] bypass_data_1;
     logic [31:0] bypass_data_2;
-    if (BYPASS_ENABLED) begin : gen_bypass_selection
+    if (ENABLE_BYPASS) begin : gen_bypass_selection
         // Only ALU-capable integer lanes produce bypass data, so the select
         // covers just those lanes (a 2:1 on one lane bit at two ALU lanes).
         // Any other selection is structurally impossible: don't-care.
         always_comb begin
             bypass_data_1 = 'x;
             bypass_data_2 = 'x;
-            for (int lane = 1; lane <= Parameters::INTEGER_LANE_COUNT; lane++) begin
+            for (int lane = 1; lane <= INTEGER_LANE_COUNT; lane++) begin
                 if (EFFECTIVE_INTEGER_CAPS[lane-1][0]) begin
                     if (issuer_payload[0].forward_lane_1 == LANE_WIDTH'(lane))
                         bypass_data_1 = bypass_data[lane];
@@ -271,9 +268,9 @@ module IntegerLane
             early_source_1 = decoder_payload[0].alu.source == ALU_PC_IMM ? decoder_payload[0].common.pc : '0;
         if (override_2) early_source_2 = decoder_payload[0].common.immediate;
 
-        take_bypass_1 = BYPASS_ENABLED && issuer_payload[0].use_bypass_1 &&
+        take_bypass_1 = ENABLE_BYPASS && issuer_payload[0].use_bypass_1 &&
             decoder_payload[0].common.rs1_valid && !override_1;
-        take_bypass_2 = BYPASS_ENABLED && issuer_payload[0].use_bypass_2 &&
+        take_bypass_2 = ENABLE_BYPASS && issuer_payload[0].use_bypass_2 &&
             decoder_payload[0].common.rs2_valid && !override_2;
         temp_source_1 = take_bypass_1 ? bypass_data_1 : early_source_1;
         temp_source_2 = take_bypass_2 ? bypass_data_2 : early_source_2;
@@ -315,7 +312,7 @@ module IntegerLane
     if (IS_ALU) begin : gen_alu
         logic [31:0] result, bypass_result;
         assign alu_result = result;
-        // Fast subset only; see Definitions::alu_bypassable.
+        // Bypassable subset only (parameterized); see Definitions::alu_bypassable.
         assign bypass_data_out = bypass_result;
         ArithmaticUnit alu (
             .control(alu_control),
@@ -336,7 +333,7 @@ module IntegerLane
         logic misaligned;
         logic taken;
         assign bru_misaligned = misaligned;
-        BranchUnit #(.CHECK_RETURN(Parameters::USE_RAS != 0)) bru (
+        BranchUnit bru (
             .operation(decoder_payload[1].bru.operation),
             .source_1(source_1),
             .source_2(source_2),
@@ -355,7 +352,7 @@ module IntegerLane
         assign redirect_age_out = issuer_payload[1].input_age;
         // A redirect means direction disagreed with prediction. A predicted
         // taken branch therefore recovers to fall-through, otherwise target.
-        if (Parameters::USE_RAS) begin : ras_recovery
+        if (ENABLE_RAS) begin : ras_recovery
             // A predicted-taken JALR can mispredict while actually taken (wrong
             // return target), so recover by the resolved direction instead.
             assign redirect_pc_out = taken ? target : next_pc;
@@ -375,7 +372,7 @@ module IntegerLane
             assign redirect_ras_out = '0;
         end
         // Only conditional branches train (JAL/JALR use no PHT entry).
-        if (Parameters::USE_GSHARE) begin : gen_train
+        if (ENABLE_GSHARE) begin : gen_train
             assign train_valid_out = condition &&
                 decoder_payload[1].bru.operation inside {BR_EQ, BR_NE, BR_LT, BR_GE, BR_LTU, BR_GEU};
             assign train_taken_out = taken;
@@ -398,7 +395,7 @@ module IntegerLane
     end if (IS_MUL) begin : gen_mul
         logic [31:0] result;
         logic valid;
-        Multiplier #(.EXECUTION_UNROLL(EXECUTION_UNROLL)) multiplier (
+        Multiplier multiplier (
             .clk(clk),
             .reset(reset_active || trap_flush), // Resets only unit valid bits.
             .stall(stall),
@@ -417,7 +414,7 @@ module IntegerLane
     end if (IS_DIV) begin : gen_div
         logic [31:0] result;
         logic valid;
-        Divider #(.EXECUTION_UNROLL(EXECUTION_UNROLL), .AUTO_PIPE(DIVIDER_AUTO_PIPE)) divider (
+        Divider divider (
             .clk(clk),
             .reset(reset_active || trap_flush), // Resets only unit valid/busy bits.
             .stall(stall),

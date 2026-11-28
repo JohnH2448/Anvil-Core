@@ -1,9 +1,12 @@
 // Direct branch/jump target for one fetch slot, shared by the static Predictor
 // and GShare. Decodes the B/JAL or C.B/C.J/C.JAL immediate and adds it to the
 // slot PC. The target is meaningful only for taken predictions.
-module BranchTarget (
+module BranchTarget
+    import Parameters::*;
+    import DerivedParameters::*;
+(
     input Definitions::BranchInput_ branch_input,
-    output DerivedParameters::fetch_pc_t redirect_pc,
+    output fetch_pc_t redirect_pc,
     output logic target_wrapped
 );
     logic [31:0] displacement;
@@ -38,8 +41,8 @@ module BranchTarget (
     // Split the signed displacement into whole windows and a low offset.
     // Only the low sum carries. The high tests depend solely on the displacement.
     logic carry;
-    wire signed [31:0] window_offset = $signed(displacement) >>> DerivedParameters::FETCH_PC_WIDTH;
+    wire signed [31:0] window_offset = $signed(displacement) >>> FETCH_PC_WIDTH;
     assign {carry, redirect_pc} = {1'b0, branch_input.bp_pc}
-        + {1'b0, DerivedParameters::fetch_pc_t'(displacement)};
+        + {1'b0, fetch_pc_t'(displacement)};
     assign target_wrapped = carry ? window_offset != -1 : window_offset != 0;
 endmodule

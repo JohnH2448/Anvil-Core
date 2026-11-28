@@ -1,12 +1,9 @@
 module ProducerTable
+    import Parameters::*;
     import DerivedParameters::*;
     import Enumerations::*;
     import Definitions::*;
-#(
-    parameter unsigned ISSUE_WIDTH = 2,
-    parameter unsigned EXECUTION_UNROLL = 1,
-    parameter unsigned DIVIDER_AUTO_PIPE = Parameters::DIVIDER_AUTO_PIPE
-)(
+(
 
     // Standard Inputs
     input logic clk,
